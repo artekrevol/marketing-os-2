@@ -21,9 +21,13 @@ export default function Auth() {
 
   const signInGoogle = async () => {
     setLoading(true);
+    // Sprint 1: hd hint removed so non-tekrevol users (e.g. ClaimShield
+    // writers) can sign in. Access is gated by user_profiles.brand_access
+    // server-side; AppShell shows "no brand access" rather than blocking
+    // by domain.
     const result = await lovable.auth.signInWithOAuth("google", {
       redirect_uri: window.location.origin,
-      extraParams: { hd: "tekrevol.com", prompt: "select_account" },
+      extraParams: { prompt: "select_account" },
     });
     if (result.error) {
       toast.error(result.error.message || "Sign-in failed");
@@ -67,7 +71,7 @@ export default function Auth() {
         </div>
         <h1 className="font-serif text-xl mb-2">Sign in</h1>
         <p className="text-sm text-ink-muted mb-6">
-          Team members sign in with <span className="font-mono">@tekrevol.com</span> Google. Admins can use email & password.
+          Sign in with Google or email & password. Access is granted per-brand by an admin.
         </p>
 
         <div className="flex border border-rule rounded-sm overflow-hidden mb-5 text-xs">
@@ -91,7 +95,7 @@ export default function Auth() {
               {loading ? "Redirecting…" : "Continue with Google"}
             </button>
             <p className="text-[11px] text-ink-muted mt-4 italic">
-              Non-tekrevol Google accounts will be blocked.
+              First time? Your admin must grant brand access before you can use the app.
             </p>
           </>
         ) : (

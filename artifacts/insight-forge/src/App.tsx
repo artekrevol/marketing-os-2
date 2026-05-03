@@ -14,6 +14,7 @@ import DraftingInterface from "./pages/DraftingInterface.tsx";
 import DraftReview from "./pages/DraftReview.tsx";
 import AdminDashboard from "./pages/AdminDashboard.tsx";
 import AdminUsers from "./pages/AdminUsers.tsx";
+import AdminBrands from "./pages/AdminBrands.tsx";
 import AdminActivity from "./pages/AdminActivity.tsx";
 import AdminUsage from "./pages/AdminUsage.tsx";
 import Auth from "./pages/Auth.tsx";
@@ -34,6 +35,7 @@ const App = () => (
             <Route path="/new" element={<NewProject />} />
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/users" element={<AdminUsers />} />
+            <Route path="/admin/brands" element={<AdminBrands />} />
             <Route path="/admin/activity" element={<AdminActivity />} />
             <Route path="/admin/usage" element={<AdminUsage />} />
             <Route path="/project/:id" element={<ProjectLayout />}>

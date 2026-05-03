@@ -623,6 +623,138 @@ export type Database = {
         }
         Relationships: []
       }
+      brands: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          primary_domain: string | null
+          slug: string
+          thresholds: Json
+          updated_at: string
+          voice_profile: Json
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          primary_domain?: string | null
+          slug: string
+          thresholds?: Json
+          updated_at?: string
+          voice_profile?: Json
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          primary_domain?: string | null
+          slug?: string
+          thresholds?: Json
+          updated_at?: string
+          voice_profile?: Json
+        }
+        Relationships: []
+      }
+      user_profiles: {
+        Row: {
+          brand_access: string[]
+          created_at: string
+          display_name: string | null
+          pod: string | null
+          role: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          brand_access?: string[]
+          created_at?: string
+          display_name?: string | null
+          pod?: string | null
+          role?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          brand_access?: string[]
+          created_at?: string
+          display_name?: string | null
+          pod?: string | null
+          role?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      events: {
+        Row: {
+          actor_id: string | null
+          brand_id: string | null
+          created_at: string
+          event_type: string
+          id: string
+          payload: Json
+          subject_id: string | null
+          subject_type: string | null
+        }
+        Insert: {
+          actor_id?: string | null
+          brand_id?: string | null
+          created_at?: string
+          event_type: string
+          id?: string
+          payload?: Json
+          subject_id?: string | null
+          subject_type?: string | null
+        }
+        Update: {
+          actor_id?: string | null
+          brand_id?: string | null
+          created_at?: string
+          event_type?: string
+          id?: string
+          payload?: Json
+          subject_id?: string | null
+          subject_type?: string | null
+        }
+        Relationships: []
+      }
+      audit_log: {
+        Row: {
+          action: string
+          actor_id: string | null
+          brand_id: string | null
+          created_at: string
+          id: string
+          justification: string
+          metadata: Json
+          target_id: string | null
+          target_type: string | null
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          brand_id?: string | null
+          created_at?: string
+          id?: string
+          justification: string
+          metadata?: Json
+          target_id?: string | null
+          target_type?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          brand_id?: string | null
+          created_at?: string
+          id?: string
+          justification?: string
+          metadata?: Json
+          target_id?: string | null
+          target_type?: string | null
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string
@@ -722,6 +854,23 @@ export type Database = {
           user_id: string
         }[]
       }
+      list_app_users_v2: {
+        Args: never
+        Returns: {
+          brand_access: string[]
+          created_at: string
+          email: string
+          is_admin: boolean
+          is_tekrevol: boolean
+          last_sign_in_at: string
+          pod: string | null
+          project_count: number
+          role: string
+          user_id: string
+        }[]
+      }
+      current_user_brand_access: { Args: never; Returns: string[] }
+      is_admin: { Args: never; Returns: boolean }
     }
     Enums: {
       app_role: "admin" | "member"

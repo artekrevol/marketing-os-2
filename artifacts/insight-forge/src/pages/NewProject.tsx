@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { z } from "zod";
+import { emit } from "@/lib/events";
 
 const TOPIC_MAX = 200;
 const NOTES_MAX = 4000;
@@ -56,6 +57,32 @@ export default function NewProject() {
         setSubmitting(false);
         return;
       }
+      // Sprint 1: tag new projects to the user's active brand. Falls
+      // back to the user's first brand_access entry if no active brand
+      // is set (e.g. admin who hasn't picked one yet).
+      let activeBrandId: string | null = null;
+      try {
+        const slug = localStorage.getItem("contentforge.activeBrandSlug");
+        const { data: brandRows } = await (supabase as any).from("brands").select("id,slug");
+        const { data: prof } = await (supabase as any)
+          .from("user_profiles")
+          .select("brand_access")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        const access: string[] = (prof as any)?.brand_access || [];
+        const slugMatch = slug ? (brandRows || []).find((b: any) => b.slug === slug) : null;
+        if (slugMatch && (access.includes(slugMatch.id) || access.length === 0)) {
+          activeBrandId = slugMatch.id;
+        } else if (access.length > 0) {
+          activeBrandId = access[0];
+        } else if ((brandRows || []).length > 0) {
+          // Admin with no brand_access yet — default to TekRevol.
+          activeBrandId = (brandRows || []).find((b: any) => b.slug === "tekrevol")?.id || null;
+        }
+      } catch (e) {
+        console.warn("[NewProject] brand resolution failed", e);
+      }
+
       const { data: project, error } = await supabase
         .from("projects")
         .insert({
@@ -67,10 +94,14 @@ export default function NewProject() {
           status: "proposing_brief",
           current_stage: 0,
           created_by: user.id,
-        })
+          ...(activeBrandId ? { brand_id: activeBrandId } : {}),
+        } as any)
         .select()
         .single();
       if (error) throw error;
+
+      // Sprint 1: emit project.created to the events log.
+      emit("project.created", "project", project.id, { topic: cleanTopic }, activeBrandId);
 
       // fire brief proposer (don't await — let user see Step 2 page with loading)
       supabase.functions.invoke("propose-brief", { body: { project_id: project.id } });
