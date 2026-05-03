@@ -11,13 +11,16 @@ import { brandsTable } from "../brands";
 import { userProfilesTable } from "../user-profiles";
 
 /**
- * Manually logged recovery work. Brand-scoped (Pattern A). RLS: read
- * and write follow the standard `is_admin() OR brand_access` shape;
- * lead/admin role enforcement happens at the service layer.
+ * Manually logged recovery work. Brand-scoped (Pattern A). RLS:
+ *   - SELECT: `is_admin() OR brand_id = ANY(current_user_brand_access())`
+ *   - INSERT/UPDATE/DELETE: `is_admin_or_editor_for_brand(brand_id)` —
+ *     admin OR a user with the `editor` role and brand_id in their
+ *     brand_access. Pack's "admin or lead" wording maps to editor here
+ *     because the role enum has no `lead` value.
  *
- * `type` enum and `status` enum are enforced as SQL CHECK constraints
- * in the migration. Mirror the values here when validating input in
- * the service layer.
+ * `type` and `status` are enforced as SQL CHECK constraints in the
+ * migration. Mirror the values here when validating input in the
+ * service layer.
  */
 export const recoveryInitiativesTable = pgTable(
   "recovery_initiatives",

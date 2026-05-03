@@ -154,8 +154,10 @@ create trigger recovery_initiatives_set_updated_at_trg
 --
 -- recovery_snapshots:
 --   SELECT  — admin OR brand_access
---   INSERT/UPDATE/DELETE — admin only. Worker writes via service_role
---                          which bypasses RLS entirely.
+--   INSERT/UPDATE/DELETE — denied for every JWT caller (including
+--                          admins). The nightly worker writes via the
+--                          Supabase service_role, which bypasses RLS
+--                          entirely; no application path may write.
 ----------------------------------------------------------------------
 -- Helper: admin OR caller has `editor` role AND brand_id is in their
 -- brand_access. SECURITY DEFINER so it can read user_profiles regardless
@@ -221,7 +223,9 @@ begin
     'create policy recovery_initiatives_delete on public.recovery_initiatives for delete using (%s)',
     initiative_pred);
 
-  ----- recovery_snapshots: read = standard, write = admin-only (worker uses service_role) -----
+  ----- recovery_snapshots: read = standard, write = denied for all JWT callers
+  -----                     (worker bypasses via service_role, which is exempt
+  -----                     from RLS entirely).
   alter table public.recovery_snapshots enable row level security;
 
   drop policy if exists recovery_snapshots_select on public.recovery_snapshots;
@@ -232,15 +236,14 @@ begin
   execute format(
     'create policy recovery_snapshots_select on public.recovery_snapshots for select using (%s)',
     read_pred);
-  execute format(
-    'create policy recovery_snapshots_insert on public.recovery_snapshots for insert with check (%s)',
-    admin_pred);
-  execute format(
-    'create policy recovery_snapshots_update on public.recovery_snapshots for update using (%s) with check (%s)',
-    admin_pred, admin_pred);
-  execute format(
-    'create policy recovery_snapshots_delete on public.recovery_snapshots for delete using (%s)',
-    admin_pred);
+  -- Hard-deny writes for every JWT caller, including admins. Only the
+  -- service_role connection (worker) can write, and it bypasses RLS.
+  create policy recovery_snapshots_insert on public.recovery_snapshots
+    for insert with check (false);
+  create policy recovery_snapshots_update on public.recovery_snapshots
+    for update using (false) with check (false);
+  create policy recovery_snapshots_delete on public.recovery_snapshots
+    for delete using (false);
 end $$;
 
 commit;
