@@ -36,7 +36,20 @@ async function main(): Promise<void> {
 
     w.on("failed", async (job, err) => {
       const attempts = job?.attemptsMade ?? 0;
-      const max = (job?.opts?.attempts ?? 1);
+      // Defensive: BullMQ defaults usually populate `job.opts.attempts`
+      // from the queue's `defaultJobOptions`, but if a producer enqueues
+      // without that option AND the queue defaults are missing, fall
+      // back to JOB_DEFAULTS.attempts (set in @workspace/jobs) so we
+      // never dead-letter on attempt #0 due to a missing/zero attempts
+      // field. We also clamp to >=1 to defend against bad data.
+      const rawMax = job?.opts?.attempts;
+      const max = Math.max(1, typeof rawMax === "number" && rawMax > 0 ? rawMax : 5);
+      if (rawMax == null || rawMax === 0) {
+        logger.warn(
+          { jobId: job?.id, jobName: job?.name, queue: name, rawMax },
+          "worker: job.opts.attempts missing — falling back to default (5)",
+        );
+      }
       logger.warn(
         { jobId: job?.id, jobName: job?.name, queue: name, attempts, max, err: err?.message },
         "worker: job failed",
