@@ -1,20 +1,19 @@
-// Export your models here. Add one export per file
-// export * from "./posts";
+// Sprint 2 — Drizzle table declarations for the worker tier.
 //
-// Each model/table should ideally be split into different files.
-// Each model/table should define a Drizzle table, insert schema, and types:
+// IMPORTANT: this is not a complete mirror of the Supabase schema. It
+// covers the subset the worker reads/writes (events, dead_jobs,
+// integration_call_log) plus brands/projects to support withBrandScope's
+// BRAND_SCOPED_TABLES enforcement and project→brand resolution. The
+// full Supabase schema is owned by `artifacts/insight-forge/supabase/migrations/*.sql`
+// and consumed by the frontend through the supabase-js client.
 //
-//   import { pgTable, text, serial } from "drizzle-orm/pg-core";
-//   import { createInsertSchema } from "drizzle-zod";
-//   import { z } from "zod/v4";
-//
-//   export const postsTable = pgTable("posts", {
-//     id: serial("id").primaryKey(),
-//     title: text("title").notNull(),
-//   });
-//
-//   export const insertPostSchema = createInsertSchema(postsTable).omit({ id: true });
-//   export type InsertPost = z.infer<typeof insertPostSchema>;
-//   export type Post = typeof postsTable.$inferSelect;
+// Adding a new brand-scoped table to the worker:
+//   1. Author its `pgTable(...)` here.
+//   2. Add it to BRAND_SCOPED_TABLES in `../brand-scope.ts`.
+//   3. Reference it from the worker only inside `withBrandScope(brandId, ...)`.
 
-export {}
+export * from "./brands";
+export * from "./events";
+export * from "./dead-jobs";
+export * from "./integration-call-log";
+export * from "./projects";

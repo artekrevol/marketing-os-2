@@ -26,6 +26,28 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## SEO OS — Tenancy rules (normalized)
+
+Sprint 1 shipped a single trigger named `tenant_brand_inherit()` on every brand-scoped table. The trigger resolves `brand_id` BEFORE INSERT in this order:
+
+1. The caller-supplied `NEW.brand_id` (Pattern A, used by `projects` — the tenant root).
+2. Inherited from the parent `projects` row via `project_id` (Pattern B, used by every brand-scoped child table that has `project_id`).
+3. The caller's first `brand_access` entry from `user_profiles` (covers writes that have no `project_id` — telemetry, voice library, fetched pages — so they still land in the writer's primary brand).
+4. Otherwise raises so the row is never created without tenancy.
+
+This is **one trigger, not two.** The "Pattern A vs Pattern B" framing in pre-Sprint-1 design notes is informational only — at runtime there is one BEFORE INSERT trigger function per brand-scoped table, all sharing the same fallback logic.
+
+Strict RLS + NOT NULL `brand_id` on all 13 brand-scoped tables (post-backfill). RLS predicate everywhere is `is_admin() OR brand_id = ANY(current_user_brand_access())`. Pattern C system tables (`events`, `audit_log`, `dead_jobs`, `integration_call_log`) keep `brand_id` nullable for cross-brand writes; their RLS allows brand-scoped reads only when `brand_id` matches.
+
+## SEO OS — Worker tier (Sprint 2)
+
+- **Packages**: `@workspace/worker` (Railway target), `@workspace/jobs` (BullMQ + typed `enqueue<JobName>`), `@workspace/integrations-dataforseo`, `@workspace/integrations-originality-ai`. New tables: `dead_jobs`, `integration_call_log` (migration 0004).
+- **Queues**: five named BullMQ queues — `crawls`, `integrations`, `ai-jobs`, `notifications`, `maintenance` — over a single ioredis connection. Defaults `{ attempts:3, backoff: exponential 30s, removeOnComplete:1000, removeOnFail:1000 }`. Idempotency is enforced via `jobId = "<jobName>:<idempotencyKey>"` and a duplicate-row short-circuit in the handler.
+- **Tenancy in the worker**: the worker uses the Supabase service role and bypasses RLS, so brand isolation is enforced in code via `withBrandScope(brandId, fn)` (`lib/db/src/brand-scope.ts`). `withBrandScope` opens a transaction, sets `app.current_brand` and `row_security = off` LOCAL, and returns a typed `scope.db`. Every insert into a brand-scoped table must call `assertBrandScope(scope.brandId, row)` first.
+- **API surface**: admin-only routes under `POST /api/admin/system/{heartbeat,test-dataforseo,test-originality}` and `GET /api/admin/system/{queues,events,heartbeat-freshness,dead-jobs}`. JWT verification via `SUPABASE_JWT_SECRET` (`artifacts/api-server/src/middlewares/auth.ts`). Frontend `/admin/system` page (admin-only nav link) shows live cards.
+- **Required env (worker only, never frontend)**: `DATABASE_URL`, `REDIS_URL`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `ORIGINALITY_AI_KEY`, `OPENAI_API_KEY`, `SENTRY_DSN`, `SUPABASE_SERVICE_ROLE_KEY`. Worker fails fast at boot via zod env validation if any are missing.
+- **Deploy**: `seo-os-worker` on Railway, 2 replicas, Nixpacks. Build `pnpm install --frozen-lockfile && pnpm --filter @workspace/worker run build`. Start `node lib/worker/dist/index.mjs`. Healthcheck `GET /health` port 3001. Smoke-test procedure in `docs/sprint-2-deploy.md`.
+
 ## Artifacts
 
 - **insight-forge** (`artifacts/insight-forge`, slug `insight-forge`, previewPath `/`) — ContentForge: research-led drafting tool. React 18 + Vite, Tailwind v3, Supabase auth + edge functions, Lovable cloud auth wrapper. Pinned to React 18 (catalog is React 19; react-day-picker@8 needs 18). **Sprint 1 (multi-brand foundation)** — now four brand tenants (TekRevol, ClaimShield, Reverto, CensusFlow). New tables: `brands`, `user_profiles` (role/pod/brand_access), `events`, `audit_log`. `brand_id` added to every brand-scoped table with RLS policies (`is_admin() OR brand_id = ANY(current_user_brand_access())`). Auth gate is no longer domain-pinned — any user with brand_access (or admin) is allowed in. SQL lives in `artifacts/insight-forge/supabase/migrations/` (0001 schema + backfill, 0002 RLS, 0003 pen-check). Apply on a Supabase preview branch first; re-export `src/integrations/supabase/types.ts` from the dashboard after applying. See `artifacts/insight-forge/docs/sprint-1-foundation.md`.
