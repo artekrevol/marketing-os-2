@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { Navigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Activity, Server, AlertTriangle, RefreshCw, Loader2, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -151,15 +152,8 @@ export default function AdminSystem() {
     );
   }
   if (authState === "denied") {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-ink px-6">
-        <div className="max-w-sm border border-rule rounded-sm p-8 text-center">
-          <AlertTriangle className="h-5 w-5 mx-auto mb-2 text-accent" />
-          <h1 className="font-serif text-xl mb-2">Admin only</h1>
-          <p className="text-sm text-ink-muted">/admin/system is restricted to admins.</p>
-        </div>
-      </div>
-    );
+    // Direct navigation by a non-admin: bounce back to the home dashboard.
+    return <Navigate to="/" replace />;
   }
 
   const ageStr = freshness?.ageSeconds == null

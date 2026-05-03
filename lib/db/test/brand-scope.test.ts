@@ -89,6 +89,64 @@ describe("ScopedDb runtime guards (no DB required)", () => {
   });
 });
 
+dbDescribe("scope.db (guarded raw tx)", () => {
+  beforeAll(async () => {
+    try {
+      await db.select({ id: brandsTable.id }).from(brandsTable).limit(1);
+      SCHEMA_READY = true;
+    } catch {
+      SCHEMA_READY = false;
+    }
+  });
+
+  it("throws when raw tx tries to insert into a brand-scoped table", async () => {
+    if (!SCHEMA_READY) return;
+    const [{ id: brandId }] = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(1);
+    class Rollback extends Error {}
+    await expect(
+      withBrandScope(brandId!, async ({ db: rawTx }) => {
+        await rawTx.insert(projectsTable).values({
+          brandId: brandId!,
+          topic: "guard-test",
+          contentType: "blog",
+        });
+        throw new Rollback();
+      }),
+    ).rejects.toThrow(/brand-scoped table.*forbidden|use scope\.scoped/);
+  });
+
+  it("throws when raw tx tries to select from a brand-scoped table", async () => {
+    if (!SCHEMA_READY) return;
+    const [{ id: brandId }] = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(1);
+    class Rollback extends Error {}
+    await expect(
+      withBrandScope(brandId!, async ({ db: rawTx }) => {
+        await rawTx.select().from(projectsTable);
+        throw new Rollback();
+      }),
+    ).rejects.toThrow(/brand-scoped table.*forbidden|use scope\.scoped/);
+  });
+
+  it("allows raw tx to read system tables (events)", async () => {
+    if (!SCHEMA_READY) return;
+    const [{ id: brandId }] = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(1);
+    // Should not throw — events is a system table.
+    const out = await withBrandScope(brandId!, async ({ db: rawTx }) => {
+      return await rawTx.select().from(eventsTable).limit(0);
+    });
+    expect(Array.isArray(out)).toBe(true);
+  });
+});
+
 dbDescribe("withBrandScope (live DB)", () => {
   beforeAll(async () => {
     try {

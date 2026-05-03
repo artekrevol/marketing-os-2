@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { db as defaultDb } from "./index";
 import * as schema from "./schema";
-import { ScopedDb } from "./middleware";
+import { ScopedDb, createGuardedDb } from "./middleware";
 
 export type DbClient = NodePgDatabase<typeof schema>;
 
@@ -34,15 +34,19 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
 export interface BrandScope {
   readonly brandId: string;
   /**
-   * Raw transaction client. Use ONLY for system tables (events,
-   * dead_jobs, integration_call_log). For brand-scoped tables, use
-   * `scoped.*` so brand filters are applied automatically.
+   * Guarded transaction client. Reads/writes against system tables
+   * (events, dead_jobs, integration_call_log, brands, etc.) pass
+   * through unchanged. Any `insert / update / delete / select.from`
+   * targeting a `BRAND_SCOPED_TABLES` member throws
+   * `BrandScopeViolationError` at runtime — forcing those operations
+   * to go through `scoped.*`.
    */
   readonly db: DbClient;
   /**
-   * Brand-aware helpers. Every read/write through `scoped` is
-   * automatically filtered by brand_id and validated against the
-   * active scope; cross-brand attempts throw at runtime.
+   * Brand-aware helpers for brand-scoped tables. Every read/write
+   * through `scoped` is automatically filtered by `brand_id` and
+   * validated against the active scope; cross-brand attempts throw
+   * at runtime.
    */
   readonly scoped: ScopedDb;
 }
@@ -72,7 +76,7 @@ export async function withBrandScope<T>(
     const txDb = tx as unknown as DbClient;
     return fn({
       brandId,
-      db: txDb,
+      db: createGuardedDb(txDb),
       scoped: new ScopedDb(brandId, txDb),
     });
   });

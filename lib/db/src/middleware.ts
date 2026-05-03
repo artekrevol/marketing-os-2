@@ -169,3 +169,72 @@ export class ScopedDb {
     }
   }
 }
+
+/**
+ * Wrap a Drizzle `DbClient` so that any `insert / update / delete`
+ * targeting a `BRAND_SCOPED_TABLES` member throws at runtime, and any
+ * `select().from(scopedTable)` chain throws as well. This forces all
+ * access to brand-scoped tables to go through `ScopedDb` (i.e.
+ * `scope.scoped.*`), which automatically applies the brand filter.
+ *
+ * `select` against system tables (events, dead_jobs, integration_call_log,
+ * brands lookup, etc.) and `transaction()` / `execute()` calls are passed
+ * through unchanged.
+ *
+ * The guard is a thin Proxy on the four entrypoint methods. It does not
+ * try to replicate Drizzle's typings — the wrapped object is still typed
+ * as `DbClient`. Callers who hit the guard get a clear violation error
+ * with the table name and the violating verb.
+ */
+export function createGuardedDb(tx: DbClient): DbClient {
+  const violate = (verb: string, table: PgTable): never => {
+    const name = getTableName(table);
+    throw new BrandScopeViolationError(
+      "not_brand_scoped",
+      `Direct ${verb} on brand-scoped table "${name}" is forbidden; use scope.scoped.${verb}() so the brand filter is applied.`,
+    );
+  };
+
+  const guardedInsert = (table: PgTable) => {
+    if (BRAND_SCOPED_TABLES.has(getTableName(table))) violate("insert", table);
+    return tx.insert(table);
+  };
+  const guardedUpdate = (table: PgTable) => {
+    if (BRAND_SCOPED_TABLES.has(getTableName(table))) violate("update", table);
+    return tx.update(table);
+  };
+  const guardedDelete = (table: PgTable) => {
+    if (BRAND_SCOPED_TABLES.has(getTableName(table))) violate("delete", table);
+    return tx.delete(table);
+  };
+
+  // For `select`, the table isn't known until `.from(table)` is called.
+  // We wrap the returned builder so its `.from()` raises if the target
+  // is brand-scoped.
+  const guardedSelect = (...args: unknown[]) => {
+    const builder = (tx.select as (...a: unknown[]) => unknown)(...args) as {
+      from: (t: PgTable) => unknown;
+    };
+    return new Proxy(builder, {
+      get(target, prop, recv) {
+        if (prop === "from") {
+          return (table: PgTable) => {
+            if (BRAND_SCOPED_TABLES.has(getTableName(table))) violate("select", table);
+            return target.from(table);
+          };
+        }
+        return Reflect.get(target, prop, recv);
+      },
+    }) as unknown;
+  };
+
+  return new Proxy(tx, {
+    get(target, prop, recv) {
+      if (prop === "insert") return guardedInsert;
+      if (prop === "update") return guardedUpdate;
+      if (prop === "delete") return guardedDelete;
+      if (prop === "select") return guardedSelect;
+      return Reflect.get(target, prop, recv);
+    },
+  }) as DbClient;
+}
