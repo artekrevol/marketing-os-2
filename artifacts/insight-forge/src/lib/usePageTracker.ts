@@ -96,14 +96,16 @@ export function usePageTracker() {
   // Flush on tab close / hide
   useEffect(() => {
     const onHide = () => flush("unload");
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush("unload");
+    };
     window.addEventListener("pagehide", onHide);
     window.addEventListener("beforeunload", onHide);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") flush("unload");
-    });
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("pagehide", onHide);
       window.removeEventListener("beforeunload", onHide);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

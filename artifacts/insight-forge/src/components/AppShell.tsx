@@ -94,7 +94,7 @@ export default function AppShell() {
       mounted = false;
       supabase.removeChannel(ch);
     };
-  }, [loc.pathname, authState]);
+  }, [authState]);
 
   const signOut = async () => {
     await supabase.auth.signOut();
