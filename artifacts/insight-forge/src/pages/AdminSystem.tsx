@@ -87,14 +87,23 @@ export default function AdminSystem() {
       setTimeout(async () => {
         if (cancelled) return;
         try {
-          const [{ data: roles }, { data: profile }] = await Promise.all([
+          // Use allSettled so a missing/inaccessible `user_roles` table
+          // (some environments provision only `user_profiles`) does NOT
+          // false-deny an admin who has `user_profiles.role='admin'`.
+          // Mirrors the API middleware fallback (requireAuth in
+          // artifacts/api-server/src/middlewares/auth.ts).
+          const [rolesRes, profileRes] = await Promise.allSettled([
             supabase.from("user_roles").select("role").eq("user_id", userId),
             supabase.from("user_profiles").select("role").eq("user_id", userId).maybeSingle(),
           ]);
           if (cancelled) return;
-          const admin =
-            !!(roles || []).find((r) => r.role === "admin") || profile?.role === "admin";
-          setAuthState(admin ? "ok" : "denied");
+          const rolesAdmin =
+            rolesRes.status === "fulfilled" &&
+            !!(rolesRes.value.data || []).find((r) => r.role === "admin");
+          const profileAdmin =
+            profileRes.status === "fulfilled" &&
+            profileRes.value.data?.role === "admin";
+          setAuthState(rolesAdmin || profileAdmin ? "ok" : "denied");
         } catch {
           if (!cancelled) setAuthState("denied");
         }
