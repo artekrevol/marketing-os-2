@@ -44,6 +44,16 @@ export const QaRunChecksPayload = BasePayload.extend({
   contentObjectId: z.string().uuid(),
 });
 
+// Recovery War Room — delayed job (14 days) scheduled by
+// `completeInitiative`. Worker computes
+// `recovery_initiatives.actual_impact_clicks_14d` from the baseline-vs-
+// current delta over the 14 days following completion. Lives on the
+// `scoring` queue (amendments §E — already provisioned).
+export const RecoveryInitiativeImpactPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  initiativeId: z.string().uuid(),
+});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -60,6 +70,10 @@ export const JOB_REGISTRY = {
   "content.qa-run-checks": {
     queue: "content" as QueueName,
     schema: QaRunChecksPayload,
+  },
+  "scoring.recovery-initiative-impact": {
+    queue: "scoring" as QueueName,
+    schema: RecoveryInitiativeImpactPayload,
   },
 } as const;
 
