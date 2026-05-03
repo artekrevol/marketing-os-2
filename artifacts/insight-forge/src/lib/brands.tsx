@@ -73,7 +73,13 @@ export function BrandProvider({
     const visibleIds = isAdmin ? allBrands.map((b) => b.id) : access;
     setAccessibleIds(visibleIds);
 
-    // Pick active brand: localStorage slug → first accessible.
+    // Pick active brand:
+    //   1) last-used slug from localStorage (per-device sticky);
+    //   2) TekRevol — preserves the legacy single-tenant default so
+    //      existing TekRevol admins/writers keep landing in their home
+    //      brand on first load post-migration;
+    //   3) first accessible brand by load order — only as a true
+    //      fallback for non-TekRevol users.
     let nextActive: string | null = null;
     try {
       const slug = localStorage.getItem(STORAGE_KEY);
@@ -82,6 +88,10 @@ export function BrandProvider({
         if (match) nextActive = match.id;
       }
     } catch {}
+    if (!nextActive) {
+      const tek = allBrands.find((b) => b.slug === "tekrevol" && visibleIds.includes(b.id));
+      if (tek) nextActive = tek.id;
+    }
     if (!nextActive && visibleIds.length > 0) nextActive = visibleIds[0];
     setActiveId(nextActive);
     setLoading(false);
