@@ -1,0 +1,27 @@
+Architect did the right work — caught both schema deviations from the spec (no `draft_revisions`, `qa_runs.status` enum is different than I drafted) and adapted the queries to match what actually shipped. The four queries as written are correct against the live schema.
+
+Two specific things to call out:
+
+The 20-char cutoff for "substantive comment" in query 2 is a reasonable starting heuristic but worth one-off validating. Pull a sample of 5-10 actual rejected `qa_signoffs.comment` values manually and eyeball them against the cutoff. If most real feedback runs 30-80 chars, the cutoff is fine. If reviewers are writing one-line "needs more sources" notes that are ~15 chars and that's the actual standard for the team, the cutoff is wrong. Easier to recalibrate now than to walk into the retrospective with mislabeled buckets.
+
+The volume sanity query is the most important of the four. If `qa_runs_7d < 10`, none of the percentages mean anything — Rabia and Maria will look at "33% hard-fail rate" on 3 runs and either over-react or dismiss it. Bring the absolute numbers and let the retrospective focus on patterns rather than rates.
+
+**On the database connection question — don't wire up Supabase from this Replit container.** Two reasons:
+
+The container is the dev environment. Pointing it at production data crosses a boundary that's hard to uncross. Even read-only access to prod from a dev container creates a path where someone could accidentally run a destructive query and not realize they were on prod. Worth the friction of running these queries from somewhere with explicit prod intent — the Supabase SQL editor in the dashboard is the right place.
+
+You only need to run them once for the retrospective. Building durable infrastructure for a one-off task is overhead. If the retrospective surfaces a need for an ongoing dashboard, that becomes Sprint 9's Performance Monitor work — purpose-built, not a shortcut.
+
+What to do instead: paste the four queries directly into the Supabase SQL editor, run them as a logged-in admin (your auth, not a service role), copy the results into a doc, walk into the retrospective with that doc. Five minutes of manual work; zero new permanent connections to maintain.
+
+When you have the results plus the qualitative feedback from Rabia and Maria, send everything and I'll draft Sprint 4. The four answers I need to draft well are:
+
+The hard-fail percentages by brand (with absolute counts, not just rates).
+
+The rejection-feedback distribution (substantive vs thin vs none).
+
+Override attempt count (zero is fine, just confirm).
+
+Brief lock direction from the leads (hard-lock now or warn-only for two weeks).
+
+Plus anything Rabia or Maria say spontaneously about the gate — those unprompted comments are usually the most useful signal of what to fix in Sprint 4.
