@@ -98,9 +98,9 @@ create table if not exists public.recovery_snapshots (
   -- GSC/GA4 nullable until ingestion ships.
   gsc_clicks_30d_avg              numeric,
   ga4_sessions_30d_avg            numeric,
-  avg_position_30d                numeric,
-  keywords_in_top_10              integer,
-  keywords_in_top_3               integer,
+  avg_position_30d                numeric not null,
+  keywords_in_top_10              integer not null,
+  keywords_in_top_3               integer not null,
 
   -- Computed deltas vs baseline.
   gap_to_baseline_clicks_pct      numeric,

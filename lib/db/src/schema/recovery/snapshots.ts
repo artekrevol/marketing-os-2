@@ -31,9 +31,9 @@ export const recoverySnapshotsTable = pgTable(
 
     gscClicks30dAvg: numeric("gsc_clicks_30d_avg"),
     ga4Sessions30dAvg: numeric("ga4_sessions_30d_avg"),
-    avgPosition30d: numeric("avg_position_30d"),
-    keywordsInTop10: integer("keywords_in_top_10"),
-    keywordsInTop3: integer("keywords_in_top_3"),
+    avgPosition30d: numeric("avg_position_30d").notNull(),
+    keywordsInTop10: integer("keywords_in_top_10").notNull(),
+    keywordsInTop3: integer("keywords_in_top_3").notNull(),
 
     gapToBaselineClicksPct: numeric("gap_to_baseline_clicks_pct"),
     gapToBaselinePosition: numeric("gap_to_baseline_position"),
