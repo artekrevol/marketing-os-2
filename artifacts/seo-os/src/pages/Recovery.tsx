@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
@@ -9,9 +9,15 @@ import {
   ChevronDown,
   Clock,
   Lock,
+  Plus,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { LogInitiativeModal } from "@/components/recovery/LogInitiativeModal";
+import { InitiativeDetailModal } from "@/components/recovery/InitiativeDetailModal";
+import { CompletionModal } from "@/components/recovery/CompletionModal";
+import { AbandonModal } from "@/components/recovery/AbandonModal";
 import {
   CartesianGrid,
   Line,
@@ -58,6 +64,9 @@ export default function Recovery() {
 }
 
 function RecoveryForBrand({ brandId }: { brandId: string }) {
+  const { isAdmin } = useActiveBrand();
+  const qc = useQueryClient();
+
   // Snapshots are recomputed nightly so a 1h client cache is fine and
   // matches the spec; overview/initiatives stay shorter so an admin
   // who locks a baseline or starts an initiative sees it quickly.
@@ -80,6 +89,53 @@ function RecoveryForBrand({ brandId }: { brandId: string }) {
   const overview = overviewQ.data;
   const snapshots = snapshotsQ.data ?? [];
   const initiatives = initiativesQ.data ?? [];
+
+  // Modal state lives here so a "Mark complete" / "Abandon" launched
+  // from inside the detail modal can chain into the next dialog
+  // without prop-drilling through InitiativesRibbon.
+  const [logModal, setLogModal] = useState<
+    | { open: false }
+    | { open: true; mode: "create" }
+    | { open: true; mode: "edit"; initiative: RecoveryInitiative }
+  >({ open: false });
+  const [detailModal, setDetailModal] = useState<{
+    open: boolean;
+    initiative: RecoveryInitiative | null;
+  }>({ open: false, initiative: null });
+  const [completeModal, setCompleteModal] = useState<{
+    open: boolean;
+    initiative: RecoveryInitiative | null;
+  }>({ open: false, initiative: null });
+  const [abandonModal, setAbandonModal] = useState<{
+    open: boolean;
+    initiative: RecoveryInitiative | null;
+  }>({ open: false, initiative: null });
+
+  // Realtime: refetch the recovery query family whenever ANY row in
+  // recovery_initiatives for this brand changes. Insert/update/delete
+  // are all surfaced through the single `*` event. Coarse invalidation
+  // is fine — the queries are cheap and the active brand only emits a
+  // handful of rows per day at peak.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`recovery-initiatives-${brandId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "recovery_initiatives",
+          filter: `brand_id=eq.${brandId}`,
+        },
+        () => {
+          void qc.invalidateQueries({ queryKey: ["recovery"] });
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [brandId, qc]);
 
   if (overviewQ.isLoading) {
     return <Shell title="Recovery War Room" showBrandSelector>{loadingBlock()}</Shell>;
@@ -140,12 +196,71 @@ function RecoveryForBrand({ brandId }: { brandId: string }) {
       <section className="mt-6">
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-serif text-lg">Initiatives</h2>
-          <span className="text-xs text-ink-muted">
-            {overview.activeInitiatives} active
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-ink-muted">
+              {overview.activeInitiatives} active
+            </span>
+            <button
+              type="button"
+              onClick={() => setLogModal({ open: true, mode: "create" })}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-ink bg-ink text-paper rounded-sm hover:bg-ink/90 transition-colors"
+            >
+              <Plus className="h-3 w-3" />
+              Log initiative
+            </button>
+          </div>
         </div>
-        <InitiativesRibbon initiatives={initiatives} />
+        <InitiativesRibbon
+          initiatives={initiatives}
+          onCardClick={(init) =>
+            setDetailModal({ open: true, initiative: init })
+          }
+          onEmptyCta={() => setLogModal({ open: true, mode: "create" })}
+        />
       </section>
+
+      <LogInitiativeModal
+        open={logModal.open}
+        onOpenChange={(v) => !v && setLogModal({ open: false })}
+        brandId={brandId}
+        mode={logModal.open ? logModal.mode : "create"}
+        initiative={
+          logModal.open && logModal.mode === "edit" ? logModal.initiative : undefined
+        }
+      />
+      <InitiativeDetailModal
+        open={detailModal.open}
+        onOpenChange={(v) => setDetailModal((s) => ({ ...s, open: v }))}
+        initiative={detailModal.initiative}
+        canWrite={true /* admin OR editor — final check is server-side */}
+        isAdmin={isAdmin}
+        onEdit={() => {
+          if (detailModal.initiative)
+            setLogModal({
+              open: true,
+              mode: "edit",
+              initiative: detailModal.initiative,
+            });
+        }}
+        onComplete={() =>
+          setCompleteModal({ open: true, initiative: detailModal.initiative })
+        }
+        onAbandon={() =>
+          setAbandonModal({ open: true, initiative: detailModal.initiative })
+        }
+      />
+      <CompletionModal
+        open={completeModal.open}
+        onOpenChange={(v) => setCompleteModal((s) => ({ ...s, open: v }))}
+        brandId={brandId}
+        initiative={completeModal.initiative}
+      />
+      <AbandonModal
+        open={abandonModal.open}
+        onOpenChange={(v) => setAbandonModal((s) => ({ ...s, open: v }))}
+        brandId={brandId}
+        initiative={abandonModal.initiative}
+      />
     </Shell>
   );
 }
@@ -695,10 +810,18 @@ function TrendChart({
 
 // ---- Initiatives ribbon ----
 
-function InitiativesRibbon({ initiatives }: { initiatives: RecoveryInitiative[] }) {
-  // Spec: read-only horizontal ribbon of ACTIVE initiatives only.
-  // Completed/paused initiatives still show as markers on the trend
-  // chart but are not surfaced here.
+function InitiativesRibbon({
+  initiatives,
+  onCardClick,
+  onEmptyCta,
+}: {
+  initiatives: RecoveryInitiative[];
+  onCardClick: (initiative: RecoveryInitiative) => void;
+  onEmptyCta: () => void;
+}) {
+  // Spec: horizontal ribbon of ACTIVE initiatives only. Completed and
+  // abandoned initiatives still show as markers on the trend chart
+  // but are not surfaced here.
   const active = initiatives
     .filter((i) => i.status === "active")
     .sort(
@@ -709,8 +832,18 @@ function InitiativesRibbon({ initiatives }: { initiatives: RecoveryInitiative[] 
   if (active.length === 0) {
     return (
       <div className="border border-rule rounded-md bg-background p-6 text-sm text-ink-muted">
-        No active initiatives. Track recovery work as initiatives so you can
-        see what changed when the slope shifts.
+        <p>
+          No active initiatives. Track recovery work as initiatives so you can
+          see what changed when the slope shifts.
+        </p>
+        <button
+          type="button"
+          onClick={onEmptyCta}
+          className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-xs border border-ink bg-ink text-paper rounded-sm hover:bg-ink/90 transition-colors"
+        >
+          <Plus className="h-3 w-3" />
+          Log first initiative
+        </button>
       </div>
     );
   }
@@ -718,24 +851,36 @@ function InitiativesRibbon({ initiatives }: { initiatives: RecoveryInitiative[] 
     <div className="overflow-x-auto -mx-1 px-1">
       <div className="flex gap-3 pb-1">
         {active.map((i) => (
-          <InitiativeCard key={i.id} initiative={i} />
+          <InitiativeCard
+            key={i.id}
+            initiative={i}
+            onClick={() => onCardClick(i)}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function InitiativeCard({ initiative }: { initiative: RecoveryInitiative }) {
+function InitiativeCard({
+  initiative,
+  onClick,
+}: {
+  initiative: RecoveryInitiative;
+  onClick: () => void;
+}) {
   const statusColor =
     initiative.status === "active"
       ? "bg-emerald-500"
       : initiative.status === "completed"
         ? "bg-blue-500"
-        : initiative.status === "paused"
-          ? "bg-amber-500"
-          : "bg-ink-muted";
+        : "bg-ink-muted";
   return (
-    <div className="border border-rule rounded-md bg-background p-4 w-72 shrink-0">
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left border border-rule rounded-md bg-background p-4 w-72 shrink-0 hover:bg-secondary/40 hover:border-ink/30 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-medium truncate">{initiative.name}</div>
@@ -758,6 +903,6 @@ function InitiativeCard({ initiative }: { initiative: RecoveryInitiative }) {
         {initiative.completed_at &&
           ` · Done ${new Date(initiative.completed_at).toLocaleDateString()}`}
       </div>
-    </div>
+    </button>
   );
 }

@@ -392,6 +392,171 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /recovery/initiatives:
+    post:
+      operationId: createRecoveryInitiative
+      tags: [recovery]
+      summary: Log a new recovery initiative
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRecoveryInitiativeRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryInitiativeResponse"
+        "400":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /recovery/initiatives/{id}:
+    put:
+      operationId: updateRecoveryInitiative
+      tags: [recovery]
+      summary: Update a recovery initiative (admin or editor)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRecoveryInitiativeRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryInitiativeResponse"
+        "400":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Initiative not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /recovery/initiatives/{id}/complete:
+    post:
+      operationId: completeRecoveryInitiative
+      tags: [recovery]
+      summary: Mark an initiative complete (schedules 14-day actual-impact job)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteRecoveryInitiativeRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryInitiativeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Initiative not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Initiative not in active status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /recovery/initiatives/{id}/abandon:
+    post:
+      operationId: abandonRecoveryInitiative
+      tags: [recovery]
+      summary: Abandon an initiative with a reason (admin-only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbandonRecoveryInitiativeRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryInitiativeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Initiative not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Initiative already completed or abandoned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /quality-gate/start-from-draft:
     post:
       operationId: qualityGateStartFromDraft
@@ -865,6 +1030,83 @@ components:
           items:
             $ref: "#/components/schemas/RecoveryInitiative"
       required: [initiatives]
+    RecoveryInitiativeResponse:
+      type: object
+      properties:
+        initiative:
+          $ref: "#/components/schemas/RecoveryInitiative"
+      required: [initiative]
+    RecoveryInitiativeTypeEnum:
+      type: string
+      enum:
+        - content_refresh
+        - content_kill
+        - content_consolidation
+        - technical_fix
+        - link_building
+        - quality_gate
+        - other
+    CreateRecoveryInitiativeRequest:
+      type: object
+      properties:
+        brandId: { type: string, format: uuid }
+        name:
+          type: string
+          minLength: 5
+          maxLength: 100
+        type:
+          $ref: "#/components/schemas/RecoveryInitiativeTypeEnum"
+        description:
+          type: [string, "null"]
+          maxLength: 4000
+        expectedImpactPct:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 200
+        expectedImpactClicks:
+          type: [integer, "null"]
+        startedAt:
+          type: string
+          format: date-time
+      required: [brandId, name, type, startedAt]
+    UpdateRecoveryInitiativeRequest:
+      type: object
+      properties:
+        brandId: { type: string, format: uuid }
+        name:
+          type: string
+          minLength: 5
+          maxLength: 100
+        type:
+          $ref: "#/components/schemas/RecoveryInitiativeTypeEnum"
+        description: { type: [string, "null"], maxLength: 4000 }
+        expectedImpactPct:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 200
+        expectedImpactClicks: { type: [integer, "null"] }
+        startedAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [active, abandoned]
+      required: [brandId]
+    CompleteRecoveryInitiativeRequest:
+      type: object
+      properties:
+        brandId: { type: string, format: uuid }
+        completionNotes:
+          type: string
+          maxLength: 2000
+      required: [brandId]
+    AbandonRecoveryInitiativeRequest:
+      type: object
+      properties:
+        brandId: { type: string, format: uuid }
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 2000
+      required: [brandId, reason]
     QualityGateStartFromDraftResult:
       type: object
       properties:

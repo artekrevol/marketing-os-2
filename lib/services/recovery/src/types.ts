@@ -70,7 +70,22 @@ export const CompleteInitiativeInputSchema = z.object({
   brandId: z.string().uuid(),
   actorId: z.string().uuid(),
   initiativeId: z.string().uuid(),
+  // Optional free-text notes captured by the completion modal. Stored
+  // on the `recovery.initiative_completed` event payload, not the
+  // initiative row itself — the event stream is the audit trail.
+  completionNotes: z.string().max(2000).optional(),
 });
 export type CompleteInitiativeInput = z.infer<
   typeof CompleteInitiativeInputSchema
+>;
+
+/** Input to `abandonInitiative`. Admin-only; reason is mandatory. */
+export const AbandonInitiativeInputSchema = z.object({
+  brandId: z.string().uuid(),
+  actorId: z.string().uuid(),
+  initiativeId: z.string().uuid(),
+  reason: z.string().min(1).max(2000),
+});
+export type AbandonInitiativeInput = z.infer<
+  typeof AbandonInitiativeInputSchema
 >;

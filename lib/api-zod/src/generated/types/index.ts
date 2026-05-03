@@ -6,6 +6,9 @@
  * OpenAPI spec version: 0.2.0
  */
 
+export * from "./abandonRecoveryInitiativeRequest";
+export * from "./completeRecoveryInitiativeRequest";
+export * from "./createRecoveryInitiativeRequest";
 export * from "./deadJobList";
 export * from "./deadJobRow";
 export * from "./deadJobRowPayload";
@@ -47,9 +50,13 @@ export * from "./queueUnavailableResponse";
 export * from "./recoveryBaseline";
 export * from "./recoveryInitiative";
 export * from "./recoveryInitiativeList";
+export * from "./recoveryInitiativeResponse";
+export * from "./recoveryInitiativeTypeEnum";
 export * from "./recoveryOverviewBody";
 export * from "./recoveryProjection";
 export * from "./recoveryProjectionStatus";
 export * from "./recoverySnapshot";
 export * from "./recoverySnapshotList";
 export * from "./unauthorizedResponse";
+export * from "./updateRecoveryInitiativeRequest";
+export * from "./updateRecoveryInitiativeRequestStatus";

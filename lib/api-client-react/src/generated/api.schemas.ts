@@ -288,6 +288,95 @@ export interface RecoveryInitiativeList {
   initiatives: RecoveryInitiative[];
 }
 
+export interface RecoveryInitiativeResponse {
+  initiative: RecoveryInitiative;
+}
+
+export type RecoveryInitiativeTypeEnum =
+  (typeof RecoveryInitiativeTypeEnum)[keyof typeof RecoveryInitiativeTypeEnum];
+
+export const RecoveryInitiativeTypeEnum = {
+  content_refresh: "content_refresh",
+  content_kill: "content_kill",
+  content_consolidation: "content_consolidation",
+  technical_fix: "technical_fix",
+  link_building: "link_building",
+  quality_gate: "quality_gate",
+  other: "other",
+} as const;
+
+export interface CreateRecoveryInitiativeRequest {
+  brandId: string;
+  /**
+   * @minLength 5
+   * @maxLength 100
+   */
+  name: string;
+  type: RecoveryInitiativeTypeEnum;
+  /**
+   * @maxLength 4000
+   * @nullable
+   */
+  description?: string | null;
+  /**
+   * @minimum 0
+   * @maximum 200
+   * @nullable
+   */
+  expectedImpactPct?: number | null;
+  /** @nullable */
+  expectedImpactClicks?: number | null;
+  startedAt: string;
+}
+
+export type UpdateRecoveryInitiativeRequestStatus =
+  (typeof UpdateRecoveryInitiativeRequestStatus)[keyof typeof UpdateRecoveryInitiativeRequestStatus];
+
+export const UpdateRecoveryInitiativeRequestStatus = {
+  active: "active",
+  abandoned: "abandoned",
+} as const;
+
+export interface UpdateRecoveryInitiativeRequest {
+  brandId: string;
+  /**
+   * @minLength 5
+   * @maxLength 100
+   */
+  name?: string;
+  type?: RecoveryInitiativeTypeEnum;
+  /**
+   * @maxLength 4000
+   * @nullable
+   */
+  description?: string | null;
+  /**
+   * @minimum 0
+   * @maximum 200
+   * @nullable
+   */
+  expectedImpactPct?: number | null;
+  /** @nullable */
+  expectedImpactClicks?: number | null;
+  startedAt?: string;
+  status?: UpdateRecoveryInitiativeRequestStatus;
+}
+
+export interface CompleteRecoveryInitiativeRequest {
+  brandId: string;
+  /** @maxLength 2000 */
+  completionNotes?: string;
+}
+
+export interface AbandonRecoveryInitiativeRequest {
+  brandId: string;
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  reason: string;
+}
+
 export type QualityGateStartFromDraftResultSource =
   (typeof QualityGateStartFromDraftResultSource)[keyof typeof QualityGateStartFromDraftResultSource];
 

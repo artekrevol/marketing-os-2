@@ -285,6 +285,180 @@ export const GetRecoveryInitiativesResponse = zod.object({
 });
 
 /**
+ * @summary Log a new recovery initiative
+ */
+export const createRecoveryInitiativeBodyNameMin = 5;
+export const createRecoveryInitiativeBodyNameMax = 100;
+
+export const createRecoveryInitiativeBodyDescriptionMax = 4000;
+
+export const createRecoveryInitiativeBodyExpectedImpactPctMin = 0;
+export const createRecoveryInitiativeBodyExpectedImpactPctMax = 200;
+
+export const CreateRecoveryInitiativeBody = zod.object({
+  brandId: zod.string().uuid(),
+  name: zod
+    .string()
+    .min(createRecoveryInitiativeBodyNameMin)
+    .max(createRecoveryInitiativeBodyNameMax),
+  type: zod.enum([
+    "content_refresh",
+    "content_kill",
+    "content_consolidation",
+    "technical_fix",
+    "link_building",
+    "quality_gate",
+    "other",
+  ]),
+  description: zod
+    .string()
+    .max(createRecoveryInitiativeBodyDescriptionMax)
+    .nullish(),
+  expectedImpactPct: zod
+    .number()
+    .min(createRecoveryInitiativeBodyExpectedImpactPctMin)
+    .max(createRecoveryInitiativeBodyExpectedImpactPctMax)
+    .nullish(),
+  expectedImpactClicks: zod.number().nullish(),
+  startedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Update a recovery initiative (admin or editor)
+ */
+export const UpdateRecoveryInitiativeParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const updateRecoveryInitiativeBodyNameMin = 5;
+export const updateRecoveryInitiativeBodyNameMax = 100;
+
+export const updateRecoveryInitiativeBodyDescriptionMax = 4000;
+
+export const updateRecoveryInitiativeBodyExpectedImpactPctMin = 0;
+export const updateRecoveryInitiativeBodyExpectedImpactPctMax = 200;
+
+export const UpdateRecoveryInitiativeBody = zod.object({
+  brandId: zod.string().uuid(),
+  name: zod
+    .string()
+    .min(updateRecoveryInitiativeBodyNameMin)
+    .max(updateRecoveryInitiativeBodyNameMax)
+    .optional(),
+  type: zod
+    .enum([
+      "content_refresh",
+      "content_kill",
+      "content_consolidation",
+      "technical_fix",
+      "link_building",
+      "quality_gate",
+      "other",
+    ])
+    .optional(),
+  description: zod
+    .string()
+    .max(updateRecoveryInitiativeBodyDescriptionMax)
+    .nullish(),
+  expectedImpactPct: zod
+    .number()
+    .min(updateRecoveryInitiativeBodyExpectedImpactPctMin)
+    .max(updateRecoveryInitiativeBodyExpectedImpactPctMax)
+    .nullish(),
+  expectedImpactClicks: zod.number().nullish(),
+  startedAt: zod.coerce.date().optional(),
+  status: zod.enum(["active", "abandoned"]).optional(),
+});
+
+export const UpdateRecoveryInitiativeResponse = zod.object({
+  initiative: zod.object({
+    id: zod.string().uuid(),
+    brandId: zod.string().uuid(),
+    name: zod.string(),
+    type: zod.string(),
+    description: zod.string().nullish(),
+    expectedImpactPct: zod.string().nullish(),
+    expectedImpactClicks: zod.number().nullish(),
+    startedAt: zod.coerce.date(),
+    completedAt: zod.coerce.date().nullish(),
+    status: zod.string(),
+    actualImpactClicks14d: zod.number().nullish(),
+    createdBy: zod.string().uuid(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Mark an initiative complete (schedules 14-day actual-impact job)
+ */
+export const CompleteRecoveryInitiativeParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const completeRecoveryInitiativeBodyCompletionNotesMax = 2000;
+
+export const CompleteRecoveryInitiativeBody = zod.object({
+  brandId: zod.string().uuid(),
+  completionNotes: zod
+    .string()
+    .max(completeRecoveryInitiativeBodyCompletionNotesMax)
+    .optional(),
+});
+
+export const CompleteRecoveryInitiativeResponse = zod.object({
+  initiative: zod.object({
+    id: zod.string().uuid(),
+    brandId: zod.string().uuid(),
+    name: zod.string(),
+    type: zod.string(),
+    description: zod.string().nullish(),
+    expectedImpactPct: zod.string().nullish(),
+    expectedImpactClicks: zod.number().nullish(),
+    startedAt: zod.coerce.date(),
+    completedAt: zod.coerce.date().nullish(),
+    status: zod.string(),
+    actualImpactClicks14d: zod.number().nullish(),
+    createdBy: zod.string().uuid(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Abandon an initiative with a reason (admin-only)
+ */
+export const AbandonRecoveryInitiativeParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const abandonRecoveryInitiativeBodyReasonMax = 2000;
+
+export const AbandonRecoveryInitiativeBody = zod.object({
+  brandId: zod.string().uuid(),
+  reason: zod.string().min(1).max(abandonRecoveryInitiativeBodyReasonMax),
+});
+
+export const AbandonRecoveryInitiativeResponse = zod.object({
+  initiative: zod.object({
+    id: zod.string().uuid(),
+    brandId: zod.string().uuid(),
+    name: zod.string(),
+    type: zod.string(),
+    description: zod.string().nullish(),
+    expectedImpactPct: zod.string().nullish(),
+    expectedImpactClicks: zod.number().nullish(),
+    startedAt: zod.coerce.date(),
+    completedAt: zod.coerce.date().nullish(),
+    status: zod.string(),
+    actualImpactClicks14d: zod.number().nullish(),
+    createdBy: zod.string().uuid(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+});
+
+/**
  * @summary Create-or-find a content_object from a project's latest draft
  */
 export const QualityGateStartFromDraftBody = zod.object({

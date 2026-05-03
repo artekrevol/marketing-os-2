@@ -371,4 +371,74 @@ export const recovery = {
     );
     return raw.initiatives.map(normaliseInitiative);
   },
+
+  // ---- Initiative mutations (Prompt 6) ----
+  // Each helper returns the freshly-mutated initiative in snake_case so
+  // it slots straight into existing UI without further translation.
+
+  createInitiative: async (input: {
+    brandId: string;
+    name: string;
+    type: string;
+    description?: string | null;
+    expectedImpactPct?: number | null;
+    expectedImpactClicks?: number | null;
+    startedAt: string;
+  }): Promise<RecoveryInitiative> => {
+    const raw = await jsonOrThrow<{ initiative: CamelInit }>(
+      await authedFetch(`/api/recovery/initiatives`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    );
+    return normaliseInitiative(raw.initiative);
+  },
+
+  updateInitiative: async (
+    id: string,
+    input: {
+      brandId: string;
+      name?: string;
+      type?: string;
+      description?: string | null;
+      expectedImpactPct?: number | null;
+      expectedImpactClicks?: number | null;
+      startedAt?: string;
+      status?: "active" | "abandoned";
+    },
+  ): Promise<RecoveryInitiative> => {
+    const raw = await jsonOrThrow<{ initiative: CamelInit }>(
+      await authedFetch(`/api/recovery/initiatives/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }),
+    );
+    return normaliseInitiative(raw.initiative);
+  },
+
+  completeInitiative: async (
+    id: string,
+    input: { brandId: string; completionNotes?: string },
+  ): Promise<RecoveryInitiative> => {
+    const raw = await jsonOrThrow<{ initiative: CamelInit }>(
+      await authedFetch(
+        `/api/recovery/initiatives/${encodeURIComponent(id)}/complete`,
+        { method: "POST", body: JSON.stringify(input) },
+      ),
+    );
+    return normaliseInitiative(raw.initiative);
+  },
+
+  abandonInitiative: async (
+    id: string,
+    input: { brandId: string; reason: string },
+  ): Promise<RecoveryInitiative> => {
+    const raw = await jsonOrThrow<{ initiative: CamelInit }>(
+      await authedFetch(
+        `/api/recovery/initiatives/${encodeURIComponent(id)}/abandon`,
+        { method: "POST", body: JSON.stringify(input) },
+      ),
+    );
+    return normaliseInitiative(raw.initiative);
+  },
 };

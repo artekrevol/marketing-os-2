@@ -17,6 +17,9 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AbandonRecoveryInitiativeRequest,
+  CompleteRecoveryInitiativeRequest,
+  CreateRecoveryInitiativeRequest,
   DeadJobList,
   EnqueueResult,
   ErrorResponse,
@@ -39,9 +42,11 @@ import type {
   QueueDepths,
   QueueUnavailableResponse,
   RecoveryInitiativeList,
+  RecoveryInitiativeResponse,
   RecoveryOverviewBody,
   RecoverySnapshotList,
   UnauthorizedResponse,
+  UpdateRecoveryInitiativeRequest,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -1407,6 +1412,377 @@ export function useGetRecoveryInitiatives<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Log a new recovery initiative
+ */
+export const getCreateRecoveryInitiativeUrl = () => {
+  return `/api/recovery/initiatives`;
+};
+
+export const createRecoveryInitiative = async (
+  createRecoveryInitiativeRequest: CreateRecoveryInitiativeRequest,
+  options?: RequestInit,
+): Promise<RecoveryInitiativeResponse> => {
+  return customFetch<RecoveryInitiativeResponse>(
+    getCreateRecoveryInitiativeUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(createRecoveryInitiativeRequest),
+    },
+  );
+};
+
+export const getCreateRecoveryInitiativeMutationOptions = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createRecoveryInitiative>>,
+    TError,
+    { data: BodyType<CreateRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createRecoveryInitiative>>,
+  TError,
+  { data: BodyType<CreateRecoveryInitiativeRequest> },
+  TContext
+> => {
+  const mutationKey = ["createRecoveryInitiative"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createRecoveryInitiative>>,
+    { data: BodyType<CreateRecoveryInitiativeRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createRecoveryInitiative(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateRecoveryInitiativeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createRecoveryInitiative>>
+>;
+export type CreateRecoveryInitiativeMutationBody =
+  BodyType<CreateRecoveryInitiativeRequest>;
+export type CreateRecoveryInitiativeMutationError = ErrorType<
+  ErrorResponse | UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Log a new recovery initiative
+ */
+export const useCreateRecoveryInitiative = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createRecoveryInitiative>>,
+    TError,
+    { data: BodyType<CreateRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createRecoveryInitiative>>,
+  TError,
+  { data: BodyType<CreateRecoveryInitiativeRequest> },
+  TContext
+> => {
+  return useMutation(getCreateRecoveryInitiativeMutationOptions(options));
+};
+
+/**
+ * @summary Update a recovery initiative (admin or editor)
+ */
+export const getUpdateRecoveryInitiativeUrl = (id: string) => {
+  return `/api/recovery/initiatives/${id}`;
+};
+
+export const updateRecoveryInitiative = async (
+  id: string,
+  updateRecoveryInitiativeRequest: UpdateRecoveryInitiativeRequest,
+  options?: RequestInit,
+): Promise<RecoveryInitiativeResponse> => {
+  return customFetch<RecoveryInitiativeResponse>(
+    getUpdateRecoveryInitiativeUrl(id),
+    {
+      ...options,
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(updateRecoveryInitiativeRequest),
+    },
+  );
+};
+
+export const getUpdateRecoveryInitiativeMutationOptions = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateRecoveryInitiative>>,
+    TError,
+    { id: string; data: BodyType<UpdateRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateRecoveryInitiative>>,
+  TError,
+  { id: string; data: BodyType<UpdateRecoveryInitiativeRequest> },
+  TContext
+> => {
+  const mutationKey = ["updateRecoveryInitiative"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateRecoveryInitiative>>,
+    { id: string; data: BodyType<UpdateRecoveryInitiativeRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateRecoveryInitiative(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateRecoveryInitiativeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateRecoveryInitiative>>
+>;
+export type UpdateRecoveryInitiativeMutationBody =
+  BodyType<UpdateRecoveryInitiativeRequest>;
+export type UpdateRecoveryInitiativeMutationError = ErrorType<
+  ErrorResponse | UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Update a recovery initiative (admin or editor)
+ */
+export const useUpdateRecoveryInitiative = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateRecoveryInitiative>>,
+    TError,
+    { id: string; data: BodyType<UpdateRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateRecoveryInitiative>>,
+  TError,
+  { id: string; data: BodyType<UpdateRecoveryInitiativeRequest> },
+  TContext
+> => {
+  return useMutation(getUpdateRecoveryInitiativeMutationOptions(options));
+};
+
+/**
+ * @summary Mark an initiative complete (schedules 14-day actual-impact job)
+ */
+export const getCompleteRecoveryInitiativeUrl = (id: string) => {
+  return `/api/recovery/initiatives/${id}/complete`;
+};
+
+export const completeRecoveryInitiative = async (
+  id: string,
+  completeRecoveryInitiativeRequest: CompleteRecoveryInitiativeRequest,
+  options?: RequestInit,
+): Promise<RecoveryInitiativeResponse> => {
+  return customFetch<RecoveryInitiativeResponse>(
+    getCompleteRecoveryInitiativeUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(completeRecoveryInitiativeRequest),
+    },
+  );
+};
+
+export const getCompleteRecoveryInitiativeMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof completeRecoveryInitiative>>,
+    TError,
+    { id: string; data: BodyType<CompleteRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof completeRecoveryInitiative>>,
+  TError,
+  { id: string; data: BodyType<CompleteRecoveryInitiativeRequest> },
+  TContext
+> => {
+  const mutationKey = ["completeRecoveryInitiative"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof completeRecoveryInitiative>>,
+    { id: string; data: BodyType<CompleteRecoveryInitiativeRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return completeRecoveryInitiative(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CompleteRecoveryInitiativeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof completeRecoveryInitiative>>
+>;
+export type CompleteRecoveryInitiativeMutationBody =
+  BodyType<CompleteRecoveryInitiativeRequest>;
+export type CompleteRecoveryInitiativeMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | ErrorResponse
+>;
+
+/**
+ * @summary Mark an initiative complete (schedules 14-day actual-impact job)
+ */
+export const useCompleteRecoveryInitiative = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof completeRecoveryInitiative>>,
+    TError,
+    { id: string; data: BodyType<CompleteRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof completeRecoveryInitiative>>,
+  TError,
+  { id: string; data: BodyType<CompleteRecoveryInitiativeRequest> },
+  TContext
+> => {
+  return useMutation(getCompleteRecoveryInitiativeMutationOptions(options));
+};
+
+/**
+ * @summary Abandon an initiative with a reason (admin-only)
+ */
+export const getAbandonRecoveryInitiativeUrl = (id: string) => {
+  return `/api/recovery/initiatives/${id}/abandon`;
+};
+
+export const abandonRecoveryInitiative = async (
+  id: string,
+  abandonRecoveryInitiativeRequest: AbandonRecoveryInitiativeRequest,
+  options?: RequestInit,
+): Promise<RecoveryInitiativeResponse> => {
+  return customFetch<RecoveryInitiativeResponse>(
+    getAbandonRecoveryInitiativeUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(abandonRecoveryInitiativeRequest),
+    },
+  );
+};
+
+export const getAbandonRecoveryInitiativeMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof abandonRecoveryInitiative>>,
+    TError,
+    { id: string; data: BodyType<AbandonRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof abandonRecoveryInitiative>>,
+  TError,
+  { id: string; data: BodyType<AbandonRecoveryInitiativeRequest> },
+  TContext
+> => {
+  const mutationKey = ["abandonRecoveryInitiative"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof abandonRecoveryInitiative>>,
+    { id: string; data: BodyType<AbandonRecoveryInitiativeRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return abandonRecoveryInitiative(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AbandonRecoveryInitiativeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof abandonRecoveryInitiative>>
+>;
+export type AbandonRecoveryInitiativeMutationBody =
+  BodyType<AbandonRecoveryInitiativeRequest>;
+export type AbandonRecoveryInitiativeMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | ErrorResponse
+>;
+
+/**
+ * @summary Abandon an initiative with a reason (admin-only)
+ */
+export const useAbandonRecoveryInitiative = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof abandonRecoveryInitiative>>,
+    TError,
+    { id: string; data: BodyType<AbandonRecoveryInitiativeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof abandonRecoveryInitiative>>,
+  TError,
+  { id: string; data: BodyType<AbandonRecoveryInitiativeRequest> },
+  TContext
+> => {
+  return useMutation(getAbandonRecoveryInitiativeMutationOptions(options));
+};
 
 /**
  * @summary Create-or-find a content_object from a project's latest draft

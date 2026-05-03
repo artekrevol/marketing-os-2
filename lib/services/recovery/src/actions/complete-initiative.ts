@@ -84,6 +84,7 @@ export async function completeInitiative(
           completedAt: completed.completedAt
             ? completed.completedAt.toISOString()
             : null,
+          completionNotes: input.completionNotes ?? null,
         },
       });
 
