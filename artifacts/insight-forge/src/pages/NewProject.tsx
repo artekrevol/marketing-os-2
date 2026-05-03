@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { z } from "zod";
 import { emit } from "@/lib/events";
+import { useActiveBrand } from "@/lib/brands";
 
 const TOPIC_MAX = 200;
 const NOTES_MAX = 4000;
@@ -34,6 +35,7 @@ function slugify(s: string) {
 
 export default function NewProject() {
   const nav = useNavigate();
+  const { activeBrand, isAdmin } = useActiveBrand();
   const [submitting, setSubmitting] = useState(false);
   const [topic, setTopic] = useState("");
   const [slug, setSlug] = useState("");
@@ -57,35 +59,20 @@ export default function NewProject() {
         setSubmitting(false);
         return;
       }
-      // Sprint 1: tag new projects to the user's active brand. Falls
-      // back to the user's first brand_access entry if no active brand
-      // is set (e.g. admin who hasn't picked one yet).
-      let activeBrandId: string | null = null;
-      try {
-        const slug = localStorage.getItem("contentforge.activeBrandSlug");
-        const { data: brandRows } = await supabase.from("brands").select("id,slug");
-        const { data: prof } = await supabase
-          .from("user_profiles")
-          .select("brand_access")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        const access: string[] = prof?.brand_access || [];
-        const slugMatch = slug ? (brandRows || []).find((b) => b.slug === slug) : null;
-        if (slugMatch && (access.includes(slugMatch.id) || access.length === 0)) {
-          activeBrandId = slugMatch.id;
-        } else if (access.length > 0) {
-          activeBrandId = access[0];
-        } else if ((brandRows || []).length > 0) {
-          // Admin with no brand_access yet — default to TekRevol.
-          activeBrandId = (brandRows || []).find((b) => b.slug === "tekrevol")?.id || null;
-        }
-      } catch (e) {
-        console.warn("[NewProject] brand resolution failed", e);
+      // Sprint 1: new projects are written to whatever brand the user
+      // has currently selected in the brand switcher. BrandProvider is
+      // the single source of truth — it already enforces that admins can
+      // see all brands and writers are restricted to their access list,
+      // so we just trust activeBrand here. RLS provides the second
+      // line of defense at the DB level.
+      if (!activeBrand) {
+        throw new Error(
+          isAdmin
+            ? "No brand selected. Pick one in the brand switcher first."
+            : "No brand selected. Ask an admin to grant brand access.",
+        );
       }
-
-      if (!activeBrandId) {
-        throw new Error("No brand selected. Ask an admin to grant brand access.");
-      }
+      const activeBrandId = activeBrand.id;
       const { data: project, error } = await supabase
         .from("projects")
         .insert({
