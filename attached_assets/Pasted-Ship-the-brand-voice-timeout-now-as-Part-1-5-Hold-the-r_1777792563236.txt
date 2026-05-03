@@ -1,0 +1,42 @@
+Ship the brand-voice timeout now as Part 1.5. Hold the role grep for Sprint 4.
+
+Reasoning:
+
+**Brand-voice timeout is a live production bug.** It's not an edge case — every brand-voice check is one OpenAI call, OpenAI calls hang in the wild, and your acceptance criterion is 90s. A single hung call right now will stall a real writer's qa_run past 90s and tank the team's first impression of the gate. The fix is small (AbortController + 30s timeout + same Sentry capture pattern as other integration errors). One commit, no schema changes, no prompt pack needed. Ship it before Monday so the team's second week with Quality Gate doesn't surface the issue.
+
+While doing it, set the timeout to 30s but also add the same retry-on-timeout pattern as DataForSEO and Originality.ai (3 attempts, exponential backoff). Treat OpenAI timeout the same way: terminal failure after retries → `qa_check_result` with severity matching the check definition (warn for brand-voice, since it's not hard-fail), evidence carries `{ error: 'timeout', attempts: 3 }`. The qa_run completes; brand-voice gets a warn; reviewer sees "couldn't verify brand voice — check skipped." Better than hanging.
+
+**Role grep can wait for Sprint 4.** Reasoning is the opposite of the timeout: this is a hypothetical gap, not a confirmed bug. You verified that `/decide` and the SEO OS shell handle the reviewer role correctly. The grep is to find unintended omissions elsewhere. That work is exactly Sprint 4-shaped: Sprint 4's prompts will touch the override modal (admin-only), assignment view (lead-only), and brand config editor (admin-only), each of which forces a deliberate role check. Adding the grep as a Sprint 4 prompt means it gets done with intent rather than as a one-off audit.
+
+Specifically, add a Prompt 0 to Sprint 4 that does: grep for every role comparison in the codebase, list them in `docs/role-audit-sprint-4.md`, classify each as correct / needs-reviewer-added / needs-tightening, then make changes. Catches the gaps systematically, gives you a paper trail, and saves Replit Agent from drifting on role checks for the rest of the sprint.
+
+**One more recommendation while we're staging follow-ups**
+
+Add a third item to Part 1.5 if you have the bandwidth: log a structured event when any check goes into `error` state (timeout or unhandled exception). Right now those probably show up in Sentry but not in your `events` table. Performance Monitor (Sprint 9) and Recovery War Room (Sprint 7) will both want to graph "% of qa_runs that errored vs. failed vs. passed" over time. That graph is one Postgres query if the events exist; it's an unstructured Sentry log dive if they don't.
+
+The event shape:
+
+```
+event_type: 'qa.check_errored'
+source_service: 'worker'
+brand_id: <from qa_run>
+subject_type: 'qa_check_result'
+subject_id: <qa_check_result.id>
+payload: { check_name, error_class, attempts, qa_run_id }
+```
+
+Cheap to add, makes future analytics free instead of expensive.
+
+**Sprint 4 prep**
+
+The retrospective questions for Rabia and Maria are now the gating item. Don't draft Sprint 4 prompts until you have their input on:
+
+Hard-fail rate in the first week (calibrates whether thresholds need to move).
+
+Whether the structured Request Revision form was used or bypassed (UX validation).
+
+Override attempts logged in audit_log (requirements gathering for the override modal).
+
+Brief lock direction: are writers ready for hard-lock, or do they need a warn-only period? Recommend warn-only for two weeks unless the retrospective says otherwise.
+
+Once you have those answers plus the ClaimShield SME compliance reviewer's account confirmation, send everything and I'll draft Sprint 4. The brand-voice timeout fix and the events-on-error addition will be assumed to have shipped, so I won't include them in Sprint 4's scope.
