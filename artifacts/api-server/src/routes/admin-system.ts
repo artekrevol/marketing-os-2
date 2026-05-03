@@ -7,9 +7,24 @@ import { requireAdmin } from "../middlewares/auth";
 const router: IRouter = Router();
 router.use(requireAdmin);
 
+/**
+ * Resolve the idempotency key for an admin-trigger request. Honors a
+ * caller-supplied `idempotencyKey` in the JSON body (allowing the
+ * /admin/system UI or curl to send the same key for a double-click,
+ * which BullMQ will dedupe via jobId), and falls back to a fresh
+ * server-side key when none is provided. Trims and clamps length to
+ * keep the value safe to use as a Redis key.
+ */
+function resolveIdem(req: { body?: unknown }, prefix: string): string {
+  const body = (req.body ?? {}) as { idempotencyKey?: unknown };
+  const supplied = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
+  if (supplied.length > 0 && supplied.length <= 128) return supplied;
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 /** Enqueue a maintenance heartbeat. Returns the resulting jobId. */
 router.post("/heartbeat", async (req, res) => {
-  const idem = `api-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const idem = resolveIdem(req, "api");
   try {
     const { jobId, queueName } = await enqueue("maintenance.heartbeat-noop", {
       idempotencyKey: idem,
@@ -23,7 +38,7 @@ router.post("/heartbeat", async (req, res) => {
 });
 
 router.post("/test-dataforseo", async (req, res) => {
-  const idem = `dfs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const idem = resolveIdem(req, "dfs");
   try {
     const { jobId, queueName } = await enqueue("integrations.dataforseo-serp-test", {
       idempotencyKey: idem,
@@ -39,7 +54,7 @@ router.post("/test-dataforseo", async (req, res) => {
 });
 
 router.post("/test-originality", async (req, res) => {
-  const idem = `orig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const idem = resolveIdem(req, "orig");
   try {
     const { jobId, queueName } = await enqueue("integrations.originality-ai-scan-test", {
       idempotencyKey: idem,
