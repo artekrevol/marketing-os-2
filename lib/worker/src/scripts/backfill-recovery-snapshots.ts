@@ -35,8 +35,15 @@
  *                          job count without enqueueing.
  */
 
-import { sql } from "drizzle-orm";
-import { pool, db } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import {
+  pool,
+  guardedDb,
+  withBrandScope,
+  brandsTable,
+  recoveryBaselinesTable,
+  type RecoveryBaseline,
+} from "@workspace/db";
 import { enqueue, closeAllQueues, closeRedisConnection } from "@workspace/jobs";
 
 const ENQUEUE_CONCURRENCY = 50;
@@ -94,17 +101,29 @@ interface BrandPlan {
 }
 
 async function loadBrandsWithBaselines(): Promise<BrandPlan[]> {
-  const result = (await db.execute(sql`
-    select
-      brand_id::text             as brand_id,
-      baseline_date::text        as baseline_date
-    from public.recovery_baselines
-    order by brand_id
-  `)) as
-    | { rows?: Array<{ brand_id: string; baseline_date: string }> }
-    | Array<{ brand_id: string; baseline_date: string }>;
-  const rows = Array.isArray(result) ? result : (result.rows ?? []);
-  return rows.map((r) => ({ brandId: r.brand_id, baselineDate: r.baseline_date }));
+  // System-side enumeration of the brands lookup table (NOT
+  // brand-scoped — it's the tenancy root). Per-brand reads of
+  // `recovery_baselines` then happen inside `withBrandScope` so the
+  // tenancy guard remains active for every brand-scoped read.
+  const brandRows = await guardedDb
+    .select({ id: brandsTable.id })
+    .from(brandsTable);
+
+  const plans: BrandPlan[] = [];
+  for (const { id: brandId } of brandRows) {
+    const baselineDate = await withBrandScope(brandId, async ({ scoped }) => {
+      const rows = (await scoped.select(recoveryBaselinesTable, {
+        where: eq(recoveryBaselinesTable.brandId, brandId),
+        limit: 1,
+      })) as RecoveryBaseline[];
+      return rows[0]?.baselineDate ?? null;
+    });
+    if (baselineDate != null) {
+      plans.push({ brandId, baselineDate });
+    }
+  }
+  plans.sort((a, b) => a.brandId.localeCompare(b.brandId));
+  return plans;
 }
 
 /**

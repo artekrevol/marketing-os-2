@@ -1,7 +1,9 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   withBrandScope,
   guardedDb,
+  brandsTable,
+  recoveryBaselinesTable,
   recoverySnapshotsTable,
   eventsTable,
   type RecoveryBaseline,
@@ -174,30 +176,37 @@ export async function handleRecoverySnapshotNightly(
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const snapshotDate = isoDateUtc(yesterday);
 
-  // `recovery_baselines` is brand-scoped, but the nightly scheduler
-  // legitimately reads across brands to fan out work. Use a raw
-  // SELECT through the unguarded `db` (system-side enumeration).
-  const result = (await guardedDb.execute(sql`
-    select brand_id::text as brand_id
-    from public.recovery_baselines
-    order by brand_id
-  `)) as
-    | { rows?: Array<{ brand_id: string }> }
-    | Array<{ brand_id: string }>;
-  const rows = Array.isArray(result) ? result : (result.rows ?? []);
+  // System-side enumeration: the `brands` table is NOT brand-scoped
+  // (it is the lookup root), so listing brand ids through `guardedDb`
+  // is legitimate. Per-brand recovery_baselines reads then happen
+  // inside `withBrandScope` so the tenancy guard remains active for
+  // every brand-scoped read.
+  const brandRows = await guardedDb
+    .select({ id: brandsTable.id })
+    .from(brandsTable);
 
   let enqueued = 0;
-  for (const row of rows) {
+  let withBaseline = 0;
+  for (const { id: brandId } of brandRows) {
+    const hasBaseline = await withBrandScope(brandId, async ({ scoped }) => {
+      const rows = (await scoped.select(recoveryBaselinesTable, {
+        where: eq(recoveryBaselinesTable.brandId, brandId),
+        limit: 1,
+      })) as RecoveryBaseline[];
+      return rows.length > 0;
+    });
+    if (!hasBaseline) continue;
+    withBaseline += 1;
     await enqueue("scoring.recovery-snapshot", {
-      brandId: row.brand_id,
+      brandId,
       snapshotDate,
-      idempotencyKey: `recovery-snapshot:${row.brand_id}:${snapshotDate}`,
+      idempotencyKey: `recovery-snapshot:${brandId}:${snapshotDate}`,
     });
     enqueued += 1;
   }
 
   log.info(
-    { snapshotDate, brands: rows.length, enqueued },
+    { snapshotDate, brands: brandRows.length, withBaseline, enqueued },
     "recovery-snapshot-nightly: fan-out complete",
   );
   return { enqueued, snapshotDate };
