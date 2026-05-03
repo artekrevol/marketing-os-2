@@ -37,6 +37,9 @@ import type {
   QualityGateSubmitResult,
   QueueDepths,
   QueueUnavailableResponse,
+  RecoveryInitiativeList,
+  RecoveryOverviewBody,
+  RecoverySnapshotList,
   UnauthorizedResponse,
 } from "./api.schemas";
 
@@ -1089,6 +1092,285 @@ export function useQualityGateReviewDetail<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getQualityGateReviewDetailQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Recovery overview payload for the dashboard headline card
+ */
+export const getGetRecoveryOverviewUrl = (brandId: string) => {
+  return `/api/recovery/overview/${brandId}`;
+};
+
+export const getRecoveryOverview = async (
+  brandId: string,
+  options?: RequestInit,
+): Promise<RecoveryOverviewBody> => {
+  return customFetch<RecoveryOverviewBody>(getGetRecoveryOverviewUrl(brandId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetRecoveryOverviewQueryKey = (brandId: string) => {
+  return [`/api/recovery/overview/${brandId}`] as const;
+};
+
+export const getGetRecoveryOverviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRecoveryOverview>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  brandId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getRecoveryOverview>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetRecoveryOverviewQueryKey(brandId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getRecoveryOverview>>
+  > = ({ signal }) =>
+    getRecoveryOverview(brandId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!brandId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getRecoveryOverview>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetRecoveryOverviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRecoveryOverview>>
+>;
+export type GetRecoveryOverviewQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Recovery overview payload for the dashboard headline card
+ */
+
+export function useGetRecoveryOverview<
+  TData = Awaited<ReturnType<typeof getRecoveryOverview>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  brandId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getRecoveryOverview>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetRecoveryOverviewQueryOptions(brandId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Recovery snapshots within a trailing window (default 90 days)
+ */
+export const getGetRecoverySnapshotsUrl = (brandId: string) => {
+  return `/api/recovery/snapshots/${brandId}`;
+};
+
+export const getRecoverySnapshots = async (
+  brandId: string,
+  options?: RequestInit,
+): Promise<RecoverySnapshotList> => {
+  return customFetch<RecoverySnapshotList>(
+    getGetRecoverySnapshotsUrl(brandId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetRecoverySnapshotsQueryKey = (brandId: string) => {
+  return [`/api/recovery/snapshots/${brandId}`] as const;
+};
+
+export const getGetRecoverySnapshotsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRecoverySnapshots>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  brandId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getRecoverySnapshots>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetRecoverySnapshotsQueryKey(brandId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getRecoverySnapshots>>
+  > = ({ signal }) =>
+    getRecoverySnapshots(brandId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!brandId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getRecoverySnapshots>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetRecoverySnapshotsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRecoverySnapshots>>
+>;
+export type GetRecoverySnapshotsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Recovery snapshots within a trailing window (default 90 days)
+ */
+
+export function useGetRecoverySnapshots<
+  TData = Awaited<ReturnType<typeof getRecoverySnapshots>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  brandId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getRecoverySnapshots>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetRecoverySnapshotsQueryOptions(brandId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List recovery initiatives for a brand
+ */
+export const getGetRecoveryInitiativesUrl = (brandId: string) => {
+  return `/api/recovery/initiatives/${brandId}`;
+};
+
+export const getRecoveryInitiatives = async (
+  brandId: string,
+  options?: RequestInit,
+): Promise<RecoveryInitiativeList> => {
+  return customFetch<RecoveryInitiativeList>(
+    getGetRecoveryInitiativesUrl(brandId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetRecoveryInitiativesQueryKey = (brandId: string) => {
+  return [`/api/recovery/initiatives/${brandId}`] as const;
+};
+
+export const getGetRecoveryInitiativesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRecoveryInitiatives>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  brandId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getRecoveryInitiatives>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetRecoveryInitiativesQueryKey(brandId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getRecoveryInitiatives>>
+  > = ({ signal }) =>
+    getRecoveryInitiatives(brandId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!brandId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getRecoveryInitiatives>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetRecoveryInitiativesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRecoveryInitiatives>>
+>;
+export type GetRecoveryInitiativesQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List recovery initiatives for a brand
+ */
+
+export function useGetRecoveryInitiatives<
+  TData = Awaited<ReturnType<typeof getRecoveryInitiatives>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  brandId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getRecoveryInitiatives>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetRecoveryInitiativesQueryOptions(brandId, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

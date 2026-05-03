@@ -14,6 +14,7 @@
     "@workspace/db": "workspace:*",
     "@workspace/jobs": "workspace:*",
     "@workspace/quality-gate": "workspace:*",
+    "@workspace/services-recovery": "workspace:*",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
     "drizzle-orm": "catalog:",

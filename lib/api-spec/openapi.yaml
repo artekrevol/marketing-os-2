@@ -14,6 +14,8 @@ tags:
     description: Admin-only worker/queue observability and triggers
   - name: quality-gate
     description: Sprint 3 reviewer queue, automated checks, sign-off transitions
+  - name: recovery
+    description: Sprint 4 Recovery War Room — baseline, snapshots, initiatives
 paths:
   /healthz:
     get:
@@ -308,6 +310,81 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /recovery/overview/{brandId}:
+    get:
+      operationId: getRecoveryOverview
+      tags: [recovery]
+      summary: Recovery overview payload for the dashboard headline card
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: brandId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryOverviewBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /recovery/snapshots/{brandId}:
+    get:
+      operationId: getRecoverySnapshots
+      tags: [recovery]
+      summary: Recovery snapshots within a trailing window (default 90 days)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: brandId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoverySnapshotList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /recovery/initiatives/{brandId}:
+    get:
+      operationId: getRecoveryInitiatives
+      tags: [recovery]
+      summary: List recovery initiatives for a brand
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: brandId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryInitiativeList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /quality-gate/start-from-draft:
     post:
       operationId: qualityGateStartFromDraft
@@ -654,6 +731,133 @@ components:
         brandId: { type: string, format: uuid }
         projectId: { type: string, format: uuid }
       required: [brandId, projectId]
+    RecoveryBaseline:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        brandId: { type: string, format: uuid }
+        baselineDate: { type: string }
+        methodology: { type: string }
+        baselineGscClicksDaily: { type: [string, "null"] }
+        baselineGa4SessionsDaily: { type: [string, "null"] }
+        baselineAvgPosition: { type: string }
+        baselineKeywordsInTop10: { type: integer }
+        baselineKeywordsInTop3: { type: integer }
+        recoveryThresholdPct: { type: string }
+        recoveryConsecutiveDays: { type: integer }
+        lockedAt: { type: string, format: date-time }
+        lockedBy: { type: string, format: uuid }
+        notes: { type: [string, "null"] }
+      required:
+        - id
+        - brandId
+        - baselineDate
+        - methodology
+        - baselineAvgPosition
+        - baselineKeywordsInTop10
+        - baselineKeywordsInTop3
+        - recoveryThresholdPct
+        - recoveryConsecutiveDays
+        - lockedAt
+        - lockedBy
+    RecoverySnapshot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        brandId: { type: string, format: uuid }
+        snapshotDate: { type: string }
+        gscClicks30dAvg: { type: [string, "null"] }
+        ga4Sessions30dAvg: { type: [string, "null"] }
+        avgPosition30d: { type: string }
+        keywordsInTop10: { type: integer }
+        keywordsInTop3: { type: integer }
+        gapToBaselineClicksPct: { type: [string, "null"] }
+        gapToBaselinePosition: { type: [string, "null"] }
+        gapToBaselineTop10Pct: { type: [string, "null"] }
+        computedAt: { type: string, format: date-time }
+      required:
+        - id
+        - brandId
+        - snapshotDate
+        - avgPosition30d
+        - keywordsInTop10
+        - keywordsInTop3
+        - computedAt
+    RecoveryInitiative:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        brandId: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string }
+        description: { type: [string, "null"] }
+        expectedImpactPct: { type: [string, "null"] }
+        expectedImpactClicks: { type: [integer, "null"] }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+        status: { type: string }
+        actualImpactClicks14d: { type: [integer, "null"] }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required:
+        - id
+        - brandId
+        - name
+        - type
+        - startedAt
+        - status
+        - createdBy
+        - createdAt
+        - updatedAt
+    RecoveryProjection:
+      type: object
+      additionalProperties: true
+      properties:
+        status:
+          type: string
+          enum: [projecting, recovered, gap_widening, no_data]
+        slope: { type: number }
+        intercept: { type: number }
+        latestGapPct: { type: number }
+        projectedRecoveryDate: { type: string, format: date-time }
+        pointsUsed: { type: integer }
+        reason: { type: string }
+      required: [status]
+    RecoveryOverviewBody:
+      type: object
+      properties:
+        baseline:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/RecoveryBaseline"
+        current:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/RecoverySnapshot"
+        gapPct:
+          type: [number, "null"]
+        activeInitiatives:
+          type: integer
+        projection:
+          $ref: "#/components/schemas/RecoveryProjection"
+      required: [baseline, current, gapPct, activeInitiatives, projection]
+    RecoverySnapshotList:
+      type: object
+      properties:
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecoverySnapshot"
+      required: [snapshots]
+    RecoveryInitiativeList:
+      type: object
+      properties:
+        initiatives:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecoveryInitiative"
+      required: [initiatives]
     QualityGateStartFromDraftResult:
       type: object
       properties:

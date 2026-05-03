@@ -139,3 +139,236 @@ export const qualityGate = {
       }),
     ),
 };
+
+// ---- Recovery War Room ----
+
+export type RecoveryBaseline = {
+  id: string;
+  brand_id: string;
+  baseline_date: string;
+  methodology: string;
+  baseline_gsc_clicks_daily: string | null;
+  baseline_ga4_sessions_daily: string | null;
+  baseline_avg_position: string;
+  baseline_keywords_in_top_10: number;
+  baseline_keywords_in_top_3: number;
+  recovery_threshold_pct: string;
+  recovery_consecutive_days: number;
+  locked_at: string;
+  locked_by: string;
+  notes: string | null;
+};
+
+export type RecoverySnapshot = {
+  id: string;
+  brand_id: string;
+  snapshot_date: string;
+  gsc_clicks_30d_avg: string | null;
+  ga4_sessions_30d_avg: string | null;
+  avg_position_30d: string;
+  keywords_in_top_10: number;
+  keywords_in_top_3: number;
+  gap_to_baseline_clicks_pct: string | null;
+  gap_to_baseline_position: string | null;
+  gap_to_baseline_top10_pct: string | null;
+  computed_at: string;
+};
+
+export type RecoveryInitiative = {
+  id: string;
+  brand_id: string;
+  name: string;
+  type: string;
+  description: string | null;
+  expected_impact_pct: string | null;
+  expected_impact_clicks: number | null;
+  started_at: string;
+  completed_at: string | null;
+  status: string;
+  actual_impact_clicks_14d: number | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RecoveryProjection =
+  | {
+      status: "projecting";
+      slope: number;
+      intercept: number;
+      latestGapPct: number;
+      projectedRecoveryDate: string;
+      pointsUsed: number;
+    }
+  | {
+      status: "recovered";
+      slope: number;
+      intercept: number;
+      latestGapPct: number;
+      pointsUsed: number;
+    }
+  | {
+      status: "gap_widening";
+      slope: number;
+      intercept: number;
+      latestGapPct: number;
+      pointsUsed: number;
+    }
+  | {
+      status: "no_data";
+      reason: "all_null" | "insufficient_points" | "no_variance";
+      pointsUsed: number;
+    };
+
+export type RecoveryOverview = {
+  baseline: RecoveryBaseline | null;
+  current: RecoverySnapshot | null;
+  gapPct: number | null;
+  activeInitiatives: number;
+  projection: RecoveryProjection;
+};
+
+// The api-server returns Drizzle camelCase; the UI types here use the
+// snake_case wire shape. The api-server actually serialises `baseline`
+// rows as-is from Drizzle (camelCase), so we normalise in the client
+// for stable consumption.
+type CamelKeys<T> = T extends RecoveryBaseline
+  ? {
+      id: string;
+      brandId: string;
+      baselineDate: string;
+      methodology: string;
+      baselineGscClicksDaily: string | null;
+      baselineGa4SessionsDaily: string | null;
+      baselineAvgPosition: string;
+      baselineKeywordsInTop10: number;
+      baselineKeywordsInTop3: number;
+      recoveryThresholdPct: string;
+      recoveryConsecutiveDays: number;
+      lockedAt: string;
+      lockedBy: string;
+      notes: string | null;
+    }
+  : never;
+
+function normaliseBaseline(b: CamelKeys<RecoveryBaseline> | null): RecoveryBaseline | null {
+  if (!b) return null;
+  return {
+    id: b.id,
+    brand_id: b.brandId,
+    baseline_date: b.baselineDate,
+    methodology: b.methodology,
+    baseline_gsc_clicks_daily: b.baselineGscClicksDaily,
+    baseline_ga4_sessions_daily: b.baselineGa4SessionsDaily,
+    baseline_avg_position: b.baselineAvgPosition,
+    baseline_keywords_in_top_10: b.baselineKeywordsInTop10,
+    baseline_keywords_in_top_3: b.baselineKeywordsInTop3,
+    recovery_threshold_pct: b.recoveryThresholdPct,
+    recovery_consecutive_days: b.recoveryConsecutiveDays,
+    locked_at: b.lockedAt,
+    locked_by: b.lockedBy,
+    notes: b.notes,
+  };
+}
+
+type CamelSnap = {
+  id: string;
+  brandId: string;
+  snapshotDate: string;
+  gscClicks30dAvg: string | null;
+  ga4Sessions30dAvg: string | null;
+  avgPosition30d: string;
+  keywordsInTop10: number;
+  keywordsInTop3: number;
+  gapToBaselineClicksPct: string | null;
+  gapToBaselinePosition: string | null;
+  gapToBaselineTop10Pct: string | null;
+  computedAt: string;
+};
+
+function normaliseSnapshot(s: CamelSnap | null): RecoverySnapshot | null {
+  if (!s) return null;
+  return {
+    id: s.id,
+    brand_id: s.brandId,
+    snapshot_date: s.snapshotDate,
+    gsc_clicks_30d_avg: s.gscClicks30dAvg,
+    ga4_sessions_30d_avg: s.ga4Sessions30dAvg,
+    avg_position_30d: s.avgPosition30d,
+    keywords_in_top_10: s.keywordsInTop10,
+    keywords_in_top_3: s.keywordsInTop3,
+    gap_to_baseline_clicks_pct: s.gapToBaselineClicksPct,
+    gap_to_baseline_position: s.gapToBaselinePosition,
+    gap_to_baseline_top10_pct: s.gapToBaselineTop10Pct,
+    computed_at: s.computedAt,
+  };
+}
+
+type CamelInit = {
+  id: string;
+  brandId: string;
+  name: string;
+  type: string;
+  description: string | null;
+  expectedImpactPct: string | null;
+  expectedImpactClicks: number | null;
+  startedAt: string;
+  completedAt: string | null;
+  status: string;
+  actualImpactClicks14d: number | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function normaliseInitiative(i: CamelInit): RecoveryInitiative {
+  return {
+    id: i.id,
+    brand_id: i.brandId,
+    name: i.name,
+    type: i.type,
+    description: i.description,
+    expected_impact_pct: i.expectedImpactPct,
+    expected_impact_clicks: i.expectedImpactClicks,
+    started_at: i.startedAt,
+    completed_at: i.completedAt,
+    status: i.status,
+    actual_impact_clicks_14d: i.actualImpactClicks14d,
+    created_by: i.createdBy,
+    created_at: i.createdAt,
+    updated_at: i.updatedAt,
+  };
+}
+
+export const recovery = {
+  overview: async (brandId: string): Promise<RecoveryOverview> => {
+    const raw = await jsonOrThrow<{
+      baseline: CamelKeys<RecoveryBaseline> | null;
+      current: CamelSnap | null;
+      gapPct: number | null;
+      activeInitiatives: number;
+      projection: RecoveryProjection;
+    }>(await authedFetch(`/api/recovery/overview/${encodeURIComponent(brandId)}`));
+    return {
+      baseline: normaliseBaseline(raw.baseline),
+      current: normaliseSnapshot(raw.current),
+      gapPct: raw.gapPct,
+      activeInitiatives: raw.activeInitiatives,
+      projection: raw.projection,
+    };
+  },
+  snapshots: async (brandId: string, days = 90): Promise<RecoverySnapshot[]> => {
+    const raw = await jsonOrThrow<{ snapshots: CamelSnap[] }>(
+      await authedFetch(
+        `/api/recovery/snapshots/${encodeURIComponent(brandId)}?days=${days}`,
+      ),
+    );
+    return raw.snapshots.map((s) => normaliseSnapshot(s)!);
+  },
+  initiatives: async (brandId: string): Promise<RecoveryInitiative[]> => {
+    const raw = await jsonOrThrow<{ initiatives: CamelInit[] }>(
+      await authedFetch(`/api/recovery/initiatives/${encodeURIComponent(brandId)}`),
+    );
+    return raw.initiatives.map(normaliseInitiative);
+  },
+};

@@ -188,6 +188,106 @@ export interface QualityGateStartFromDraftRequest {
   projectId: string;
 }
 
+export interface RecoveryBaseline {
+  id: string;
+  brandId: string;
+  baselineDate: string;
+  methodology: string;
+  /** @nullable */
+  baselineGscClicksDaily?: string | null;
+  /** @nullable */
+  baselineGa4SessionsDaily?: string | null;
+  baselineAvgPosition: string;
+  baselineKeywordsInTop10: number;
+  baselineKeywordsInTop3: number;
+  recoveryThresholdPct: string;
+  recoveryConsecutiveDays: number;
+  lockedAt: string;
+  lockedBy: string;
+  /** @nullable */
+  notes?: string | null;
+}
+
+export interface RecoverySnapshot {
+  id: string;
+  brandId: string;
+  snapshotDate: string;
+  /** @nullable */
+  gscClicks30dAvg?: string | null;
+  /** @nullable */
+  ga4Sessions30dAvg?: string | null;
+  avgPosition30d: string;
+  keywordsInTop10: number;
+  keywordsInTop3: number;
+  /** @nullable */
+  gapToBaselineClicksPct?: string | null;
+  /** @nullable */
+  gapToBaselinePosition?: string | null;
+  /** @nullable */
+  gapToBaselineTop10Pct?: string | null;
+  computedAt: string;
+}
+
+export interface RecoveryInitiative {
+  id: string;
+  brandId: string;
+  name: string;
+  type: string;
+  /** @nullable */
+  description?: string | null;
+  /** @nullable */
+  expectedImpactPct?: string | null;
+  /** @nullable */
+  expectedImpactClicks?: number | null;
+  startedAt: string;
+  /** @nullable */
+  completedAt?: string | null;
+  status: string;
+  /** @nullable */
+  actualImpactClicks14d?: number | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RecoveryProjectionStatus =
+  (typeof RecoveryProjectionStatus)[keyof typeof RecoveryProjectionStatus];
+
+export const RecoveryProjectionStatus = {
+  projecting: "projecting",
+  recovered: "recovered",
+  gap_widening: "gap_widening",
+  no_data: "no_data",
+} as const;
+
+export interface RecoveryProjection {
+  status: RecoveryProjectionStatus;
+  slope?: number;
+  intercept?: number;
+  latestGapPct?: number;
+  projectedRecoveryDate?: string;
+  pointsUsed?: number;
+  reason?: string;
+  [key: string]: unknown;
+}
+
+export interface RecoveryOverviewBody {
+  baseline: null | RecoveryBaseline;
+  current: null | RecoverySnapshot;
+  /** @nullable */
+  gapPct: number | null;
+  activeInitiatives: number;
+  projection: RecoveryProjection;
+}
+
+export interface RecoverySnapshotList {
+  snapshots: RecoverySnapshot[];
+}
+
+export interface RecoveryInitiativeList {
+  initiatives: RecoveryInitiative[];
+}
+
 export type QualityGateStartFromDraftResultSource =
   (typeof QualityGateStartFromDraftResultSource)[keyof typeof QualityGateStartFromDraftResultSource];
 

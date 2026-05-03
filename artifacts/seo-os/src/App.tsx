@@ -5,6 +5,7 @@ import AppShell from "@/components/AppShell";
 import Auth from "@/pages/Auth";
 import QualityGateQueue from "@/pages/QualityGateQueue";
 import QualityGateReview from "@/pages/QualityGateReview";
+import Recovery from "@/pages/Recovery";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -17,6 +18,7 @@ function Routed() {
       <Route path="/quality-gate/:id">
         {(params) => <QualityGateReview id={params.id} />}
       </Route>
+      <Route path="/recovery" component={Recovery} />
       <Route path="/">{() => <Redirect to="/quality-gate" />}</Route>
       <Route component={NotFound} />
     </Switch>

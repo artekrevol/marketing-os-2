@@ -164,6 +164,117 @@ export const QualityGateReviewDetailResponse = zod.object({
 });
 
 /**
+ * @summary Recovery overview payload for the dashboard headline card
+ */
+export const GetRecoveryOverviewParams = zod.object({
+  brandId: zod.coerce.string().uuid(),
+});
+
+export const GetRecoveryOverviewResponse = zod.object({
+  baseline: zod.union([
+    zod.null(),
+    zod.object({
+      id: zod.string().uuid(),
+      brandId: zod.string().uuid(),
+      baselineDate: zod.string(),
+      methodology: zod.string(),
+      baselineGscClicksDaily: zod.string().nullish(),
+      baselineGa4SessionsDaily: zod.string().nullish(),
+      baselineAvgPosition: zod.string(),
+      baselineKeywordsInTop10: zod.number(),
+      baselineKeywordsInTop3: zod.number(),
+      recoveryThresholdPct: zod.string(),
+      recoveryConsecutiveDays: zod.number(),
+      lockedAt: zod.coerce.date(),
+      lockedBy: zod.string().uuid(),
+      notes: zod.string().nullish(),
+    }),
+  ]),
+  current: zod.union([
+    zod.null(),
+    zod.object({
+      id: zod.string().uuid(),
+      brandId: zod.string().uuid(),
+      snapshotDate: zod.string(),
+      gscClicks30dAvg: zod.string().nullish(),
+      ga4Sessions30dAvg: zod.string().nullish(),
+      avgPosition30d: zod.string(),
+      keywordsInTop10: zod.number(),
+      keywordsInTop3: zod.number(),
+      gapToBaselineClicksPct: zod.string().nullish(),
+      gapToBaselinePosition: zod.string().nullish(),
+      gapToBaselineTop10Pct: zod.string().nullish(),
+      computedAt: zod.coerce.date(),
+    }),
+  ]),
+  gapPct: zod.number().nullable(),
+  activeInitiatives: zod.number(),
+  projection: zod.object({
+    status: zod.enum(["projecting", "recovered", "gap_widening", "no_data"]),
+    slope: zod.number().optional(),
+    intercept: zod.number().optional(),
+    latestGapPct: zod.number().optional(),
+    projectedRecoveryDate: zod.coerce.date().optional(),
+    pointsUsed: zod.number().optional(),
+    reason: zod.string().optional(),
+  }),
+});
+
+/**
+ * @summary Recovery snapshots within a trailing window (default 90 days)
+ */
+export const GetRecoverySnapshotsParams = zod.object({
+  brandId: zod.coerce.string().uuid(),
+});
+
+export const GetRecoverySnapshotsResponse = zod.object({
+  snapshots: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      brandId: zod.string().uuid(),
+      snapshotDate: zod.string(),
+      gscClicks30dAvg: zod.string().nullish(),
+      ga4Sessions30dAvg: zod.string().nullish(),
+      avgPosition30d: zod.string(),
+      keywordsInTop10: zod.number(),
+      keywordsInTop3: zod.number(),
+      gapToBaselineClicksPct: zod.string().nullish(),
+      gapToBaselinePosition: zod.string().nullish(),
+      gapToBaselineTop10Pct: zod.string().nullish(),
+      computedAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary List recovery initiatives for a brand
+ */
+export const GetRecoveryInitiativesParams = zod.object({
+  brandId: zod.coerce.string().uuid(),
+});
+
+export const GetRecoveryInitiativesResponse = zod.object({
+  initiatives: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      brandId: zod.string().uuid(),
+      name: zod.string(),
+      type: zod.string(),
+      description: zod.string().nullish(),
+      expectedImpactPct: zod.string().nullish(),
+      expectedImpactClicks: zod.number().nullish(),
+      startedAt: zod.coerce.date(),
+      completedAt: zod.coerce.date().nullish(),
+      status: zod.string(),
+      actualImpactClicks14d: zod.number().nullish(),
+      createdBy: zod.string().uuid(),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
  * @summary Create-or-find a content_object from a project's latest draft
  */
 export const QualityGateStartFromDraftBody = zod.object({

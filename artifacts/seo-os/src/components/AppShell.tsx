@@ -199,6 +199,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
           <nav className="px-3 py-3 space-y-1 flex-1">
             <NavItem href="/quality-gate" label="Review queue" />
+            <NavItem href="/recovery" label="Recovery" />
           </nav>
 
           <div className="px-3 py-3 border-t border-rule">

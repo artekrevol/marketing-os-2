@@ -1,0 +1,630 @@
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Lock,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { useActiveBrand } from "@/lib/brands";
+import {
+  recovery,
+  type RecoveryInitiative,
+  type RecoveryOverview,
+  type RecoverySnapshot,
+} from "@/lib/api";
+
+/**
+ * Recovery War Room — read-only overview at /recovery (Sprint 4 §D.5).
+ * Headline metric: rankings-based `gap_to_baseline_top10_pct`.
+ * Clicks-based view stays as a placeholder until GSC ingestion lands.
+ */
+export default function Recovery() {
+  const { loading: brandLoading, activeBrand, accessible } = useActiveBrand();
+
+  if (brandLoading) {
+    return <Shell title="Recovery War Room" subtitle="Loading…" />;
+  }
+
+  if (!activeBrand) {
+    return (
+      <Shell title="Recovery War Room" subtitle="No brand selected">
+        <div className="border border-rule rounded-md bg-background p-6 text-sm text-ink-muted">
+          {accessible.length === 0
+            ? "You don't have access to any brands yet. Ask an admin to grant brand access."
+            : "Select a brand from the sidebar to view its recovery dashboard."}
+        </div>
+      </Shell>
+    );
+  }
+
+  return <RecoveryForBrand brandId={activeBrand.id} brandName={activeBrand.name} />;
+}
+
+function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: string }) {
+  const overviewQ = useQuery({
+    queryKey: ["recovery", "overview", brandId],
+    queryFn: () => recovery.overview(brandId),
+    staleTime: 60_000,
+  });
+  const snapshotsQ = useQuery({
+    queryKey: ["recovery", "snapshots", brandId, 90],
+    queryFn: () => recovery.snapshots(brandId, 90),
+    staleTime: 60_000,
+  });
+  const initiativesQ = useQuery({
+    queryKey: ["recovery", "initiatives", brandId],
+    queryFn: () => recovery.initiatives(brandId),
+    staleTime: 60_000,
+  });
+
+  const subtitle = `Brand: ${brandName}`;
+  const overview = overviewQ.data;
+  const snapshots = snapshotsQ.data ?? [];
+  const initiatives = initiativesQ.data ?? [];
+
+  if (overviewQ.isLoading) {
+    return <Shell title="Recovery War Room" subtitle={subtitle}>{loadingBlock()}</Shell>;
+  }
+
+  if (overviewQ.isError) {
+    return (
+      <Shell title="Recovery War Room" subtitle={subtitle}>
+        <ErrorBlock
+          title="Failed to load overview"
+          message={(overviewQ.error as Error).message}
+        />
+      </Shell>
+    );
+  }
+
+  if (!overview) return null;
+
+  // Empty state #1: baseline not locked. The dashboard relies on the
+  // baseline for the headline metric; without it nothing else makes
+  // sense to render.
+  if (!overview.baseline) {
+    return (
+      <Shell title="Recovery War Room" subtitle={subtitle}>
+        <BaselineLockEmptyState />
+      </Shell>
+    );
+  }
+
+  // Empty state #2: baseline locked but no snapshots yet.
+  if (!overview.current) {
+    return (
+      <Shell title="Recovery War Room" subtitle={subtitle}>
+        <SnapshotsEmptyState lockedAt={overview.baseline.locked_at} />
+      </Shell>
+    );
+  }
+
+  return (
+    <Shell title="Recovery War Room" subtitle={subtitle}>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <HeadlineCard overview={overview} />
+        <ProjectionCard overview={overview} />
+        <BaselineCard overview={overview} />
+      </div>
+
+      <section className="mt-6">
+        <h2 className="font-serif text-lg mb-3">90-day burn-down</h2>
+        <div className="border border-rule rounded-md bg-background p-4">
+          <TrendChart
+            snapshots={snapshots}
+            initiatives={initiatives}
+            projection={overview.projection}
+          />
+        </div>
+      </section>
+
+      <section className="mt-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-serif text-lg">Initiatives</h2>
+          <span className="text-xs text-ink-muted">
+            {overview.activeInitiatives} active
+          </span>
+        </div>
+        <InitiativesRibbon initiatives={initiatives} />
+      </section>
+    </Shell>
+  );
+}
+
+// ---- Shell + small helpers ----
+
+function Shell({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="min-h-full">
+      <header className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-rule px-8 py-4">
+        <h1 className="font-serif text-2xl tracking-tight">{title}</h1>
+        <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>
+      </header>
+      <div className="px-8 py-6">{children}</div>
+    </div>
+  );
+}
+
+function loadingBlock() {
+  return (
+    <div className="grid gap-6 lg:grid-cols-3">
+      {[0, 1, 2].map((k) => (
+        <div
+          key={k}
+          className="border border-rule rounded-md bg-background h-40 animate-pulse"
+        />
+      ))}
+    </div>
+  );
+}
+
+function ErrorBlock({ title, message }: { title: string; message: string }) {
+  return (
+    <div className="border border-destructive/40 bg-destructive/5 rounded-md p-4 text-sm">
+      <div className="flex items-center gap-2 font-medium text-destructive">
+        <AlertTriangle className="h-4 w-4" /> {title}
+      </div>
+      <pre className="mt-2 text-xs whitespace-pre-wrap text-ink-muted">{message}</pre>
+    </div>
+  );
+}
+
+function BaselineLockEmptyState() {
+  return (
+    <div className="border border-rule rounded-md bg-background p-8 max-w-2xl">
+      <div className="flex items-start gap-3">
+        <Lock className="h-5 w-5 text-accent shrink-0 mt-0.5" />
+        <div>
+          <h2 className="font-serif text-lg">Baseline not yet locked</h2>
+          <p className="text-sm text-ink-muted mt-1">
+            The Recovery War Room compares each day’s rankings against a locked
+            pre-October-2025 baseline. An admin needs to lock that baseline
+            before the dashboard can render.
+          </p>
+          <p className="text-sm text-ink-muted mt-3">
+            Run the baseline lock from the admin console (Sprint 4 Prompt 2),
+            or ask the workspace admin if you’re not sure who owns it.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SnapshotsEmptyState({ lockedAt }: { lockedAt: string }) {
+  const dateStr = new Date(lockedAt).toLocaleDateString();
+  return (
+    <div className="border border-rule rounded-md bg-background p-8 max-w-2xl">
+      <div className="flex items-start gap-3">
+        <Clock className="h-5 w-5 text-accent shrink-0 mt-0.5" />
+        <div>
+          <h2 className="font-serif text-lg">Waiting on first snapshot</h2>
+          <p className="text-sm text-ink-muted mt-1">
+            Baseline locked on {dateStr}. The nightly snapshot worker rolls up
+            recovery metrics each night — your first datapoint will appear after
+            the next run.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Cards ----
+
+function gapTone(gapPct: number | null): "green" | "yellow" | "red" | "neutral" {
+  // Amendments §D.5 thresholds, applied to gap_to_baseline_top10_pct.
+  // gapPct >= 0 → at/above baseline (green). gapPct in (-20, 0) → yellow.
+  // gapPct <= -20 → red. Translates roughly to "0–3 keywords behind" vs
+  // ">3 keywords behind" depending on baseline size; precise mapping is
+  // a follow-up if pack tuning needs it.
+  if (gapPct == null) return "neutral";
+  if (gapPct >= 0) return "green";
+  if (gapPct > -20) return "yellow";
+  return "red";
+}
+
+function toneClasses(tone: ReturnType<typeof gapTone>): {
+  border: string;
+  bg: string;
+  fg: string;
+  dot: string;
+} {
+  switch (tone) {
+    case "green":
+      return {
+        border: "border-emerald-300",
+        bg: "bg-emerald-50",
+        fg: "text-emerald-700",
+        dot: "bg-emerald-500",
+      };
+    case "yellow":
+      return {
+        border: "border-amber-300",
+        bg: "bg-amber-50",
+        fg: "text-amber-700",
+        dot: "bg-amber-500",
+      };
+    case "red":
+      return {
+        border: "border-red-300",
+        bg: "bg-red-50",
+        fg: "text-red-700",
+        dot: "bg-red-500",
+      };
+    default:
+      return {
+        border: "border-rule",
+        bg: "bg-background",
+        fg: "text-ink-muted",
+        dot: "bg-ink-muted",
+      };
+  }
+}
+
+function fmtNum(v: string | null | undefined, digits = 1): string {
+  if (v == null) return "—";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(digits) : "—";
+}
+
+function HeadlineCard({ overview }: { overview: RecoveryOverview }) {
+  const tone = gapTone(overview.gapPct);
+  const t = toneClasses(tone);
+  const baseline = overview.baseline!;
+  const current = overview.current!;
+  const cur = fmtNum(current.avg_position_30d, 1);
+  const base = fmtNum(baseline.baseline_avg_position, 1);
+  const gapNum = current.gap_to_baseline_top10_pct;
+  const gapStr = gapNum != null ? `${Number(gapNum) >= 0 ? "+" : ""}${fmtNum(gapNum, 1)}%` : "—";
+
+  return (
+    <div className={`border ${t.border} ${t.bg} rounded-md p-5`}>
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-ink-muted">
+        <span className={`h-2 w-2 rounded-full ${t.dot}`} />
+        Gap to baseline (Top-10 %)
+      </div>
+      <div className={`mt-3 font-serif text-3xl ${t.fg}`}>{gapStr}</div>
+      <div className="mt-2 text-xs text-ink-muted">
+        Avg position: <span className="font-mono">{cur}</span>
+        <span className="mx-1">·</span>
+        baseline: <span className="font-mono">{base}</span>
+      </div>
+      <div className="mt-1 text-xs text-ink-muted">
+        Top-10 keywords:{" "}
+        <span className="font-mono">{current.keywords_in_top_10}</span>
+        <span className="mx-1">/</span>
+        <span className="font-mono">{baseline.baseline_keywords_in_top_10}</span>
+      </div>
+      <div className="mt-3 pt-3 border-t border-rule/60 text-[11px] text-ink-muted">
+        Clicks: — (pending GSC ingestion)
+      </div>
+    </div>
+  );
+}
+
+function ProjectionCard({ overview }: { overview: RecoveryOverview }) {
+  const p = overview.projection;
+  const ico = (() => {
+    switch (p.status) {
+      case "recovered":
+        return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
+      case "projecting":
+        return <TrendingUp className="h-4 w-4 text-accent" />;
+      case "gap_widening":
+        return <TrendingDown className="h-4 w-4 text-red-600" />;
+      default:
+        return <Activity className="h-4 w-4 text-ink-muted" />;
+    }
+  })();
+
+  let body: React.ReactNode;
+  if (p.status === "recovered") {
+    body = (
+      <>
+        <div className="font-serif text-2xl text-emerald-700">Recovered</div>
+        <div className="mt-1 text-xs text-ink-muted">
+          Latest gap {p.latestGapPct.toFixed(1)}% — at or above baseline.
+        </div>
+      </>
+    );
+  } else if (p.status === "projecting") {
+    const date = new Date(p.projectedRecoveryDate);
+    const days = Math.max(
+      0,
+      Math.round((date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+    );
+    body = (
+      <>
+        <div className="font-serif text-2xl">{date.toLocaleDateString()}</div>
+        <div className="mt-1 text-xs text-ink-muted">
+          ~{days} days at current slope ({p.pointsUsed} pts).
+        </div>
+      </>
+    );
+  } else if (p.status === "gap_widening") {
+    body = (
+      <>
+        <div className="font-serif text-2xl text-red-700">Gap widening</div>
+        <div className="mt-1 text-xs text-ink-muted">
+          Slope is flat or negative. Add a recovery initiative.
+        </div>
+      </>
+    );
+  } else {
+    const reason =
+      p.reason === "insufficient_points"
+        ? `Need more snapshots (${p.pointsUsed}/2 minimum)`
+        : p.reason === "all_null"
+          ? "No usable gap values yet"
+          : "Snapshots lack date variance";
+    body = (
+      <>
+        <div className="font-serif text-2xl text-ink-muted">No projection</div>
+        <div className="mt-1 text-xs text-ink-muted">{reason}.</div>
+      </>
+    );
+  }
+
+  return (
+    <div className="border border-rule rounded-md bg-background p-5">
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-ink-muted">
+        {ico}
+        Projected recovery
+      </div>
+      <div className="mt-3">{body}</div>
+    </div>
+  );
+}
+
+function BaselineCard({ overview }: { overview: RecoveryOverview }) {
+  const b = overview.baseline!;
+  return (
+    <div className="border border-rule rounded-md bg-background p-5">
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-ink-muted">
+        <Lock className="h-3.5 w-3.5" />
+        Locked baseline
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-y-2 gap-x-3 text-sm">
+        <div className="text-ink-muted">Date</div>
+        <div className="font-mono">{b.baseline_date}</div>
+        <div className="text-ink-muted">Avg position</div>
+        <div className="font-mono">{fmtNum(b.baseline_avg_position, 1)}</div>
+        <div className="text-ink-muted">Top-10</div>
+        <div className="font-mono">{b.baseline_keywords_in_top_10}</div>
+        <div className="text-ink-muted">Top-3</div>
+        <div className="font-mono">{b.baseline_keywords_in_top_3}</div>
+        <div className="text-ink-muted">Threshold</div>
+        <div className="font-mono">{fmtNum(b.recovery_threshold_pct, 0)}%</div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Trend chart ----
+
+type ChartPoint = {
+  date: string;
+  ts: number;
+  gap: number | null;
+  projected?: number | null;
+};
+
+function TrendChart({
+  snapshots,
+  initiatives,
+  projection,
+}: {
+  snapshots: RecoverySnapshot[];
+  initiatives: RecoveryInitiative[];
+  projection: RecoveryOverview["projection"];
+}) {
+  const data: ChartPoint[] = useMemo(() => {
+    const base: ChartPoint[] = snapshots.map((s) => {
+      const ts = new Date(s.snapshot_date).getTime();
+      return {
+        date: s.snapshot_date,
+        ts,
+        gap:
+          s.gap_to_baseline_top10_pct != null
+            ? Number(s.gap_to_baseline_top10_pct)
+            : null,
+      };
+    });
+
+    if (projection.status === "projecting" && base.length > 0) {
+      const target = new Date(projection.projectedRecoveryDate).getTime();
+      const last = base[base.length - 1]!;
+      const lastGap = last.gap ?? projection.latestGapPct;
+      // Append a synthetic future point to draw the dashed projection
+      // line ending at zero on the projected recovery date.
+      base.push({
+        date: new Date(target).toISOString().slice(0, 10),
+        ts: target,
+        gap: null,
+        projected: 0,
+      });
+      // Mark the latest real point as the projection's start for
+      // continuity (so the dashed line connects to today's actual gap).
+      last.projected = lastGap;
+    }
+    return base;
+  }, [snapshots, projection]);
+
+  const initiativeMarkers = useMemo(() => {
+    const xMin = data[0]?.ts ?? 0;
+    const xMax = data[data.length - 1]?.ts ?? 0;
+    return initiatives
+      .map((i) => ({ x: new Date(i.started_at).getTime(), name: i.name, status: i.status }))
+      .filter((m) => m.x >= xMin && m.x <= xMax);
+  }, [initiatives, data]);
+
+  if (snapshots.length === 0) {
+    return (
+      <div className="text-sm text-ink-muted py-12 text-center">
+        No snapshots in the last 90 days yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-72 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart
+          data={data}
+          margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" className="stroke-rule/60" />
+          <XAxis
+            dataKey="ts"
+            type="number"
+            scale="time"
+            domain={["dataMin", "dataMax"]}
+            tickFormatter={(v) => new Date(v).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+            })}
+            tick={{ fontSize: 11 }}
+            stroke="currentColor"
+          />
+          <YAxis
+            tickFormatter={(v) => `${v}%`}
+            tick={{ fontSize: 11 }}
+            stroke="currentColor"
+            width={48}
+          />
+          <Tooltip
+            labelFormatter={(v) => new Date(Number(v)).toLocaleDateString()}
+            formatter={(value: unknown, name) => {
+              if (value == null) return ["—", name as string];
+              const n = Number(value);
+              return [`${n.toFixed(1)}%`, name as string];
+            }}
+            contentStyle={{ fontSize: 12 }}
+          />
+          <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.5} strokeDasharray="2 2" />
+          {initiativeMarkers.map((m, idx) => (
+            <ReferenceLine
+              key={idx}
+              x={m.x}
+              stroke="var(--accent, #c0392b)"
+              strokeDasharray="3 3"
+              label={{
+                value: m.name.length > 18 ? m.name.slice(0, 17) + "…" : m.name,
+                position: "top",
+                fill: "currentColor",
+                fontSize: 10,
+              }}
+            />
+          ))}
+          <Line
+            type="monotone"
+            dataKey="gap"
+            name="Gap (Top-10 %)"
+            stroke="#c0392b"
+            strokeWidth={2}
+            dot={false}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="projected"
+            name="Projection"
+            stroke="#2563eb"
+            strokeWidth={2}
+            strokeDasharray="5 5"
+            dot={false}
+            connectNulls
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ---- Initiatives ribbon ----
+
+function InitiativesRibbon({ initiatives }: { initiatives: RecoveryInitiative[] }) {
+  if (initiatives.length === 0) {
+    return (
+      <div className="border border-rule rounded-md bg-background p-6 text-sm text-ink-muted">
+        No initiatives logged yet. Track recovery work as initiatives so you can
+        see what changed when the slope shifts.
+      </div>
+    );
+  }
+  // Sort: active first, then by started_at desc.
+  const sorted = [...initiatives].sort((a, b) => {
+    if (a.status === "active" && b.status !== "active") return -1;
+    if (b.status === "active" && a.status !== "active") return 1;
+    return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
+  });
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {sorted.map((i) => (
+        <InitiativeCard key={i.id} initiative={i} />
+      ))}
+    </div>
+  );
+}
+
+function InitiativeCard({ initiative }: { initiative: RecoveryInitiative }) {
+  const statusColor =
+    initiative.status === "active"
+      ? "bg-emerald-500"
+      : initiative.status === "completed"
+        ? "bg-blue-500"
+        : initiative.status === "paused"
+          ? "bg-amber-500"
+          : "bg-ink-muted";
+  return (
+    <div className="border border-rule rounded-md bg-background p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-medium truncate">{initiative.name}</div>
+          <div className="text-[11px] uppercase tracking-widest text-ink-muted mt-0.5">
+            {initiative.type}
+          </div>
+        </div>
+        <span className="flex items-center gap-1 text-[11px] text-ink-muted shrink-0">
+          <span className={`h-2 w-2 rounded-full ${statusColor}`} />
+          {initiative.status}
+        </span>
+      </div>
+      {initiative.description && (
+        <p className="mt-2 text-xs text-ink-muted line-clamp-2">
+          {initiative.description}
+        </p>
+      )}
+      <div className="mt-3 text-[11px] text-ink-muted">
+        Started {new Date(initiative.started_at).toLocaleDateString()}
+        {initiative.completed_at &&
+          ` · Done ${new Date(initiative.completed_at).toLocaleDateString()}`}
+      </div>
+    </div>
+  );
+}

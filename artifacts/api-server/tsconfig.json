@@ -18,6 +18,9 @@
     },
     {
       "path": "../../lib/services/quality-gate"
+    },
+    {
+      "path": "../../lib/services/recovery"
     }
   ]
 }
