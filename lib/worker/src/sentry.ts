@@ -2,14 +2,31 @@ import * as Sentry from "@sentry/node";
 
 let initialized = false;
 
-export function initSentry(dsn: string, env: string): void {
+/**
+ * Initialize Sentry for the worker process.
+ *
+ * The `environment` tag is composed as `${nodeEnv}:worker` so dashboards
+ * can clearly separate worker traces from the API/web tiers (which run
+ * with the same NODE_ENV but a different service). The `service: "worker"`
+ * tag and `tier: "worker"` context are also set on the initial scope so
+ * filters like `tags.service:worker` work in Sentry's UI.
+ */
+export function initSentry(dsn: string, nodeEnv: string): void {
   if (initialized) return;
   Sentry.init({
     dsn,
-    environment: env,
+    environment: `${nodeEnv}:worker`,
     tracesSampleRate: 0,
     serverName: "seo-os-worker",
-    initialScope: { tags: { service: "seo-os-worker" } },
+    initialScope: {
+      tags: {
+        service: "worker",
+        nodeEnv,
+      },
+      contexts: {
+        tier: { name: "worker" },
+      },
+    },
   });
   initialized = true;
 }

@@ -20,6 +20,7 @@ import { withBrandScope, assertBrandScope } from "../src/brand-scope";
 import {
   BrandScopeViolationError,
   ScopedDb,
+  stampBrandId,
 } from "../src/middleware";
 import { projectsTable, brandsTable, eventsTable } from "../src/schema";
 
@@ -30,6 +31,37 @@ import { projectsTable, brandsTable, eventsTable } from "../src/schema";
 const HAS_URL = Boolean(process.env.DATABASE_URL);
 let SCHEMA_READY = false;
 const dbDescribe = HAS_URL ? describe : describe.skip;
+
+describe("stampBrandId (pure transform — no DB required)", () => {
+  it("emits Drizzle camelCase `brandId` (not `brand_id`)", () => {
+    const out = stampBrandId("b1", { topic: "t" });
+    expect(out).toEqual({ topic: "t", brandId: "b1" });
+    expect(out).not.toHaveProperty("brand_id");
+  });
+  it("normalizes snake_case input to camelCase output", () => {
+    const out = stampBrandId("b1", { brand_id: "b1", topic: "t" });
+    expect(out).toEqual({ topic: "t", brandId: "b1" });
+    expect(out).not.toHaveProperty("brand_id");
+  });
+  it("preserves matching camelCase input", () => {
+    const out = stampBrandId("b1", { brandId: "b1", topic: "t" });
+    expect(out).toEqual({ topic: "t", brandId: "b1" });
+  });
+  it("throws on cross-brand camelCase", () => {
+    expect(() => stampBrandId("b1", { brandId: "b2", topic: "t" })).toThrow(
+      BrandScopeViolationError,
+    );
+  });
+  it("throws on cross-brand snake_case", () => {
+    expect(() => stampBrandId("b1", { brand_id: "b2", topic: "t" })).toThrow(
+      /does not match scope/,
+    );
+  });
+  it("preserves all other fields untouched", () => {
+    const out = stampBrandId("b1", { topic: "t", contentType: "blog", metadata: { foo: 1 } });
+    expect(out).toMatchObject({ topic: "t", contentType: "blog", metadata: { foo: 1 }, brandId: "b1" });
+  });
+});
 
 describe("assertBrandScope", () => {
   it("passes when brand_id matches (camelCase)", () => {

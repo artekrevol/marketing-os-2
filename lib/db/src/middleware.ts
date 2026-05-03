@@ -42,6 +42,38 @@ export class BrandScopeViolationError extends Error {
 }
 
 /**
+ * Pure transform: validate and stamp the brand_id on a single insert
+ * row. Accepts either Drizzle camelCase (`brandId`) or raw SQL
+ * snake_case (`brand_id`) input from callers; ALWAYS emits the
+ * Drizzle camelCase property key (`brandId`) so `db.insert(...).values()`
+ * binds correctly. Cross-brand input throws.
+ *
+ * Exported for unit-level testing (no DB required) so the stamping
+ * contract has explicit non-skippable coverage.
+ */
+export function stampBrandId(
+  scopeBrandId: string,
+  row: Record<string, unknown>,
+  tableName = "<unknown>",
+): Record<string, unknown> {
+  const camel = row["brandId"] as string | undefined;
+  const snake = row["brand_id"] as string | undefined;
+  const present = camel ?? snake;
+  if (present != null && present !== scopeBrandId) {
+    throw new BrandScopeViolationError(
+      "cross_brand_insert",
+      `insert into "${tableName}": row.brand_id=${String(present)} does not match scope ${scopeBrandId}`,
+    );
+  }
+  // Normalize: drop any snake_case input and emit ONLY the Drizzle
+  // property key (`brandId`). This is what drizzle-orm expects in
+  // .values(); using "brand_id" here would be silently dropped.
+  const { brand_id: _drop, ...rest } = row as { brand_id?: string } & Record<string, unknown>;
+  void _drop;
+  return { ...rest, brandId: scopeBrandId };
+}
+
+/**
  * Resolve the `brand_id` column on a Drizzle table. Tries both camelCase
  * and snake_case keys; falls back to scanning columns by SQL name.
  */
@@ -108,18 +140,7 @@ export class ScopedDb {
   ): Promise<unknown> {
     this.requireScoped(table);
     const arr = Array.isArray(values) ? values : [values];
-    const stamped = arr.map((row) => {
-      const present =
-        (row["brandId"] as string | undefined) ??
-        (row["brand_id"] as string | undefined);
-      if (present != null && present !== this.brandId) {
-        throw new BrandScopeViolationError(
-          "cross_brand_insert",
-          `insert into "${getTableName(table)}": row.brand_id=${String(present)} does not match scope ${this.brandId}`,
-        );
-      }
-      return { ...row, brand_id: this.brandId };
-    });
+    const stamped = arr.map((row) => stampBrandId(this.brandId, row, getTableName(table)));
 
     const builder = this.tx.insert(table as PgTable).values(stamped as never);
     if (opts.returning) {
