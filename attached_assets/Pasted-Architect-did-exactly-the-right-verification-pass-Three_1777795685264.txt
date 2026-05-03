@@ -1,0 +1,55 @@
+Architect did exactly the right verification pass. Three decisions to make:
+
+**Decision 1: GSC data — rankings-only headline for now, add GSC later as separate work.**
+
+Don't try to bolt GSC ingestion into this sprint. That expands scope from "ship the Recovery dashboard" to "ship the Recovery dashboard plus build a new ingestion pipeline." Different problem, different sprint.
+
+What changes in the pack: Prompt 5's headline gauge becomes rankings-based, not clicks-based. Specifically: "% of tracked keywords in top 10 vs baseline" or "average position vs baseline." Both are sourced from `rank_snapshots` which exists. The trend chart becomes "average position over time" with the baseline as reference line. GSC clicks fields stay in the schema as nullable — populate later when ingestion lands.
+
+This is actually a cleaner story for Abeer in board updates. "Our keywords were ranking at avg position 8.4 pre-October, dropped to 14.2 by November, currently at 11.1, projected to recover by [date]" is a sharper narrative than "clicks went down." Rankings move first; clicks follow rankings. The leading indicator is the better dashboard headline.
+
+GSC ingestion becomes its own small parallel sprint after this one. Two prompts maybe — schema for `gsc_search_analytics`, worker job to pull daily via the GSC integration that doesn't exist yet, populate the nullable fields on `recovery_snapshots`. Don't try to design that now; ship rankings-only first, see what Abeer actually wants when he sees real data.
+
+**Decision 2: Queue — option (b), add a second queue called `scoring` alongside `content`.**
+
+Three reasons:
+
+Recovery snapshots are a different *class* of work than QA runs. QA runs are user-blocking (writers waiting); snapshots are scheduled batch. Mixing them on one queue means one heavy snapshot run could starve QA throughput.
+
+The Sprint 2 queue rename never happened — that's actually a documentation bug in `replit.md` from when I drafted Sprint 3 against a hypothetical state. Architect caught it. Better to add the queue with intent now than retrofit a rename later.
+
+Future sprints (Decision Engine nightly recompute in Sprint 7, ranking puller jobs, GA4 ingestion) all want a "scoring/batch" queue. Adding it now means three later sprints don't each have to make this decision.
+
+The operational cost is one extra Worker registration in `lib/worker/src/index.ts` and one extra Queue export from `lib/jobs/queues.ts`. Trivial.
+
+**Decision 3: Naming — use `rank_snapshots` everywhere.**
+
+The repo already has it. The pack should bend to the repo, not vice versa. Substitute `rank_snapshots` for `rankings_history` throughout the pack before Prompt 1 starts. While you're at it, the same substitution applies to the original product scope doc — `replit.md` should reference `rank_snapshots` so future sprint packs don't reintroduce the wrong name.
+
+**On the BullMQ cron question**
+
+If `lib/jobs/queues.ts` doesn't already support repeatable jobs, that's a small primitive to add inside Prompt 4. BullMQ supports it natively (`Queue.add(name, data, { repeat: { pattern: cron } })`); it's a few lines to expose. Don't make it a separate prompt — Prompt 4 already touches the worker scheduling layer, so adding cron support there is contextually correct.
+
+**On the architect's recommendation to flip into Plan mode + project tasks**
+
+Strongly endorse. Seven prompts across five days with architectural review checkpoints between each is exactly what this work shape needs. The alternative — running all seven in one Build session — means architect sees only the final state and any drift in prompts 2–6 is harder to catch. Project-task-per-prompt with explicit Prompt N blocked-by Prompt N-1 dependencies gives you the review cadence the work deserves.
+
+So: lock the three decisions above, update the pack with the substitutions, then flip into Plan mode and create the seven tasks.
+
+The substitutions to apply to the pack before kicking off:
+
+`packages/db` → `lib/db`. Same for `packages/services/recovery`, `packages/worker`, `packages/jobs`, `packages/api-spec`.
+
+Migration command: replace the `pnpm --filter @workspace/db generate` mentions with the Supabase migration flow — new migration file at `artifacts/insight-forge/supabase/migrations/000N_recovery.sql`, then add Drizzle table definitions under `lib/db/src/schema/recovery/` for worker/services to consume.
+
+`user_profiles(id)` FK → `user_profiles(user_id)`.
+
+`rankings_history` → `rank_snapshots` everywhere.
+
+GSC fields stay in the schema as nullable; headline gauge in Prompt 5 becomes ranking-based.
+
+Add `scoring` queue in Prompt 4; recovery-snapshot job goes there.
+
+`BRAND_SCOPED_TABLES` is a Set, not array; recovery_baselines, recovery_initiatives, recovery_snapshots all added.
+
+Want me to regenerate the pack with these substitutions, or are they small enough that you'd rather just hand the architect the diff and have it applied during prompt execution?
