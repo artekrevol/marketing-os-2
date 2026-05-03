@@ -13,3 +13,8 @@ export {
   type ProjectionResult,
   type ProjectionInputPoint,
 } from "./lib/projection";
+export {
+  computeRankingsBaseline,
+  findEarliestSnapshotDate,
+  type RankingsBaseline,
+} from "./lib/compute-rankings-baseline";

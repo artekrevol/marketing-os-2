@@ -8,7 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lock-baselines": "tsx scripts/lock-baselines.ts"
   },
   "dependencies": {
     "@workspace/db": "workspace:*",
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "tsx": "catalog:",
     "vitest": "^2.1.9"
   }
 }
