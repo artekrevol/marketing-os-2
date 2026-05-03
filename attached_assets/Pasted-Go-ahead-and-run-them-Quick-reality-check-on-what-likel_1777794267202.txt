@@ -1,0 +1,21 @@
+Go ahead and run them. Quick reality check on what likely exists vs. doesn't, so you can adapt without a round-trip:
+audit_log definitely exists. It was part of Sprint 1 foundation (your replit.md confirmed it: "recordAudit() for admin-sensitive actions (DB enforces non-empty justification)"). Sprint 3's override stub writes qa.override.attempt rows there. Query 3 should run as-is.
+draft_revisions may not exist. I specced it in Sprint 3 prompt pack as part of requestRevision, but your Sprint 3 merge summary listed qa_runs, qa_check_results, qa_signoffs, qa_overrides, qa_check_definitions, and content_objects — draft_revisions wasn't in the table list. The architect may have folded the structured feedback into the qa_runs.summary jsonb or into qa_check_results.evidence instead. Verify before running query 2.
+If draft_revisions doesn't exist, the bypass-detection query has to look elsewhere. Three places it might live:
+qa_runs.summary jsonb — likely holds reviewer notes if the architect denormalized.
+qa_check_results rows with reviewer-added evidence — possible but odd shape.
+A separate column on qa_runs like revision_feedback text — clean if it's there.
+Worst case if structured feedback wasn't persisted at all: query 2 becomes "did reviewers reject without leaving any feedback in the system" which is itself the answer Rabia and Maria need to see. Zero feedback rows for N rejections means the structured form was bypassed, full stop.
+For query 1, one refinement: filter out status='error' runs from the denominator. A check that errored is neither pass nor fail — including it in the rate dilutes the signal. Use:
+sqlSELECT brand_id,
+       COUNT(*) FILTER (WHERE status='failed') * 100.0 / 
+       NULLIF(COUNT(*) FILTER (WHERE status IN ('failed','approved','rejected')), 0) as hard_fail_pct,
+       COUNT(*) FILTER (WHERE status='failed') as failed_count,
+       COUNT(*) FILTER (WHERE status='approved') as approved_count,
+       COUNT(*) FILTER (WHERE status='rejected') as rejected_count,
+       COUNT(*) FILTER (WHERE status='error') as errored_count
+FROM qa_runs
+WHERE started_at > now() - interval '7 days'
+GROUP BY brand_id;
+Showing the raw counts alongside the percentage matters because if a brand has 3 runs and 1 failed, "33%" is misleading. Rabia and Maria should see the absolute numbers.
+Run them, send the results plus what you learn from talking to the leads, and I'll draft Sprint 4.
