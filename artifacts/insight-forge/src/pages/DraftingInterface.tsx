@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { Loader2, Sparkles, AlertTriangle, ChevronRight, ChevronLeft, MessageCircle, Zap, Database, FileCode, Keyboard, X, Wand2, StopCircle, Copy, EyeOff, Eye, Pencil, Check } from "lucide-react";
+import { Loader2, Sparkles, AlertTriangle, ChevronRight, ChevronLeft, MessageCircle, Zap, Database, FileCode, Keyboard, X, Wand2, StopCircle, Copy, EyeOff, Eye, Pencil, Check, Focus, Minimize2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import type { Project, OutlineSection } from "@/lib/types";
 import { buildWhitelistHosts, citationStatus } from "@/lib/citationWhitelist";
+import WritingMetrics from "@/components/WritingMetrics";
+import SelectionToolbar, { type SelectionAction } from "@/components/SelectionToolbar";
 
 // Render markdown-ish inline citations [text](url) as hover-able pills.
 // URLs whose host isn't on the project's verified whitelist render with the
@@ -83,6 +85,24 @@ export default function DraftingInterface() {
   const [bgQueueTotal, setBgQueueTotal] = useState(0);
   const [bgQueueDone, setBgQueueDone] = useState(0);
   const bgCancelRef = useRef(false);
+
+  // Focus mode hides the right rail (voice flags + writing metrics + AI
+  // readiness) and widens the prose column so the writer can see one
+  // section at full breath. Persisted in localStorage so it survives reloads.
+  const [focusMode, setFocusMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("contentforge.focusMode") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("contentforge.focusMode", focusMode ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [focusMode]);
 
   useEffect(() => {
     let mounted = true;
@@ -194,6 +214,34 @@ export default function DraftingInterface() {
     await generate(active.id, instruction);
   };
 
+  // Selection toolbar → AI revision. We save any in-progress inline edit
+  // first (so the writer's manual changes don't get clobbered by the revision
+  // round-trip), then route through the same draft-section pipeline as the
+  // manual revise box.
+  const handleSelectionAction = async (action: SelectionAction, selection: string) => {
+    if (!active) return;
+    // Abort if the section is mid-revision — concurrent generate calls race
+    // and the latter completion overwrites the former (single `generating`
+    // string toggle). Better to make the writer wait one beat.
+    if (generating === active.id) {
+      toast.error("Wait for the current revision to finish.");
+      return;
+    }
+    if (editingSectionId === active.id && inlineDraft !== (activeDraft?.content || "")) {
+      const saved = await saveInlineEdit();
+      if (!saved) {
+        // Save failed — do not run the AI revision against stale server
+        // content; the user's unsaved edits would be silently clobbered.
+        toast.error("Couldn't save your edits — AI assist cancelled.");
+        return;
+      }
+    } else if (editingSectionId === active.id) {
+      cancelInlineEditor();
+    }
+    toast.message(`AI is rewriting your selection (${action.label.toLowerCase()})…`);
+    await generate(active.id, action.buildInstruction(selection));
+  };
+
   const persistDismissed = async (next: string[]) => {
     if (!activeDraft) return;
     setDrafts((prev) =>
@@ -259,13 +307,13 @@ export default function DraftingInterface() {
     setInlineDraft("");
   };
 
-  const saveInlineEdit = async () => {
-    if (!activeDraft || !active) return;
+  const saveInlineEdit = async (): Promise<boolean> => {
+    if (!activeDraft || !active) return false;
     const next = inlineDraft;
     const prev = activeDraft.content || "";
     if (next === prev) {
       cancelInlineEditor();
-      return;
+      return true;
     }
     setSavingInline(true);
     // Recompute citation_count from markdown links so the sidebar metric
@@ -290,7 +338,7 @@ export default function DraftingInterface() {
     if (error) {
       toast.error("Couldn't save edit — local copy preserved.");
       setSavingInline(false);
-      return;
+      return false;
     }
     // Capture for the voice library so Stage-3 drafts can learn the
     // writer's voice over time. Non-fatal if it fails.
@@ -310,6 +358,7 @@ export default function DraftingInterface() {
     setEditingSectionId(null);
     setInlineDraft("");
     toast.success("Edit saved.");
+    return true;
   };
 
   const openRevise = () => {
@@ -604,7 +653,7 @@ export default function DraftingInterface() {
         ) : (
           <>
           <div className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl mx-auto px-10 py-10">
+          <div className={`${focusMode ? "max-w-3xl" : "max-w-2xl"} mx-auto px-10 py-10 transition-[max-width] duration-200`}>
             <p className="text-[10px] uppercase tracking-widest text-ink-muted">{active.level} · {active.word_count} words</p>
             <h2 className="font-serif text-3xl mt-1 mb-2">{active.heading}</h2>
             <p className="text-sm text-ink-muted italic mb-8">{active.job}</p>
@@ -639,9 +688,15 @@ export default function DraftingInterface() {
                       spellCheck
                       placeholder="Edit the prose directly. Markdown citations [text](url) are preserved."
                     />
+                    <SelectionToolbar
+                      textareaRef={inlineRef}
+                      text={inlineDraft}
+                      disabled={generating === active.id || savingInline}
+                      onAction={handleSelectionAction}
+                    />
                     <div className="mt-3 flex items-center justify-between gap-2 text-xs">
                       <span className="text-ink-muted">
-                        Direct edits are saved to your voice library so future drafts learn your style.
+                        Select any passage for AI assists · direct edits feed your voice library.
                       </span>
                       <div className="flex items-center gap-2">
                         <button
@@ -750,6 +805,18 @@ export default function DraftingInterface() {
               </span>
               <div className="ml-auto flex items-center gap-2">
                 <button
+                  onClick={() => setFocusMode((v) => !v)}
+                  className={`text-xs px-3 py-1.5 border rounded-sm inline-flex items-center gap-1.5 transition-colors ${
+                    focusMode
+                      ? "border-accent text-accent bg-accent/10 hover:bg-accent/20"
+                      : "border-rule hover:bg-secondary"
+                  }`}
+                  title={focusMode ? "Exit focus mode — show metrics & flags" : "Focus mode — hide right rail to write distraction-free"}
+                >
+                  {focusMode ? <Minimize2 className="h-3 w-3" /> : <Focus className="h-3 w-3" />}
+                  {focusMode ? "Exit focus" : "Focus"}
+                </button>
+                <button
                   onClick={openRevise}
                   disabled={!activeDraft || generating === active?.id}
                   className="text-xs px-3 py-1.5 border border-rule rounded-sm hover:bg-secondary disabled:opacity-50"
@@ -773,8 +840,16 @@ export default function DraftingInterface() {
 
       {cheatOpen && <CheatSheet onClose={() => setCheatOpen(false)} />}
 
-      {/* Voice flag panel */}
+      {/* Right rail — hidden in focus mode */}
+      {!focusMode && (
       <aside className="w-72 shrink-0 border-l border-rule bg-background overflow-y-auto">
+        {/* Live writing metrics — readability, length, jargon */}
+        {activeDraft && (
+          <WritingMetrics
+            text={editingSectionId === active?.id ? inlineDraft : (activeDraft.content || "")}
+            targetWords={active?.word_count}
+          />
+        )}
         {/* AI citation readiness for the active section */}
         {activeDraft && (
           <div className="px-4 py-3 border-b border-rule">
@@ -927,6 +1002,7 @@ export default function DraftingInterface() {
           })()}
         </div>
       </aside>
+      )}
     </div>
   );
 }
