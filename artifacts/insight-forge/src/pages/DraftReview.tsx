@@ -168,6 +168,10 @@ export default function DraftReview() {
       toast.error("Project has no brand assigned.");
       return;
     }
+    if (wordCountSubmitBlocked) {
+      toast.error(wordCountSubmitMessage ?? "Word count is outside the target band.");
+      return;
+    }
     setSubmittingQg(true);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -336,6 +340,24 @@ export default function DraftReview() {
     toast.success("JSON-LD copied.");
   };
 
+  // ----- Submit-for-review word-count gate --------------------------------
+  // Reviewers expect drafts within ±20% of the target word count
+  // (sum of outline.sections[].word_count). If the outline has no
+  // target we do not gate. The submit CTA gets disabled outside the
+  // band with a tooltip that names the target window.
+  const targetWordCount: number = sections.reduce(
+    (n: number, s: OutlineSection) => n + (Number((s as { word_count?: number }).word_count) || 0),
+    0,
+  );
+  const actualWordCount: number = Number(scores.word_count) || 0;
+  const wcLow = Math.floor(targetWordCount * 0.8);
+  const wcHigh = Math.ceil(targetWordCount * 1.2);
+  const wordCountSubmitBlocked =
+    targetWordCount > 0 && (actualWordCount < wcLow || actualWordCount > wcHigh);
+  const wordCountSubmitMessage = wordCountSubmitBlocked
+    ? `Draft is ${actualWordCount} words; reviewer brief requires ${wcLow}–${wcHigh} (target ${targetWordCount}, ±20%). Tighten or expand before submitting.`
+    : null;
+
   // ----- Citation summary --------------------------------------------------
   const verifiedCount = cites.filter((c) => citationStatus(c[2], whitelistHosts) === "verified").length;
   const unverifiedCount = cites.length - verifiedCount;
@@ -496,9 +518,13 @@ export default function DraftReview() {
           </button>
           <button
             onClick={submitForReview}
-            disabled={submittingQg}
+            disabled={submittingQg || wordCountSubmitBlocked}
             className="text-xs px-3 py-2 bg-accent text-accent-foreground rounded-sm hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5"
-            title="Hand the approved draft to SEO OS for automated checks + reviewer sign-off"
+            title={
+              wordCountSubmitBlocked
+                ? wordCountSubmitMessage ?? "Word count is outside the target band."
+                : "Hand the approved draft to SEO OS for automated checks + reviewer sign-off"
+            }
           >
             {submittingQg ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
             Submit for review

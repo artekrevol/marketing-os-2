@@ -12,6 +12,7 @@ import {
   InvalidTransitionError,
   HardFailBlockedError,
   MissingCommentError,
+  callerSubmittedContentObject,
 } from "@workspace/quality-gate";
 import { requireAuth } from "../middlewares/auth";
 
@@ -65,7 +66,7 @@ function mapPassed(outcome: string): boolean | null {
 }
 
 interface AuthedReq {
-  auth?: { userId: string };
+  auth?: { userId: string; isAdmin?: boolean };
   body: unknown;
   query: Record<string, unknown>;
   params: Record<string, string>;
@@ -185,6 +186,13 @@ router.get("/queue", async (req, res) => {
     res.status(guard.status).json({ error: guard.error });
     return;
   }
+  // Reviewer queue is admin/reviewer-only — writers must not be able
+  // to enumerate the queue from the API even if they have brand access.
+  const isAdminQ = req.auth?.isAdmin === true;
+  if (!(await callerCanReview(guard.userId, isAdminQ))) {
+    res.status(403).json({ error: "reviewer or admin role required" });
+    return;
+  }
   try {
     const rows = await listReviewerQueue(guard.brandId);
     const items = rows.map((r) => ({
@@ -221,6 +229,28 @@ async function reviewDetailHandler(
   if (!guard.ok) {
     res.status(guard.status).json({ error: guard.error });
     return;
+  }
+  // Review detail is admin/reviewer-only on the API surface. The
+  // ContentForge writer's submitted-status panel goes through the
+  // same endpoint, but writers authenticate as reviewers? No — they
+  // poll their *own* submission, so we need a narrow self-fetch
+  // exception: a writer can read a content_object they submitted.
+  const isAdminR = req.auth?.isAdmin === true;
+  const reviewer = await callerCanReview(guard.userId, isAdminR);
+  if (!reviewer) {
+    if (!contentObjectId) {
+      res.status(400).json({ error: "contentObjectId required" });
+      return;
+    }
+    const ownSubmission = await callerSubmittedContentObject(
+      guard.brandId,
+      contentObjectId,
+      guard.userId,
+    );
+    if (!ownSubmission) {
+      res.status(403).json({ error: "reviewer or admin role required" });
+      return;
+    }
   }
   if (!contentObjectId) {
     res.status(400).json({ error: "contentObjectId required" });

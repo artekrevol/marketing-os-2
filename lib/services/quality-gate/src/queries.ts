@@ -179,6 +179,27 @@ export async function getLatestQaRun(brandId: string, contentObjectId: string) {
   });
 }
 
+/**
+ * Narrow self-fetch exception: did the caller submit this particular
+ * content_object? Used by the API to let writers poll their own
+ * submission status through the same /review/:id endpoint reviewers
+ * use, without granting them general queue read access.
+ */
+export async function callerSubmittedContentObject(
+  brandId: string,
+  contentObjectId: string,
+  userId: string,
+): Promise<boolean> {
+  return withBrandScope(brandId, async ({ scoped }) => {
+    const rows = (await scoped.select(contentObjectsTable, {
+      where: eq(contentObjectsTable.id, contentObjectId),
+      limit: 1,
+    })) as ContentObject[];
+    const row = rows[0];
+    return !!row && row.submittedBy === userId;
+  });
+}
+
 /** System-level read against user_profiles (not brand-scoped). */
 export async function callerHasBrandAccess(brandId: string, userId: string): Promise<boolean> {
   const { db } = await import("@workspace/db");

@@ -8,11 +8,14 @@ import { BrandProvider, useActiveBrand } from "@/lib/brands";
 type AuthState = "loading" | "in" | "out" | "blocked" | "writer";
 
 /**
- * Roles allowed to enter SEO OS. Sprint 3 D2 locks this to admins and
- * reviewers; writers / strategists / analysts / editors stay in
- * ContentForge and only see the submitted-status view there.
+ * Roles allowed to enter SEO OS. Sprint 3 locked scope: only writers
+ * are blocked. Admin / lead / reviewer / outreach all need access —
+ * leads triage queue health, reviewers decide, outreach uses the
+ * approved-content list downstream. The /decide endpoint still gates
+ * the actual approve/reject mutation to admin or reviewer roles
+ * server-side, so giving leads/outreach read access here is safe.
  */
-const SEO_OS_ROLES = new Set(["admin", "reviewer"]);
+const SEO_OS_ROLES = new Set(["admin", "lead", "reviewer", "outreach"]);
 
 /**
  * Auth shell. Mirrors the ContentForge auth-lock pattern: never await

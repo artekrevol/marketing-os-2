@@ -281,6 +281,23 @@ export default function QualityGateReview({ id }: { id: string }) {
               )}
               {hardFails.length > 0 ? "Request revision" : "Reject"}
             </button>
+            {/*
+              Override (Sprint 4) — visible-but-disabled affordance so
+              reviewers know the escape hatch exists without being able
+              to bypass hard-fails today. Server-side overrideQaRun is
+              still a NotImplementedError stub (with audit_log) in
+              Sprint 3 Part 1.
+            */}
+            <button
+              type="button"
+              disabled
+              title="Override is coming in Sprint 4. Hard-fails currently require revision."
+              className="ml-auto text-xs px-3 py-2 border border-dashed border-rule rounded-sm text-ink-muted opacity-60 cursor-not-allowed flex items-center gap-1"
+            >
+              <AlertTriangle className="h-3 w-3" />
+              Override hard-fail
+              <span className="ml-1 text-[10px] uppercase tracking-widest">Coming Sprint 4</span>
+            </button>
           </div>
         </section>
       )}
