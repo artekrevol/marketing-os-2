@@ -108,3 +108,48 @@ drop index if exists public.events_system_heartbeat_idx;
 
 Then disable the Railway service. The frontend `/admin/system` page
 will surface API failures but will not crash other admin pages.
+
+## Executed results
+
+> **Status:** External services (Upstash Redis, Postgres migration apply,
+> DataForSEO + Originality.ai keys, Sentry DSN, Railway worker service)
+> are user-managed in this environment. The agent built deploy-ready
+> code; live smoke results below are populated by the operator after
+> applying the migration and rolling Railway.
+>
+> Fill in dates/outcomes as each step is exercised in production.
+
+| # | Smoke step | Expected | Actual | Run by | UTC timestamp |
+|---|---|---|---|---|---|
+| 1 | `POST /api/admin/system/heartbeat` once → `system.heartbeat` event row appears within 5s, `/admin/system` "Heartbeat freshness" card flips to green | green within 5s | _(pending operator)_ | | |
+| 2 | Same `idempotencyKey` POSTed twice within 30s → second call returns 202 but only ONE `system.heartbeat` event row exists for that key | exactly 1 event row | _(pending operator)_ | | |
+| 3 | 100-heartbeat burst (loop the curl) → all 100 jobs `completed` in BullMQ, queue depth returns to 0, no `dead_jobs` rows | 100 completed / 0 dead | _(pending operator)_ | | |
+| 4 | Two Railway worker replicas running; `kill` one mid-burst → the other drains the queue, no jobs lost | 0 lost jobs | _(pending operator)_ | | |
+| 5 | `POST /api/admin/system/test-dataforseo` with valid creds → one `integration.success` event tagged `vendor=dataforseo`, `integration_call_log` row with `status=ok` | 1 success row | _(pending operator)_ | | |
+| 6 | Same call with revoked creds → 5 retries logged in `integration_call_log` (statuses: `error`/`rate_limited`/`timeout` as applicable), then exactly ONE terminal `integration.error` event + one `dead_jobs` row | 1 error event / 1 dead-job row | _(pending operator)_ | | |
+| 7 | `POST /api/admin/system/test-originality` happy-path → `integration.success` with `aiScore`/`plagiarismScore` in event payload | success with scores | _(pending operator)_ | | |
+
+## Known typecheck baseline
+
+`pnpm run typecheck` from the workspace root reports pre-existing
+React 18/19 type drift in `artifacts/mockup-sandbox` (lucide-react /
+input-otp / cmdk / vaul against `@types/react@18.3.28`). This drift is
+NOT introduced by Sprint 2 — it lives entirely under
+`artifacts/mockup-sandbox/src/components/ui/*` and predates the
+worker-tier work. All Sprint 2 surfaces (`@workspace/db`,
+`@workspace/jobs`, `@workspace/worker`, `@workspace/integrations-*`,
+`@workspace/api-server`, `@workspace/insight-forge`, `@workspace/scripts`)
+typecheck clean.
+
+To verify Sprint 2 in isolation, run:
+
+```bash
+pnpm run typecheck:libs
+pnpm --filter @workspace/api-server run typecheck
+pnpm --filter @workspace/insight-forge run typecheck
+pnpm --filter @workspace/worker run build
+pnpm --filter @workspace/db exec vitest run
+```
+
+All five must be green; the mockup-sandbox failure is tracked
+separately and is unrelated to the worker tier.
