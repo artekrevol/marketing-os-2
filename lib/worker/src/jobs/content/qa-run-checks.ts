@@ -211,12 +211,21 @@ export async function handleQaRunChecks(
     }
   }
 
-  const qaStatus: "passed" | "failed" | "error" =
-    crashCount > 0 && executed === crashCount
+  // Terminal-status policy:
+  //   - Any hard-fail outcome ⇒ 'failed' (reviewer can still request
+  //     revision; approve is blocked by HardFailBlockedError).
+  //   - Any check that crashed (Originality unreachable, OpenAI 5xx,
+  //     etc.) ⇒ 'error'. We deliberately do NOT swallow partial
+  //     errors as 'passed' — an unverified Originality check must
+  //     never silently let approval through. crashCount>0 wins over
+  //     a clean pass; hard-fail still wins over crash because a
+  //     hard-fail is a deterministic block while a crash means
+  //     "result unknown, run again".
+  const qaStatus: "passed" | "failed" | "error" = hardFailed
+    ? "failed"
+    : crashCount > 0
       ? "error"
-      : hardFailed
-        ? "failed"
-        : "passed";
+      : "passed";
 
   const summary = {
     executed,
