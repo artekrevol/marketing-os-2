@@ -51,9 +51,11 @@ Currently scoped:
   `qa_check_results`, `qa_signoffs`, `qa_overrides`,
   `qa_check_definitions`.
 - Recovery War Room (Pattern A, all three): `recovery_baselines`
-  (UNIQUE per brand, admin-write-only via RLS), `recovery_initiatives`,
-  `recovery_snapshots` (admin-write-only via RLS; worker writes via
-  service_role).
+  (UNIQUE per brand; RLS write = admin-only), `recovery_initiatives`
+  (RLS write = admin or editor with brand_access via
+  `is_admin_or_editor_for_brand(brand_id)`), `recovery_snapshots`
+  (RLS hard-denies all JWT writes — including admin; the worker writes
+  via service_role which bypasses RLS).
 
 ### Adding a new brand-scoped table
 
