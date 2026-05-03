@@ -36,51 +36,67 @@ export async function completeInitiative(
 ): Promise<RecoveryInitiative> {
   const input = CompleteInitiativeInputSchema.parse(raw);
 
-  const initiative = await withBrandScope(input.brandId, async ({ db, scoped }) => {
-    const existing = (await scoped.select(recoveryInitiativesTable, {
-      where: eq(recoveryInitiativesTable.id, input.initiativeId),
-      limit: 1,
-    })) as RecoveryInitiative[];
-    if (existing.length === 0) {
-      throw new InitiativeNotFoundError(input.initiativeId);
-    }
-    const current = existing[0]!;
-    if (current.status !== "active") {
-      throw new InitiativeNotActiveError(input.initiativeId, current.status);
-    }
+  // Re-call semantics: if the row is already `completed`, we still
+  // run the enqueue (BullMQ collapses on jobId so it is a no-op when
+  // the job already exists). This makes `completeInitiative`
+  // idempotent and ALSO recovers from the failure mode where a
+  // previous call committed the DB update but the post-commit
+  // enqueue threw — re-running schedules the missing impact job
+  // without an admin override path.
+  const initiative = await withBrandScope(
+    input.brandId,
+    async ({ db, scoped }) => {
+      const existing = (await scoped.select(recoveryInitiativesTable, {
+        where: eq(recoveryInitiativesTable.id, input.initiativeId),
+        limit: 1,
+      })) as RecoveryInitiative[];
+      if (existing.length === 0) {
+        throw new InitiativeNotFoundError(input.initiativeId);
+      }
+      const current = existing[0]!;
+      if (current.status === "abandoned") {
+        throw new InitiativeNotActiveError(input.initiativeId, current.status);
+      }
+      if (current.status === "completed") {
+        return current;
+      }
 
-    const now = new Date();
-    await scoped.update(
-      recoveryInitiativesTable,
-      { status: "completed", completedAt: now, updatedAt: now },
-      eq(recoveryInitiativesTable.id, input.initiativeId),
-    );
+      const now = new Date();
+      await scoped.update(
+        recoveryInitiativesTable,
+        { status: "completed", completedAt: now, updatedAt: now },
+        eq(recoveryInitiativesTable.id, input.initiativeId),
+      );
 
-    const refreshed = (await scoped.select(recoveryInitiativesTable, {
-      where: eq(recoveryInitiativesTable.id, input.initiativeId),
-      limit: 1,
-    })) as RecoveryInitiative[];
-    const completed = refreshed[0]!;
+      const refreshed = (await scoped.select(recoveryInitiativesTable, {
+        where: eq(recoveryInitiativesTable.id, input.initiativeId),
+        limit: 1,
+      })) as RecoveryInitiative[];
+      const completed = refreshed[0]!;
 
-    await db.insert(eventsTable).values({
-      brandId: input.brandId,
-      actorId: input.actorId,
-      eventType: "recovery.initiative_completed",
-      subjectType: "recovery_initiative",
-      subjectId: completed.id,
-      payload: {
-        completedAt: completed.completedAt
-          ? completed.completedAt.toISOString()
-          : null,
-      },
-    });
+      await db.insert(eventsTable).values({
+        brandId: input.brandId,
+        actorId: input.actorId,
+        eventType: "recovery.initiative_completed",
+        subjectType: "recovery_initiative",
+        subjectId: completed.id,
+        payload: {
+          completedAt: completed.completedAt
+            ? completed.completedAt.toISOString()
+            : null,
+        },
+      });
 
-    return completed;
-  });
+      return completed;
+    },
+  );
 
-  // Enqueue the delayed actual-impact job OUTSIDE the transaction. If
-  // the API server later wires retries, the same idempotencyKey
-  // collapses re-fires into one BullMQ job.
+  // Enqueue the delayed actual-impact job OUTSIDE the transaction.
+  // Deterministic idempotencyKey + BullMQ jobId dedupe means a
+  // retry-after-prior-DB-commit re-creates the missing job rather
+  // than duplicating it. If THIS enqueue throws, the caller can
+  // safely re-invoke `completeInitiative`: the DB step short-circuits
+  // (already_completed branch above) and the enqueue runs again.
   await enqueue(
     "scoring.recovery-initiative-impact",
     {

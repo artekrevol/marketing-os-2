@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   withBrandScope,
   recoveryBaselinesTable,
@@ -57,9 +57,6 @@ export async function getRecoveryOverview(
       )!,
     })) as Array<{ id: string }>;
     const activeInitiatives = activeCountRows.length;
-    // `sql` import retained for future projections / aggregate queries
-    // that the UI prompt may add without re-touching the import block.
-    void sql;
 
     const projection = computeProjection(
       snapshotRows.map((r) => ({
