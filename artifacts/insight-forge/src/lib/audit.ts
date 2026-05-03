@@ -31,7 +31,8 @@ export async function recordAudit(
     });
     if (error) return { ok: false, error: error.message };
     return { ok: true };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || "audit insert failed" };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "audit insert failed";
+    return { ok: false, error: msg };
   }
 }

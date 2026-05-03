@@ -108,8 +108,9 @@ export default function ResearchDashboard() {
       toast.success("Research aborted. Project deleted.");
       setDiscardOpen(false);
       nav("/new");
-    } catch (e: any) {
-      toast.error(e.message || "Failed to abort");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to abort";
+      toast.error(msg);
       setAborting(false);
     }
   };

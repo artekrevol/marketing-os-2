@@ -137,13 +137,16 @@ create index if not exists audit_log_actor_idx   on public.audit_log (actor_id, 
 -- Strategy:
 --   a) "tenant_root" tables (projects) — brand_id NOT NULL, set by client.
 --   b) "tenant_child" tables (drafts, draft_scores, outlines, research_briefs,
---      voice_library, proof_points, interview_answers, usage_logs) — brand_id
---      NOT NULL but auto-filled from the parent projects row via a
---      BEFORE INSERT trigger, so existing client write paths don't break.
---   c) "tenant_optional" tables (page_events, playbook, playbook_sections,
---      fetched_pages) — brand_id NULLABLE. These are either global resources
---      (playbook, fetched_pages) or generic telemetry (page_events) that
---      pre-date the tenancy model. They get an index but no NOT NULL.
+--      proof_points, interview_answers) — brand_id NOT NULL but auto-filled
+--      from the parent projects row via a BEFORE INSERT trigger, so existing
+--      client write paths don't break. These tables have project_id NOT NULL,
+--      so the trigger can always resolve a brand.
+--   c) "tenant_optional" tables (voice_library, usage_logs, page_events,
+--      playbook, playbook_sections, fetched_pages) — brand_id NULLABLE.
+--      These either pre-date the tenancy model, are global resources, or
+--      have nullable project_id (voice_library, usage_logs) so the
+--      inheritance trigger cannot guarantee a brand. They get an index +
+--      best-effort trigger fill, but no NOT NULL constraint.
 ----------------------------------------------------------------------
 do $$
 declare
@@ -152,9 +155,10 @@ declare
   tenant_root text[]     := array['projects'];
   tenant_child text[]    := array[
     'drafts','draft_scores','outlines','research_briefs',
-    'voice_library','proof_points','interview_answers','usage_logs'
+    'proof_points','interview_answers'
   ];
   tenant_optional text[] := array[
+    'voice_library','usage_logs',
     'playbook','playbook_sections','fetched_pages','page_events'
   ];
   all_tables text[];
@@ -201,9 +205,13 @@ $$;
 do $$
 declare
   t text;
+  -- Trigger is installed on every brand-scoped table that has a project_id
+  -- column, including the optional ones, so that when a project_id IS
+  -- supplied the brand_id gets best-effort filled.
   child_tables text[] := array[
     'drafts','draft_scores','outlines','research_briefs',
-    'voice_library','proof_points','interview_answers','usage_logs'
+    'proof_points','interview_answers',
+    'voice_library','usage_logs'
   ];
 begin
   foreach t in array child_tables loop

@@ -111,8 +111,9 @@ export default function NewProject() {
 
       toast.success("Project created. Drafting your brief proposal…");
       nav(`/project/${project.id}/brief`);
-    } catch (err: any) {
-      toast.error(err.message || "Failed to create project");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create project";
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }

@@ -25,9 +25,12 @@ declare
   t text;
   strict_tables text[] := array[
     'projects','drafts','draft_scores','outlines','research_briefs',
-    'voice_library','proof_points','interview_answers','usage_logs'
+    'proof_points','interview_answers'
   ];
+  -- voice_library and usage_logs are loose because their parent project_id
+  -- is nullable, so the inheritance trigger cannot guarantee a brand_id.
   loose_tables text[] := array[
+    'voice_library','usage_logs',
     'playbook','playbook_sections','fetched_pages','page_events'
   ];
   pred text;

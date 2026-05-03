@@ -20,6 +20,7 @@ export type Database = {
           atomic_chunks_count: number | null
           atomic_questions_count: number | null
           banned_phrase_count: number | null
+          brand_id: string
           citation_completeness: number | null
           created_at: string
           final_draft: string | null
@@ -36,6 +37,7 @@ export type Database = {
           atomic_chunks_count?: number | null
           atomic_questions_count?: number | null
           banned_phrase_count?: number | null
+          brand_id?: string
           citation_completeness?: number | null
           created_at?: string
           final_draft?: string | null
@@ -52,6 +54,7 @@ export type Database = {
           atomic_chunks_count?: number | null
           atomic_questions_count?: number | null
           banned_phrase_count?: number | null
+          brand_id?: string
           citation_completeness?: number | null
           created_at?: string
           final_draft?: string | null
@@ -78,6 +81,7 @@ export type Database = {
           ai_citation_readiness_score: number | null
           approved: boolean | null
           atomic_chunks_count: number | null
+          brand_id: string
           citation_count: number | null
           content: string | null
           created_at: string
@@ -99,6 +103,7 @@ export type Database = {
           ai_citation_readiness_score?: number | null
           approved?: boolean | null
           atomic_chunks_count?: number | null
+          brand_id?: string
           citation_count?: number | null
           content?: string | null
           created_at?: string
@@ -120,6 +125,7 @@ export type Database = {
           ai_citation_readiness_score?: number | null
           approved?: boolean | null
           atomic_chunks_count?: number | null
+          brand_id?: string
           citation_count?: number | null
           content?: string | null
           created_at?: string
@@ -149,6 +155,7 @@ export type Database = {
       }
       fetched_pages: {
         Row: {
+          brand_id: string | null
           byte_size: number | null
           content: string
           fetched_at: string
@@ -157,6 +164,7 @@ export type Database = {
           url: string
         }
         Insert: {
+          brand_id?: string | null
           byte_size?: number | null
           content: string
           fetched_at?: string
@@ -165,6 +173,7 @@ export type Database = {
           url: string
         }
         Update: {
+          brand_id?: string | null
           byte_size?: number | null
           content?: string
           fetched_at?: string
@@ -177,6 +186,7 @@ export type Database = {
       interview_answers: {
         Row: {
           answer: string | null
+          brand_id: string
           created_at: string
           follow_up: string | null
           id: string
@@ -186,6 +196,7 @@ export type Database = {
         }
         Insert: {
           answer?: string | null
+          brand_id?: string
           created_at?: string
           follow_up?: string | null
           id?: string
@@ -195,6 +206,7 @@ export type Database = {
         }
         Update: {
           answer?: string | null
+          brand_id?: string
           created_at?: string
           follow_up?: string | null
           id?: string
@@ -214,6 +226,7 @@ export type Database = {
       }
       outlines: {
         Row: {
+          brand_id: string
           created_at: string
           cta_placement: string | null
           h1: string | null
@@ -227,6 +240,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          brand_id?: string
           created_at?: string
           cta_placement?: string | null
           h1?: string | null
@@ -240,6 +254,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          brand_id?: string
           created_at?: string
           cta_placement?: string | null
           h1?: string | null
@@ -264,6 +279,7 @@ export type Database = {
       }
       page_events: {
         Row: {
+          brand_id: string | null
           created_at: string
           duration_ms: number | null
           entered_at: string
@@ -276,6 +292,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          brand_id?: string | null
           created_at?: string
           duration_ms?: number | null
           entered_at?: string
@@ -288,6 +305,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          brand_id?: string | null
           created_at?: string
           duration_ms?: number | null
           entered_at?: string
@@ -303,6 +321,7 @@ export type Database = {
       }
       playbook: {
         Row: {
+          brand_id: string | null
           content_markdown: string
           created_at: string
           id: string
@@ -312,6 +331,7 @@ export type Database = {
           version: number
         }
         Insert: {
+          brand_id?: string | null
           content_markdown: string
           created_at?: string
           id?: string
@@ -321,6 +341,7 @@ export type Database = {
           version?: number
         }
         Update: {
+          brand_id?: string | null
           content_markdown?: string
           created_at?: string
           id?: string
@@ -334,6 +355,7 @@ export type Database = {
       playbook_sections: {
         Row: {
           always_include: boolean
+          brand_id: string | null
           created_at: string
           id: string
           section_content: string
@@ -344,6 +366,7 @@ export type Database = {
         }
         Insert: {
           always_include?: boolean
+          brand_id?: string | null
           created_at?: string
           id?: string
           section_content: string
@@ -354,6 +377,7 @@ export type Database = {
         }
         Update: {
           always_include?: boolean
+          brand_id?: string | null
           created_at?: string
           id?: string
           section_content?: string
@@ -453,6 +477,7 @@ export type Database = {
       }
       proof_points: {
         Row: {
+          brand_id: string
           claim: string
           created_at: string
           id: string
@@ -464,6 +489,7 @@ export type Database = {
           verification_status: string | null
         }
         Insert: {
+          brand_id?: string
           claim: string
           created_at?: string
           id?: string
@@ -475,6 +501,7 @@ export type Database = {
           verification_status?: string | null
         }
         Update: {
+          brand_id?: string
           claim?: string
           created_at?: string
           id?: string
@@ -502,6 +529,7 @@ export type Database = {
           approved_at: string | null
           atomic_question_map: Json | null
           benchmark_teardown: Json | null
+          brand_id: string
           competitor_teardown: Json | null
           conversion_signals: Json | null
           created_at: string
@@ -524,6 +552,7 @@ export type Database = {
           approved_at?: string | null
           atomic_question_map?: Json | null
           benchmark_teardown?: Json | null
+          brand_id?: string
           competitor_teardown?: Json | null
           conversion_signals?: Json | null
           created_at?: string
@@ -546,6 +575,7 @@ export type Database = {
           approved_at?: string | null
           atomic_question_map?: Json | null
           benchmark_teardown?: Json | null
+          brand_id?: string
           competitor_teardown?: Json | null
           conversion_signals?: Json | null
           created_at?: string
@@ -574,6 +604,7 @@ export type Database = {
       }
       usage_logs: {
         Row: {
+          brand_id: string | null
           cache_creation_input_tokens: number | null
           cache_read_input_tokens: number | null
           created_at: string
@@ -591,6 +622,7 @@ export type Database = {
           sub_stage: string | null
         }
         Insert: {
+          brand_id?: string | null
           cache_creation_input_tokens?: number | null
           cache_read_input_tokens?: number | null
           created_at?: string
@@ -608,6 +640,7 @@ export type Database = {
           sub_stage?: string | null
         }
         Update: {
+          brand_id?: string | null
           cache_creation_input_tokens?: number | null
           cache_read_input_tokens?: number | null
           created_at?: string
@@ -781,6 +814,7 @@ export type Database = {
       }
       voice_library: {
         Row: {
+          brand_id: string | null
           captured_at: string
           edit_type: string | null
           edited_human_text: string
@@ -790,6 +824,7 @@ export type Database = {
           writer_id: string | null
         }
         Insert: {
+          brand_id?: string | null
           captured_at?: string
           edit_type?: string | null
           edited_human_text: string
@@ -799,6 +834,7 @@ export type Database = {
           writer_id?: string | null
         }
         Update: {
+          brand_id?: string | null
           captured_at?: string
           edit_type?: string | null
           edited_human_text?: string

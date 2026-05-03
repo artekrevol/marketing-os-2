@@ -135,8 +135,9 @@ export default function AdminUsers() {
       toast.success(`Updated ${u.email}`);
       cancelEdit();
       await load();
-    } catch (err: any) {
-      toast.error(err.message || "Save failed");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Save failed";
+      toast.error(msg);
     } finally {
       setBusyId(null);
     }

@@ -59,8 +59,9 @@ export default function AdminBrands() {
     try {
       voice = draft.voice.trim() ? JSON.parse(draft.voice) : {};
       thresholds = draft.thresholds.trim() ? JSON.parse(draft.thresholds) : {};
-    } catch (e: any) {
-      toast.error("Invalid JSON: " + e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "parse error";
+      toast.error("Invalid JSON: " + msg);
       return;
     }
     const justification = window.prompt(`Why are you editing the ${b.name} brand?`)?.trim();
