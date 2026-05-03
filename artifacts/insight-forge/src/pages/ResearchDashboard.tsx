@@ -5,6 +5,8 @@ import { ChevronDown, Star, Loader2, RefreshCw, ExternalLink, CheckCircle2, Aler
 import { toast } from "sonner";
 import type { Project, ProofPoint } from "@/lib/types";
 import { DiscardProjectDialog } from "@/components/DiscardProjectDialog";
+import { recordAudit } from "@/lib/audit";
+import { emit } from "@/lib/events";
 
 type StageKey =
   | "search_intent"
@@ -73,14 +75,36 @@ export default function ResearchDashboard() {
   const abort = () => setDiscardOpen(true);
 
   const doDiscard = async () => {
+    const justification = window.prompt(
+      `Why are you deleting "${project.topic}"? (required for audit log)`,
+    )?.trim();
+    if (!justification) {
+      toast.error("Justification is required to delete a project.");
+      return;
+    }
     setAborting(true);
     try {
-      // Best-effort cleanup of dependent rows, then the project itself.
+      // Audit-first: if the audit write fails, abort the destructive mutation.
+      const audit = await recordAudit(
+        "project.delete",
+        "project",
+        project.id,
+        justification,
+        { topic: project.topic, status: project.status },
+        project.brand_id ?? null,
+      );
+      if (!audit.ok) {
+        toast.error("Audit log failed; deletion aborted: " + audit.error);
+        setAborting(false);
+        return;
+      }
       await Promise.all([
         supabase.from("proof_points").delete().eq("project_id", project.id),
         supabase.from("research_briefs").delete().eq("project_id", project.id),
       ]);
-      await supabase.from("projects").delete().eq("id", project.id);
+      const { error: delErr } = await supabase.from("projects").delete().eq("id", project.id);
+      if (delErr) throw delErr;
+      emit("project.deleted", "project", project.id, { topic: project.topic }, project.brand_id ?? null);
       toast.success("Research aborted. Project deleted.");
       setDiscardOpen(false);
       nav("/new");

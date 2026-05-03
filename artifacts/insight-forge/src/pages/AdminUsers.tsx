@@ -92,6 +92,24 @@ export default function AdminUsers() {
     }
     setBusyId(u.user_id);
     try {
+      // Audit-first: abort the access change if the audit row cannot be written.
+      const audit = await recordAudit(
+        "user.access_change",
+        "user",
+        u.user_id,
+        justification,
+        {
+          email: u.email,
+          before: { role: u.role, pod: u.pod, brand_access: u.brand_access },
+          after: { role: draft.role, pod: draft.pod || null, brand_access: draft.brand_access },
+        },
+      );
+      if (!audit.ok) {
+        toast.error("Audit log failed; change aborted: " + audit.error);
+        setBusyId(null);
+        return;
+      }
+
       const { error } = await supabase
         .from("user_profiles")
         .upsert(
@@ -114,18 +132,6 @@ export default function AdminUsers() {
         await supabase.from("user_roles").delete().eq("user_id", u.user_id).eq("role", "admin");
       }
 
-      const audit = await recordAudit(
-        "user.access_change",
-        "user",
-        u.user_id,
-        justification,
-        {
-          email: u.email,
-          before: { role: u.role, pod: u.pod, brand_access: u.brand_access },
-          after: { role: draft.role, pod: draft.pod || null, brand_access: draft.brand_access },
-        },
-      );
-      if (!audit.ok) toast.error("Audit log failed: " + audit.error);
       toast.success(`Updated ${u.email}`);
       cancelEdit();
       await load();

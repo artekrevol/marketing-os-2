@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
 import { Loader2, Building2, Save } from "lucide-react";
@@ -31,8 +30,6 @@ export default function AdminBrands() {
   useEffect(() => {
     load();
   }, []);
-
-  if (!isAdmin) return <Navigate to="/" replace />;
 
   const startEdit = (b: Brand) => {
     setEditing((e) => ({
@@ -72,6 +69,21 @@ export default function AdminBrands() {
       return;
     }
     setSaving(b.id);
+    // Audit-first: if the audit write fails, abort the mutation so we never have
+    // a sensitive change without a corresponding audit row.
+    const audit = await recordAudit(
+      "brand.update",
+      "brand",
+      b.id,
+      justification,
+      { changed_fields: ["primary_domain", "voice_profile", "thresholds"] },
+      b.id,
+    );
+    if (!audit.ok) {
+      toast.error("Audit log failed; change aborted: " + audit.error);
+      setSaving(null);
+      return;
+    }
     const { error } = await supabase
       .from("brands")
       .update({
@@ -86,15 +98,6 @@ export default function AdminBrands() {
       setSaving(null);
       return;
     }
-    const audit = await recordAudit(
-      "brand.update",
-      "brand",
-      b.id,
-      justification,
-      { changed_fields: ["primary_domain", "voice_profile", "thresholds"] },
-      b.id,
-    );
-    if (!audit.ok) toast.error("Audit log failed: " + audit.error);
     toast.success(`${b.name} updated`);
     setSaving(null);
     cancelEdit(b.id);
@@ -113,6 +116,11 @@ export default function AdminBrands() {
           Four brand tenants. Voice profile and per-brand thresholds (originality cutoff, reading
           grade target) drive Stage-3 scoring and the Quality Gate later in Wave 1.
         </p>
+        {!isAdmin && (
+          <p className="text-[11px] uppercase tracking-widest text-ink-muted mt-3">
+            Read-only view — admin role required to edit.
+          </p>
+        )}
       </div>
 
       {loading ? (
@@ -134,12 +142,18 @@ export default function AdminBrands() {
                     </p>
                   </div>
                   {!isEditing ? (
-                    <button
-                      onClick={() => startEdit(b)}
-                      className="text-xs px-3 py-1.5 border border-rule rounded-sm hover:bg-secondary"
-                    >
-                      Edit
-                    </button>
+                    isAdmin ? (
+                      <button
+                        onClick={() => startEdit(b)}
+                        className="text-xs px-3 py-1.5 border border-rule rounded-sm hover:bg-secondary"
+                      >
+                        Edit
+                      </button>
+                    ) : (
+                      <span className="text-[10px] uppercase tracking-widest text-ink-muted">
+                        Read only
+                      </span>
+                    )
                   ) : (
                     <div className="flex gap-2">
                       <button
