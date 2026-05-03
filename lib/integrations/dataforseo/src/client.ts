@@ -107,6 +107,16 @@ export class DataForSEOClient {
             `DataForSEO ${endpoint} returned ${res.status}`,
             { httpStatus: res.status, endpoint, retriable: true },
           );
+          // Classify so the integration_call_log row clearly shows
+          // why the call was retried.
+          await this.logCall({
+            endpoint,
+            status: res.status === 429 ? "rate_limited" : "error",
+            httpStatus: res.status,
+            durationMs: Date.now() - start,
+            requestMeta: { keyword: req.keyword, attempt },
+            errorMessage: `HTTP ${res.status} (retry ${attempt + 1}/${MAX_RETRIES})`,
+          });
           await sleep(jitter(RETRY_BASE_MS * 2 ** attempt));
           continue;
         }
@@ -140,7 +150,19 @@ export class DataForSEOClient {
       } catch (e) {
         lastErr = e as Error;
         if (e instanceof DataForSEOError && !e.retriable) throw e;
-        await sleep(RETRY_BASE_MS * 2 ** attempt);
+        // Network-level failure (fetch threw): timeout, DNS, TLS, etc.
+        // Classify as "timeout" so observability dashboards can split
+        // these out from upstream HTTP errors.
+        const msg = (e as Error).message ?? "";
+        const looksLikeTimeout = /timeout|timed out|aborted|ETIMEDOUT/i.test(msg);
+        await this.logCall({
+          endpoint,
+          status: looksLikeTimeout ? "timeout" : "error",
+          durationMs: Date.now() - start,
+          requestMeta: { keyword: req.keyword, attempt },
+          errorMessage: `${msg || "fetch failed"} (retry ${attempt + 1}/${MAX_RETRIES})`,
+        });
+        await sleep(jitter(RETRY_BASE_MS * 2 ** attempt));
       }
     }
 

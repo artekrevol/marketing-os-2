@@ -1,7 +1,20 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import jwt from "jsonwebtoken";
 import { db } from "@workspace/db";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
+
+/**
+ * Typed wrapper around `db.execute()` for ad-hoc raw SQL whose result
+ * we only need to inspect by row count or simple key. node-postgres
+ * returns `{ rows: T[] }` shaped objects; drizzle's `.execute()` types
+ * it as a discriminated union, so we narrow once here instead of
+ * scattering `as unknown as { rows: ... }` casts at every call site.
+ */
+async function execRows<T = Record<string, unknown>>(query: SQL): Promise<T[]> {
+  const result = (await db.execute(query)) as unknown as { rows?: T[] } | T[];
+  if (Array.isArray(result)) return result;
+  return result.rows ?? [];
+}
 
 export interface AuthContext {
   userId: string;
@@ -65,19 +78,19 @@ export const requireAuth: RequestHandler = async (
   // provisioned).
   let isAdmin = false;
   try {
-    const r = await db.execute(
+    const rows = await execRows(
       sql`select 1 as ok from public.user_profiles where user_id = ${userId}::uuid and role = 'admin' limit 1`,
     );
-    if ((r as unknown as { rows: unknown[] }).rows.length > 0) isAdmin = true;
+    if (rows.length > 0) isAdmin = true;
   } catch (err) {
     req.log?.warn({ err }, "auth: user_profiles admin lookup failed");
   }
   if (!isAdmin) {
     try {
-      const r = await db.execute(
+      const rows = await execRows(
         sql`select 1 as ok from public.user_roles where user_id = ${userId}::uuid and role = 'admin' limit 1`,
       );
-      if ((r as unknown as { rows: unknown[] }).rows.length > 0) isAdmin = true;
+      if (rows.length > 0) isAdmin = true;
     } catch (err) {
       req.log?.warn({ err }, "auth: user_roles admin lookup failed");
     }

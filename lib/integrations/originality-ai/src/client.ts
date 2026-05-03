@@ -128,6 +128,14 @@ export class OriginalityAIClient {
             `Originality.ai ${endpoint} returned ${res.status}`,
             { httpStatus: res.status, endpoint, retriable: true },
           );
+          await this.logCall({
+            endpoint,
+            status: res.status === 429 ? "rate_limited" : "error",
+            httpStatus: res.status,
+            durationMs: Date.now() - start,
+            requestMeta: { attempt },
+            errorMessage: `HTTP ${res.status} (retry ${attempt + 1}/${MAX_RETRIES})`,
+          });
           await sleep(jitter(RETRY_BASE_MS * 2 ** attempt));
           continue;
         }
@@ -173,7 +181,16 @@ export class OriginalityAIClient {
       } catch (e) {
         lastErr = e as Error;
         if (e instanceof OriginalityAIError && !e.retriable) throw e;
-        await sleep(RETRY_BASE_MS * 2 ** attempt);
+        const msg = (e as Error).message ?? "";
+        const looksLikeTimeout = /timeout|timed out|aborted|ETIMEDOUT/i.test(msg);
+        await this.logCall({
+          endpoint,
+          status: looksLikeTimeout ? "timeout" : "error",
+          durationMs: Date.now() - start,
+          requestMeta: { attempt },
+          errorMessage: `${msg || "fetch failed"} (retry ${attempt + 1}/${MAX_RETRIES})`,
+        });
+        await sleep(jitter(RETRY_BASE_MS * 2 ** attempt));
       }
     }
 
