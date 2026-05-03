@@ -50,7 +50,7 @@ lib/
 
 ### Queues
 
-`crawls`, `integrations`, `ai-jobs`, `notifications`, `maintenance`. One
+`maintenance`, `integrations`, `projects`, `content`, `scoring`. One
 ioredis connection multiplexed across all five `Worker` instances; the
 worker process registers a single dispatcher (`lib/worker/src/jobs/index.ts`)
 that looks each job up in `JOB_REGISTRY` and routes to its handler.

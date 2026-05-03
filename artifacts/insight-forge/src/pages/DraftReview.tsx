@@ -222,10 +222,11 @@ export default function DraftReview() {
 
   // After submit: keep the writer in ContentForge with a status view.
   // Writers do not navigate to SEO OS — that surface is reviewer-only.
-  if (submittedContentObjectId) {
+  if (submittedContentObjectId && project.brand_id) {
     return (
       <SubmittedForReview
         contentObjectId={submittedContentObjectId}
+        brandId={project.brand_id}
         onReturn={() => setSubmittedContentObjectId(null)}
       />
     );
@@ -513,68 +514,68 @@ export default function DraftReview() {
 
 /**
  * After submit: writers stay in ContentForge with a live status panel
- * fed by Supabase Realtime on `content_objects` + `qa_runs`. They never
- * navigate to SEO OS; that surface is gated to admin/reviewer roles.
+ * fed by polling `/api/quality-gate/review/:id`. The Supabase typegen
+ * hasn't picked up the Sprint 3 tables yet, so we go through the
+ * already-typed REST surface instead of casting Supabase clients.
+ * They never navigate to SEO OS; that surface is gated to
+ * admin/reviewer roles.
  */
+type ReviewPoll = {
+  contentObject: { id: string; title: string | null; status: string };
+  qaRun: {
+    id: string;
+    status: string;
+    started_at: string | null;
+    finished_at: string | null;
+    summary: Record<string, unknown> | null;
+  } | null;
+};
+
 function SubmittedForReview({
   contentObjectId,
+  brandId,
   onReturn,
 }: {
   contentObjectId: string;
+  brandId: string;
   onReturn: () => void;
 }) {
-  const [obj, setObj] = useState<{ status: string; title: string } | null>(null);
-  const [run, setRun] = useState<{
-    status: string;
-    started_at: string | null;
-    completed_at: string | null;
-    summary: any;
-  } | null>(null);
+  const [poll, setPoll] = useState<ReviewPoll | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
-    const load = async () => {
-      // content_objects and qa_runs are Sprint 3 tables not yet in
-      // the generated Supabase types; cast to `any` until the types
-      // regen lands.
-      const sb = supabase as any;
-      const [{ data: o }, { data: r }] = await Promise.all([
-        sb
-          .from("content_objects")
-          .select("status,title")
-          .eq("id", contentObjectId)
-          .maybeSingle(),
-        sb
-          .from("qa_runs")
-          .select("status,started_at,completed_at,summary")
-          .eq("content_object_id", contentObjectId)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ]);
-      if (!mounted) return;
-      if (o) setObj(o as any);
-      if (r) setRun(r as any);
+    const refresh = async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) throw new Error("Not signed in");
+        const url = `/api/quality-gate/review/${encodeURIComponent(
+          contentObjectId,
+        )}?brandId=${encodeURIComponent(brandId)}`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) {
+          throw new Error(`review fetch failed (${res.status})`);
+        }
+        const body = (await res.json()) as ReviewPoll;
+        if (!mounted) return;
+        setPoll(body);
+        setError(null);
+      } catch (err) {
+        if (!mounted) return;
+        setError((err as Error).message);
+      }
     };
-    load();
-    const ch = supabase
-      .channel(`co-${contentObjectId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "content_objects", filter: `id=eq.${contentObjectId}` },
-        load,
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "qa_runs", filter: `content_object_id=eq.${contentObjectId}` },
-        load,
-      )
-      .subscribe();
+    refresh();
+    const interval = window.setInterval(refresh, 4000);
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      window.clearInterval(interval);
     };
-  }, [contentObjectId]);
+  }, [contentObjectId, brandId]);
+
+  const obj = poll?.contentObject ?? null;
+  const run = poll?.qaRun ?? null;
 
   const tone =
     obj?.status === "approved"
@@ -586,6 +587,7 @@ function SubmittedForReview({
   const qaLabel: Record<string, string> = {
     queued: "Queued — checks haven’t started yet.",
     running: "Running automated checks…",
+    completed: "Checks completed. Awaiting reviewer sign-off.",
     passed: "All hard checks passed. Awaiting reviewer sign-off.",
     failed: "One or more hard checks failed. Reviewer will request revisions.",
     error: "A check errored out. Reviewer will pick it up.",
@@ -614,6 +616,11 @@ function SubmittedForReview({
         {run?.summary && Object.keys(run.summary).length > 0 && (
           <div className="px-4 py-3 text-xs text-ink-muted">
             <pre className="font-mono whitespace-pre-wrap">{JSON.stringify(run.summary, null, 2)}</pre>
+          </div>
+        )}
+        {error && (
+          <div className="px-4 py-3 text-xs text-destructive">
+            Couldn’t refresh review status: {error}
           </div>
         )}
       </div>

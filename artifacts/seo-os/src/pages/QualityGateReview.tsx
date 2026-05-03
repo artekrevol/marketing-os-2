@@ -152,11 +152,15 @@ export default function QualityGateReview({ id }: { id: string }) {
   const co = detail.contentObject;
   const run = detail.qaRun;
   const hardFails = detail.checks.filter((c) => c.severity === "hard_fail" && c.passed === false);
-  const decidable =
-    !!run &&
-    run.status === "completed" &&
-    hardFails.length === 0 &&
-    (co.status === "submitted" || co.status === "in_review");
+  // Reject (request revision) is allowed any time the run has finished
+  // and the object is still in the reviewer queue. Approve carries the
+  // additional hard-fail gate — the service layer also enforces this,
+  // we just disable the button so reviewers don't get a confusing
+  // round-trip toast.
+  const runFinished = !!run && run.status === "completed";
+  const inReviewerQueue = co.status === "submitted" || co.status === "in_review";
+  const rejectDisabled = !runFinished || !inReviewerQueue;
+  const approveDisabled = rejectDisabled || hardFails.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto p-8">
@@ -226,21 +230,31 @@ export default function QualityGateReview({ id }: { id: string }) {
             rows={3}
             className="w-full px-3 py-2 border border-rule rounded-sm text-sm bg-background mb-3"
           />
-          {!decidable && (
+          {rejectDisabled && (
             <p className="text-xs text-unverified mb-3 flex items-center gap-1">
               <AlertTriangle className="h-3 w-3" />
-              {hardFails.length > 0
-                ? `Blocked by ${hardFails.length} hard-fail check${hardFails.length === 1 ? "" : "s"}.`
-                : run?.status !== "completed"
-                  ? "Waiting for automated checks to complete."
-                  : "Not in a decidable state."}
+              {!runFinished
+                ? "Waiting for automated checks to complete."
+                : "Not in a decidable state."}
+            </p>
+          )}
+          {!rejectDisabled && hardFails.length > 0 && (
+            <p className="text-xs text-unverified mb-3 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3" />
+              Blocked by {hardFails.length} hard-fail check{hardFails.length === 1 ? "" : "s"} —
+              approve is locked, but you can still send this back for revision.
             </p>
           )}
           <div className="flex gap-2">
             <button
               onClick={() => decide("approved")}
-              disabled={!decidable || deciding !== null}
+              disabled={approveDisabled || deciding !== null}
               className="bg-verified text-paper px-4 py-2 rounded-sm text-sm font-medium hover:opacity-90 disabled:opacity-40 flex items-center gap-1"
+              title={
+                hardFails.length > 0
+                  ? "Approve is blocked while a hard-fail check is unresolved."
+                  : undefined
+              }
             >
               {deciding === "approved" ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -251,7 +265,7 @@ export default function QualityGateReview({ id }: { id: string }) {
             </button>
             <button
               onClick={() => decide("rejected")}
-              disabled={!decidable || deciding !== null}
+              disabled={rejectDisabled || deciding !== null}
               className="bg-destructive text-destructive-foreground px-4 py-2 rounded-sm text-sm font-medium hover:opacity-90 disabled:opacity-40 flex items-center gap-1"
             >
               {deciding === "rejected" ? (
@@ -259,7 +273,7 @@ export default function QualityGateReview({ id }: { id: string }) {
               ) : (
                 <XCircle className="h-3 w-3" />
               )}
-              Reject
+              {hardFails.length > 0 ? "Request revision" : "Reject"}
             </button>
           </div>
         </section>

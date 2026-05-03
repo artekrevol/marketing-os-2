@@ -26,9 +26,9 @@ type BriefMeta = {
 type SubResult = { ok: boolean | null; actual: number | null; reason: string };
 
 const WORD_BAND = 0.2;
-const TITLE_MIN = 50;
+const TITLE_MIN = 30;
 const TITLE_MAX = 60;
-const DESC_MIN = 140;
+const DESC_MIN = 110;
 const DESC_MAX = 160;
 
 export async function runBriefComplianceCheck(

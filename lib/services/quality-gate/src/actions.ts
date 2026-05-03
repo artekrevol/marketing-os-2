@@ -414,14 +414,38 @@ export async function startFromDraft(args: {
 
 /**
  * Sprint 3 Part 1 ships read-only override visibility. The full
- * override modal (write path on `qa_overrides` + corresponding
- * audit_log entry, hard-fail-only enforcement, mandatory reason)
- * lands in Part 2.
+ * override modal (write path on `qa_overrides`, hard-fail-only
+ * enforcement, mandatory reason) lands in Part 2. We still write an
+ * `audit_log` row when this stub is invoked so any caller that hits
+ * the route gets a permanent attempt record — the audit-trail
+ * contract is non-negotiable even for unimplemented actions.
  */
-export async function overrideQaRun(): Promise<never> {
-  // Reference unused imports kept for Part 2 to silence TS without
-  // changing the public surface ahead of time.
+export interface OverrideQaRunInput {
+  brandId: string;
+  contentObjectId: string;
+  qaRunId: string;
+  actorId: string;
+  reason: string;
+}
+
+export async function overrideQaRun(input: OverrideQaRunInput): Promise<never> {
   void qaOverridesTable;
+  const reason = input.reason?.trim() || "override attempted (Sprint 3 Part 1 stub)";
+  await withBrandScope(input.brandId, async ({ db }) => {
+    await db.insert(auditLogTable).values({
+      brandId: input.brandId,
+      actorId: input.actorId,
+      action: "qa.override.attempt",
+      targetType: "qa_run",
+      targetId: input.qaRunId,
+      justification: reason,
+      metadata: {
+        contentObjectId: input.contentObjectId,
+        notImplemented: true,
+        sprint: "3-part-2",
+      },
+    });
+  });
   throw new NotImplementedError("override modal");
 }
 export const overrideHardFail = overrideQaRun;
