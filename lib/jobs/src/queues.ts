@@ -51,3 +51,29 @@ export async function closeAllQueues(): Promise<void> {
   await Promise.all(Array.from(queues.values()).map((q) => q.close()));
   queues.clear();
 }
+
+/**
+ * Register (or refresh) a BullMQ repeatable job. BullMQ keys a
+ * repeatable schedule by `(name, repeat.pattern, repeat.tz, jobId?)`,
+ * so calling this multiple times with the same arguments is a no-op
+ * — safe to invoke on every worker boot.
+ *
+ * Recovery War Room uses this to register the nightly snapshot
+ * fan-out (`scoring.recovery-snapshot-nightly`, `0 3 * * *`).
+ */
+export async function addRepeatable(
+  queueName: QueueName,
+  jobName: string,
+  data: Record<string, unknown>,
+  pattern: string,
+): Promise<void> {
+  await getQueue(queueName).add(jobName, data, {
+    repeat: { pattern },
+    // Repeatable schedulers should not pile up on retry storms — one
+    // delayed re-attempt is plenty; the next cron tick will fire
+    // regardless.
+    attempts: 1,
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 100 },
+  });
+}

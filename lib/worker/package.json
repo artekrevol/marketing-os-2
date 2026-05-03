@@ -19,6 +19,7 @@
     "@workspace/integrations-originality-ai": "workspace:*",
     "@workspace/jobs": "workspace:*",
     "@workspace/quality-gate": "workspace:*",
+    "@workspace/services-recovery": "workspace:*",
     "bullmq": "^5.40.0",
     "drizzle-orm": "catalog:",
     "ioredis": "^5.4.2",

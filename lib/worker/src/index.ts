@@ -5,6 +5,7 @@ import {
   getRedisConnection,
   closeRedisConnection,
   closeAllQueues,
+  addRepeatable,
 } from "@workspace/jobs";
 import { loadEnv } from "./env";
 import { logger } from "./logger";
@@ -78,6 +79,24 @@ async function main(): Promise<void> {
 
     return w;
   });
+
+  // Recovery War Room — register the nightly snapshot fan-out
+  // (amendments §E). BullMQ keys repeatable schedules by
+  // `(name, repeat.pattern)` so re-registering on every boot is safe.
+  try {
+    await addRepeatable(
+      "scoring",
+      "scoring.recovery-snapshot-nightly",
+      { idempotencyKey: "scoring.recovery-snapshot-nightly:cron" },
+      "0 3 * * *",
+    );
+    logger.info(
+      { name: "scoring.recovery-snapshot-nightly", pattern: "0 3 * * *" },
+      "worker: repeatable job registered",
+    );
+  } catch (err) {
+    logger.error({ err }, "worker: failed to register recovery-snapshot-nightly cron");
+  }
 
   const health = startHealthServer(env.PORT, startedAt);
 

@@ -953,6 +953,9 @@ importers:
       '@workspace/quality-gate':
         specifier: workspace:*
         version: link:../services/quality-gate
+      '@workspace/services-recovery':
+        specifier: workspace:*
+        version: link:../services/recovery
       bullmq:
         specifier: ^5.40.0
         version: 5.76.4

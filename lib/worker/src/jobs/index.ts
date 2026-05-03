@@ -7,6 +7,10 @@ import { handleDataForSeoSerpTest } from "./dataforseo-test";
 import { handleOriginalityScanTest } from "./originality-test";
 import { handleQaRunChecks } from "./content/qa-run-checks";
 import { handleRecoveryInitiativeImpact } from "./scoring/recovery-initiative-impact";
+import {
+  handleRecoverySnapshot,
+  handleRecoverySnapshotNightly,
+} from "./scoring/recovery-snapshot";
 
 type Handler<N extends JobName> = (data: JobData<N>, log: ReturnType<typeof jobLogger>) => Promise<unknown>;
 
@@ -16,6 +20,8 @@ export const HANDLERS: { [N in JobName]: Handler<N> } = {
   "integrations.originality-ai-scan-test": handleOriginalityScanTest,
   "content.qa-run-checks": handleQaRunChecks,
   "scoring.recovery-initiative-impact": handleRecoveryInitiativeImpact,
+  "scoring.recovery-snapshot": handleRecoverySnapshot,
+  "scoring.recovery-snapshot-nightly": handleRecoverySnapshotNightly,
 };
 
 /**

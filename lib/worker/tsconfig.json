@@ -15,6 +15,7 @@
     { "path": "../jobs" },
     { "path": "../integrations/dataforseo" },
     { "path": "../integrations/originality-ai" },
-    { "path": "../services/quality-gate" }
+    { "path": "../services/quality-gate" },
+    { "path": "../services/recovery" }
   ]
 }

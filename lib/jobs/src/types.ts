@@ -54,6 +54,24 @@ export const RecoveryInitiativeImpactPayload = BasePayload.extend({
   initiativeId: z.string().uuid(),
 });
 
+// Recovery War Room — daily roll-up. The handler computes a
+// `recovery_snapshots` row for `(brandId, snapshotDate)` from
+// `rank_snapshots` over the trailing 30-day window. Idempotent on
+// the unique `(brand_id, snapshot_date)` index. Amendments §D.4.
+export const RecoverySnapshotPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  // ISO date YYYY-MM-DD (the day the snapshot represents).
+  snapshotDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "snapshotDate must be ISO date YYYY-MM-DD"),
+});
+
+// Recovery War Room — nightly fan-out scheduler. Runs at 03:00 UTC
+// via BullMQ `repeat.pattern`. Iterates every brand with a locked
+// baseline and enqueues one `scoring.recovery-snapshot` job for
+// yesterday's date.
+export const RecoverySnapshotNightlyPayload = BasePayload.extend({});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -74,6 +92,14 @@ export const JOB_REGISTRY = {
   "scoring.recovery-initiative-impact": {
     queue: "scoring" as QueueName,
     schema: RecoveryInitiativeImpactPayload,
+  },
+  "scoring.recovery-snapshot": {
+    queue: "scoring" as QueueName,
+    schema: RecoverySnapshotPayload,
+  },
+  "scoring.recovery-snapshot-nightly": {
+    queue: "scoring" as QueueName,
+    schema: RecoverySnapshotNightlyPayload,
   },
 } as const;
 
