@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/seo-os/"
+title = "SEO OS"
+version = "1.0.0"
+id = "artifacts/seo-os"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/seo-os/" ]
+localPort = 20951
+
+[services.development]
+run = "pnpm --filter @workspace/seo-os run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/seo-os", "run", "build" ]
+publicDir = "artifacts/seo-os/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20951"
+BASE_PATH = "/seo-os/"

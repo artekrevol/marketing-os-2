@@ -76,6 +76,131 @@ export interface DeadJobList {
   deadJobs: DeadJobRow[];
 }
 
+export interface QualityGateSubmitRequest {
+  brandId: string;
+  contentObjectId: string;
+}
+
+export interface QualityGateSubmitResult {
+  qaRunId: string;
+  idempotencyKey: string;
+}
+
+export type QualityGateDecideRequestDecision =
+  (typeof QualityGateDecideRequestDecision)[keyof typeof QualityGateDecideRequestDecision];
+
+export const QualityGateDecideRequestDecision = {
+  approved: "approved",
+  rejected: "rejected",
+} as const;
+
+export interface QualityGateDecideRequest {
+  brandId: string;
+  contentObjectId: string;
+  decision: QualityGateDecideRequestDecision;
+  comment?: string;
+}
+
+export interface QualityGateDecisionResult {
+  status: string;
+}
+
+export type QualityGateQueueItemQaRun = null | {
+  id: string;
+  status: string;
+  /** @nullable */
+  started_at?: string | null;
+  /** @nullable */
+  finished_at?: string | null;
+};
+
+export interface QualityGateQueueItem {
+  id: string;
+  /** @nullable */
+  title?: string | null;
+  status: string;
+  /** @nullable */
+  word_count?: number | null;
+  updated_at: string;
+  qa_run?: QualityGateQueueItemQaRun;
+}
+
+export interface QualityGateQueueList {
+  items: QualityGateQueueItem[];
+}
+
+export type QualityGateCheckResultSeverity =
+  (typeof QualityGateCheckResultSeverity)[keyof typeof QualityGateCheckResultSeverity];
+
+export const QualityGateCheckResultSeverity = {
+  hard_fail: "hard_fail",
+  warn: "warn",
+  info: "info",
+} as const;
+
+/**
+ * @nullable
+ */
+export type QualityGateCheckResultDetails = { [key: string]: unknown } | null;
+
+export interface QualityGateCheckResult {
+  id: string;
+  qa_run_id: string;
+  check_key: string;
+  severity: QualityGateCheckResultSeverity;
+  /** @nullable */
+  passed?: boolean | null;
+  /** @nullable */
+  threshold?: number | null;
+  /** @nullable */
+  observed?: number | null;
+  /** @nullable */
+  details?: QualityGateCheckResultDetails;
+  created_at: string;
+}
+
+export type QualityGateReviewDetailBodyContentObject = {
+  [key: string]: unknown;
+};
+
+export type QualityGateReviewDetailBodyQaRun = null | {
+  [key: string]: unknown;
+};
+
+export type QualityGateReviewDetailBodySignoffsItem = {
+  [key: string]: unknown;
+};
+
+export type QualityGateReviewDetailBodyOverridesItem = {
+  [key: string]: unknown;
+};
+
+export interface QualityGateReviewDetailBody {
+  contentObject: QualityGateReviewDetailBodyContentObject;
+  qaRun?: QualityGateReviewDetailBodyQaRun;
+  checks: QualityGateCheckResult[];
+  signoffs: QualityGateReviewDetailBodySignoffsItem[];
+  overrides: QualityGateReviewDetailBodyOverridesItem[];
+}
+
+export interface QualityGateStartFromDraftRequest {
+  brandId: string;
+  projectId: string;
+}
+
+export type QualityGateStartFromDraftResultSource =
+  (typeof QualityGateStartFromDraftResultSource)[keyof typeof QualityGateStartFromDraftResultSource];
+
+export const QualityGateStartFromDraftResultSource = {
+  created: "created",
+  reused: "reused",
+} as const;
+
+export interface QualityGateStartFromDraftResult {
+  contentObjectId: string;
+  source: QualityGateStartFromDraftResultSource;
+}
+
 /**
  * Missing or invalid bearer token
  */
@@ -93,4 +218,13 @@ export type QueueUnavailableResponse = ErrorResponse;
 
 export type GetRecentEventsParams = {
   type?: string;
+};
+
+export type QualityGateQueueParams = {
+  brandId: string;
+};
+
+export type QualityGateReviewDetailParams = {
+  contentObjectId: string;
+  brandId: string;
 };

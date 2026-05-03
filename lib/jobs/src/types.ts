@@ -34,6 +34,16 @@ export const OriginalityScanTestPayload = BasePayload.extend({
   ),
 });
 
+// Sprint 3 — runs the automated check stack against a content_object.
+// brandId is required (non-optional override): the QA pipeline must
+// not run cross-brand. qaRunId is the pre-created qa_runs row; the
+// worker mutates it through the lifecycle.
+export const QaRunChecksPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  qaRunId: z.string().uuid(),
+  contentObjectId: z.string().uuid(),
+});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -46,6 +56,10 @@ export const JOB_REGISTRY = {
   "integrations.originality-ai-scan-test": {
     queue: "integrations" as QueueName,
     schema: OriginalityScanTestPayload,
+  },
+  "content.qa-run-checks": {
+    queue: "content" as QueueName,
+    schema: QaRunChecksPayload,
   },
 } as const;
 

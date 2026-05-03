@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: admin-system
     description: Admin-only worker/queue observability and triggers
+  - name: quality-gate
+    description: Sprint 3 reviewer queue, automated checks, sign-off transitions
 paths:
   /healthz:
     get:
@@ -166,6 +168,182 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /quality-gate/submit:
+    post:
+      operationId: qualityGateSubmit
+      tags: [quality-gate]
+      summary: Submit a content_object for review (kicks off a qa_run)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QualityGateSubmitRequest"
+      responses:
+        "202":
+          description: Accepted — qa_run enqueued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityGateSubmitResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: content_object not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /quality-gate/decide:
+    post:
+      operationId: qualityGateDecide
+      tags: [quality-gate]
+      summary: Reviewer approves or rejects a content_object
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QualityGateDecideRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityGateDecisionResult"
+        "400":
+          description: Bad request (e.g. missing comment on rejection)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: content_object not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /quality-gate/queue:
+    get:
+      operationId: qualityGateQueue
+      tags: [quality-gate]
+      summary: List submitted/in-review content_objects for a brand
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: brandId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityGateQueueList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /quality-gate/review:
+    get:
+      operationId: qualityGateReviewDetail
+      tags: [quality-gate]
+      summary: Full review surface for a single content_object
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: contentObjectId
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: brandId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityGateReviewDetailBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /quality-gate/start-from-draft:
+    post:
+      operationId: qualityGateStartFromDraft
+      tags: [quality-gate]
+      summary: Create-or-find a content_object from a project's latest draft
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QualityGateStartFromDraftRequest"
+      responses:
+        "200":
+          description: Reused existing content_object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityGateStartFromDraftResult"
+        "201":
+          description: Created new content_object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityGateStartFromDraftResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No draft found for project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   securitySchemes:
     bearerAuth:
@@ -348,3 +526,139 @@ components:
             $ref: "#/components/schemas/DeadJobRow"
       required:
         - deadJobs
+    QualityGateSubmitRequest:
+      type: object
+      properties:
+        brandId:
+          type: string
+          format: uuid
+        contentObjectId:
+          type: string
+          format: uuid
+      required: [brandId, contentObjectId]
+    QualityGateSubmitResult:
+      type: object
+      properties:
+        qaRunId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+      required: [qaRunId, idempotencyKey]
+    QualityGateDecideRequest:
+      type: object
+      properties:
+        brandId:
+          type: string
+          format: uuid
+        contentObjectId:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [approved, rejected]
+        comment:
+          type: string
+      required: [brandId, contentObjectId, decision]
+    QualityGateDecisionResult:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+    QualityGateQueueItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: [string, "null"]
+        status:
+          type: string
+        word_count:
+          type: [integer, "null"]
+        updated_at:
+          type: string
+          format: date-time
+        qa_run:
+          oneOf:
+            - type: "null"
+            - type: object
+              properties:
+                id: { type: string, format: uuid }
+                status: { type: string }
+                started_at: { type: [string, "null"], format: date-time }
+                finished_at: { type: [string, "null"], format: date-time }
+              required: [id, status]
+      required: [id, status, updated_at]
+    QualityGateQueueList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QualityGateQueueItem"
+      required: [items]
+    QualityGateCheckResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        qa_run_id: { type: string, format: uuid }
+        check_key: { type: string }
+        severity:
+          type: string
+          enum: [hard_fail, warn, info]
+        passed:
+          type: [boolean, "null"]
+        threshold:
+          type: [number, "null"]
+        observed:
+          type: [number, "null"]
+        details:
+          type: [object, "null"]
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, qa_run_id, check_key, severity, created_at]
+    QualityGateReviewDetailBody:
+      type: object
+      properties:
+        contentObject:
+          type: object
+          additionalProperties: true
+        qaRun:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: true
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/QualityGateCheckResult"
+        signoffs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        overrides:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      required: [contentObject, checks, signoffs, overrides]
+    QualityGateStartFromDraftRequest:
+      type: object
+      properties:
+        brandId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+      required: [brandId, projectId]
+    QualityGateStartFromDraftResult:
+      type: object
+      properties:
+        contentObjectId: { type: string, format: uuid }
+        source:
+          type: string
+          enum: [created, reused]
+      required: [contentObjectId, source]

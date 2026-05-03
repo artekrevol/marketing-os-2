@@ -80,3 +80,98 @@ export const GetDeadJobsResponse = zod.object({
     }),
   ),
 });
+
+/**
+ * @summary Submit a content_object for review (kicks off a qa_run)
+ */
+export const QualityGateSubmitBody = zod.object({
+  brandId: zod.string().uuid(),
+  contentObjectId: zod.string().uuid(),
+});
+
+/**
+ * @summary Reviewer approves or rejects a content_object
+ */
+export const QualityGateDecideBody = zod.object({
+  brandId: zod.string().uuid(),
+  contentObjectId: zod.string().uuid(),
+  decision: zod.enum(["approved", "rejected"]),
+  comment: zod.string().optional(),
+});
+
+export const QualityGateDecideResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * @summary List submitted/in-review content_objects for a brand
+ */
+export const QualityGateQueueQueryParams = zod.object({
+  brandId: zod.coerce.string().uuid(),
+});
+
+export const QualityGateQueueResponse = zod.object({
+  items: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      title: zod.string().nullish(),
+      status: zod.string(),
+      word_count: zod.number().nullish(),
+      updated_at: zod.coerce.date(),
+      qa_run: zod
+        .union([
+          zod.null(),
+          zod.object({
+            id: zod.string().uuid(),
+            status: zod.string(),
+            started_at: zod.coerce.date().nullish(),
+            finished_at: zod.coerce.date().nullish(),
+          }),
+        ])
+        .optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Full review surface for a single content_object
+ */
+export const QualityGateReviewDetailQueryParams = zod.object({
+  contentObjectId: zod.coerce.string().uuid(),
+  brandId: zod.coerce.string().uuid(),
+});
+
+export const QualityGateReviewDetailResponse = zod.object({
+  contentObject: zod.record(zod.string(), zod.unknown()),
+  qaRun: zod
+    .union([zod.null(), zod.record(zod.string(), zod.unknown())])
+    .optional(),
+  checks: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      qa_run_id: zod.string().uuid(),
+      check_key: zod.string(),
+      severity: zod.enum(["hard_fail", "warn", "info"]),
+      passed: zod.boolean().nullish(),
+      threshold: zod.number().nullish(),
+      observed: zod.number().nullish(),
+      details: zod.record(zod.string(), zod.unknown()).nullish(),
+      created_at: zod.coerce.date(),
+    }),
+  ),
+  signoffs: zod.array(zod.record(zod.string(), zod.unknown())),
+  overrides: zod.array(zod.record(zod.string(), zod.unknown())),
+});
+
+/**
+ * @summary Create-or-find a content_object from a project's latest draft
+ */
+export const QualityGateStartFromDraftBody = zod.object({
+  brandId: zod.string().uuid(),
+  projectId: zod.string().uuid(),
+});
+
+export const QualityGateStartFromDraftResponse = zod.object({
+  contentObjectId: zod.string().uuid(),
+  source: zod.enum(["created", "reused"]),
+});

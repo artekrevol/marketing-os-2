@@ -28,6 +28,13 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "competitor_pages",
   "keyword_lists",
   "rank_snapshots",
+  // Sprint 3 — Quality Gate
+  "content_objects",
+  "qa_runs",
+  "qa_check_results",
+  "qa_signoffs",
+  "qa_overrides",
+  "qa_check_definitions",
 ]);
 
 /** Brand context attached to a scoped transaction. */

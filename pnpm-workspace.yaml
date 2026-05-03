@@ -38,6 +38,7 @@ packages:
   - artifacts/*
   - lib/*
   - lib/integrations/*
+  - lib/services/*
   - scripts
 
 catalog:
@@ -158,3 +159,10 @@ overrides:
   # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"
+  # All artifacts run React 19 (see catalog `react: 19.1.0`). Several
+  # Radix UI packages declare @types/react@18 as an optional peer, which
+  # causes pnpm to install both 18 and 19 in the same dep tree and TS
+  # then sees two incompatible `ReactNode` types. Pin every dependent
+  # to the 19.x types so JSX/forwardRef components resolve consistently.
+  "@types/react": "^19.2.0"
+  "@types/react-dom": "^19.2.0"

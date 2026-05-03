@@ -5,6 +5,7 @@ import { jobLogger } from "../logger";
 import { handleHeartbeat } from "./heartbeat";
 import { handleDataForSeoSerpTest } from "./dataforseo-test";
 import { handleOriginalityScanTest } from "./originality-test";
+import { handleQaRunChecks } from "./content/qa-run-checks";
 
 type Handler<N extends JobName> = (data: JobData<N>, log: ReturnType<typeof jobLogger>) => Promise<unknown>;
 
@@ -12,6 +13,7 @@ export const HANDLERS: { [N in JobName]: Handler<N> } = {
   "maintenance.heartbeat-noop": handleHeartbeat,
   "integrations.dataforseo-serp-test": handleDataForSeoSerpTest,
   "integrations.originality-ai-scan-test": handleOriginalityScanTest,
+  "content.qa-run-checks": handleQaRunChecks,
 };
 
 /**

@@ -19,18 +19,29 @@ import type {
 import type {
   DeadJobList,
   EnqueueResult,
+  ErrorResponse,
   EventList,
   ForbiddenResponse,
   GetRecentEventsParams,
   HealthStatus,
   HeartbeatFreshness,
+  QualityGateDecideRequest,
+  QualityGateDecisionResult,
+  QualityGateQueueList,
+  QualityGateQueueParams,
+  QualityGateReviewDetailBody,
+  QualityGateReviewDetailParams,
+  QualityGateStartFromDraftRequest,
+  QualityGateStartFromDraftResult,
+  QualityGateSubmitRequest,
+  QualityGateSubmitResult,
   QueueDepths,
   QueueUnavailableResponse,
   UnauthorizedResponse,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -705,3 +716,475 @@ export function useGetDeadJobs<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Submit a content_object for review (kicks off a qa_run)
+ */
+export const getQualityGateSubmitUrl = () => {
+  return `/api/quality-gate/submit`;
+};
+
+export const qualityGateSubmit = async (
+  qualityGateSubmitRequest: QualityGateSubmitRequest,
+  options?: RequestInit,
+): Promise<QualityGateSubmitResult> => {
+  return customFetch<QualityGateSubmitResult>(getQualityGateSubmitUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(qualityGateSubmitRequest),
+  });
+};
+
+export const getQualityGateSubmitMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof qualityGateSubmit>>,
+    TError,
+    { data: BodyType<QualityGateSubmitRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof qualityGateSubmit>>,
+  TError,
+  { data: BodyType<QualityGateSubmitRequest> },
+  TContext
+> => {
+  const mutationKey = ["qualityGateSubmit"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof qualityGateSubmit>>,
+    { data: BodyType<QualityGateSubmitRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return qualityGateSubmit(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type QualityGateSubmitMutationResult = NonNullable<
+  Awaited<ReturnType<typeof qualityGateSubmit>>
+>;
+export type QualityGateSubmitMutationBody = BodyType<QualityGateSubmitRequest>;
+export type QualityGateSubmitMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | ErrorResponse
+>;
+
+/**
+ * @summary Submit a content_object for review (kicks off a qa_run)
+ */
+export const useQualityGateSubmit = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof qualityGateSubmit>>,
+    TError,
+    { data: BodyType<QualityGateSubmitRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof qualityGateSubmit>>,
+  TError,
+  { data: BodyType<QualityGateSubmitRequest> },
+  TContext
+> => {
+  return useMutation(getQualityGateSubmitMutationOptions(options));
+};
+
+/**
+ * @summary Reviewer approves or rejects a content_object
+ */
+export const getQualityGateDecideUrl = () => {
+  return `/api/quality-gate/decide`;
+};
+
+export const qualityGateDecide = async (
+  qualityGateDecideRequest: QualityGateDecideRequest,
+  options?: RequestInit,
+): Promise<QualityGateDecisionResult> => {
+  return customFetch<QualityGateDecisionResult>(getQualityGateDecideUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(qualityGateDecideRequest),
+  });
+};
+
+export const getQualityGateDecideMutationOptions = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof qualityGateDecide>>,
+    TError,
+    { data: BodyType<QualityGateDecideRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof qualityGateDecide>>,
+  TError,
+  { data: BodyType<QualityGateDecideRequest> },
+  TContext
+> => {
+  const mutationKey = ["qualityGateDecide"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof qualityGateDecide>>,
+    { data: BodyType<QualityGateDecideRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return qualityGateDecide(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type QualityGateDecideMutationResult = NonNullable<
+  Awaited<ReturnType<typeof qualityGateDecide>>
+>;
+export type QualityGateDecideMutationBody = BodyType<QualityGateDecideRequest>;
+export type QualityGateDecideMutationError = ErrorType<
+  ErrorResponse | UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Reviewer approves or rejects a content_object
+ */
+export const useQualityGateDecide = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof qualityGateDecide>>,
+    TError,
+    { data: BodyType<QualityGateDecideRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof qualityGateDecide>>,
+  TError,
+  { data: BodyType<QualityGateDecideRequest> },
+  TContext
+> => {
+  return useMutation(getQualityGateDecideMutationOptions(options));
+};
+
+/**
+ * @summary List submitted/in-review content_objects for a brand
+ */
+export const getQualityGateQueueUrl = (params: QualityGateQueueParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/quality-gate/queue?${stringifiedParams}`
+    : `/api/quality-gate/queue`;
+};
+
+export const qualityGateQueue = async (
+  params: QualityGateQueueParams,
+  options?: RequestInit,
+): Promise<QualityGateQueueList> => {
+  return customFetch<QualityGateQueueList>(getQualityGateQueueUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getQualityGateQueueQueryKey = (
+  params?: QualityGateQueueParams,
+) => {
+  return [`/api/quality-gate/queue`, ...(params ? [params] : [])] as const;
+};
+
+export const getQualityGateQueueQueryOptions = <
+  TData = Awaited<ReturnType<typeof qualityGateQueue>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params: QualityGateQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof qualityGateQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getQualityGateQueueQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof qualityGateQueue>>
+  > = ({ signal }) => qualityGateQueue(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof qualityGateQueue>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type QualityGateQueueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof qualityGateQueue>>
+>;
+export type QualityGateQueueQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List submitted/in-review content_objects for a brand
+ */
+
+export function useQualityGateQueue<
+  TData = Awaited<ReturnType<typeof qualityGateQueue>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  params: QualityGateQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof qualityGateQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getQualityGateQueueQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Full review surface for a single content_object
+ */
+export const getQualityGateReviewDetailUrl = (
+  params: QualityGateReviewDetailParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/quality-gate/review?${stringifiedParams}`
+    : `/api/quality-gate/review`;
+};
+
+export const qualityGateReviewDetail = async (
+  params: QualityGateReviewDetailParams,
+  options?: RequestInit,
+): Promise<QualityGateReviewDetailBody> => {
+  return customFetch<QualityGateReviewDetailBody>(
+    getQualityGateReviewDetailUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getQualityGateReviewDetailQueryKey = (
+  params?: QualityGateReviewDetailParams,
+) => {
+  return [`/api/quality-gate/review`, ...(params ? [params] : [])] as const;
+};
+
+export const getQualityGateReviewDetailQueryOptions = <
+  TData = Awaited<ReturnType<typeof qualityGateReviewDetail>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+>(
+  params: QualityGateReviewDetailParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof qualityGateReviewDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getQualityGateReviewDetailQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof qualityGateReviewDetail>>
+  > = ({ signal }) =>
+    qualityGateReviewDetail(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof qualityGateReviewDetail>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type QualityGateReviewDetailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof qualityGateReviewDetail>>
+>;
+export type QualityGateReviewDetailQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | ErrorResponse
+>;
+
+/**
+ * @summary Full review surface for a single content_object
+ */
+
+export function useQualityGateReviewDetail<
+  TData = Awaited<ReturnType<typeof qualityGateReviewDetail>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+>(
+  params: QualityGateReviewDetailParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof qualityGateReviewDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getQualityGateReviewDetailQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create-or-find a content_object from a project's latest draft
+ */
+export const getQualityGateStartFromDraftUrl = () => {
+  return `/api/quality-gate/start-from-draft`;
+};
+
+export const qualityGateStartFromDraft = async (
+  qualityGateStartFromDraftRequest: QualityGateStartFromDraftRequest,
+  options?: RequestInit,
+): Promise<QualityGateStartFromDraftResult> => {
+  return customFetch<QualityGateStartFromDraftResult>(
+    getQualityGateStartFromDraftUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(qualityGateStartFromDraftRequest),
+    },
+  );
+};
+
+export const getQualityGateStartFromDraftMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof qualityGateStartFromDraft>>,
+    TError,
+    { data: BodyType<QualityGateStartFromDraftRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof qualityGateStartFromDraft>>,
+  TError,
+  { data: BodyType<QualityGateStartFromDraftRequest> },
+  TContext
+> => {
+  const mutationKey = ["qualityGateStartFromDraft"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof qualityGateStartFromDraft>>,
+    { data: BodyType<QualityGateStartFromDraftRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return qualityGateStartFromDraft(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type QualityGateStartFromDraftMutationResult = NonNullable<
+  Awaited<ReturnType<typeof qualityGateStartFromDraft>>
+>;
+export type QualityGateStartFromDraftMutationBody =
+  BodyType<QualityGateStartFromDraftRequest>;
+export type QualityGateStartFromDraftMutationError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse | ErrorResponse
+>;
+
+/**
+ * @summary Create-or-find a content_object from a project's latest draft
+ */
+export const useQualityGateStartFromDraft = <
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse | ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof qualityGateStartFromDraft>>,
+    TError,
+    { data: BodyType<QualityGateStartFromDraftRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof qualityGateStartFromDraft>>,
+  TError,
+  { data: BodyType<QualityGateStartFromDraftRequest> },
+  TContext
+> => {
+  return useMutation(getQualityGateStartFromDraftMutationOptions(options));
+};

@@ -3,7 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Download, Code2, Globe, RotateCcw, ExternalLink, Loader2, Copy, FileCode,
-  CheckCircle2, Circle, AlertCircle, FileText,
+  CheckCircle2, Circle, AlertCircle, FileText, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Project, ProofPoint, OutlineSection } from "@/lib/types";
@@ -147,6 +147,74 @@ export default function DraftReview() {
     await supabase.from("projects").update({ current_stage: 3, status: "drafting" }).eq("id", project.id);
     emit("review.sent_back", "project", project.id, {}, project.brand_id ?? null);
     toast.success("Sent back to drafting.");
+  };
+
+  /**
+   * Sprint 3 — hand off the approved draft to the SEO OS quality-gate.
+   * Two-step flow:
+   *   1. POST /api/quality-gate/start-from-draft → idempotently creates
+   *      (or finds) a content_object pinned to this project's latest draft.
+   *   2. POST /api/quality-gate/submit          → flips the row to
+   *      'submitted' and enqueues the qa_run.
+   * On success we navigate to the SEO OS review surface so the writer can
+   * watch the automated checks land in real time.
+   */
+  const [submittingQg, setSubmittingQg] = useState(false);
+  const submitForReview = async () => {
+    if (!project.brand_id) {
+      toast.error("Project has no brand assigned.");
+      return;
+    }
+    setSubmittingQg(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("Not signed in");
+
+      const startRes = await fetch("/api/quality-gate/start-from-draft", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ brandId: project.brand_id, projectId: project.id }),
+      });
+      if (!startRes.ok) {
+        const err = (await startRes.json().catch(() => ({}))) as { message?: string; error?: string };
+        throw new Error(err.message || err.error || `start-from-draft failed (${startRes.status})`);
+      }
+      const { contentObjectId } = (await startRes.json()) as { contentObjectId: string };
+
+      const submitRes = await fetch("/api/quality-gate/submit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ brandId: project.brand_id, contentObjectId }),
+      });
+      if (!submitRes.ok) {
+        const err = (await submitRes.json().catch(() => ({}))) as { message?: string; error?: string };
+        throw new Error(err.message || err.error || `submit failed (${submitRes.status})`);
+      }
+
+      emit(
+        "qualitygate.submitted",
+        "content_object",
+        contentObjectId,
+        { project_id: project.id },
+        project.brand_id ?? null,
+      );
+      toast.success("Submitted to SEO OS quality gate.");
+      // Open the review surface in a new tab so the writer keeps the
+      // ContentForge export view open as a reference.
+      const seoOsUrl = `/seo-os/quality-gate/${contentObjectId}`;
+      window.open(seoOsUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSubmittingQg(false);
+    }
   };
 
   // ----- Empty / gating states ---------------------------------------------
@@ -413,6 +481,15 @@ export default function DraftReview() {
             title="Re-run final-stitch with current section content"
           >
             {stitching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Code2 className="h-3.5 w-3.5" />} Re-stitch
+          </button>
+          <button
+            onClick={submitForReview}
+            disabled={submittingQg}
+            className="text-xs px-3 py-2 bg-accent text-accent-foreground rounded-sm hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5"
+            title="Hand the approved draft to SEO OS for automated checks + reviewer sign-off"
+          >
+            {submittingQg ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+            Submit for review
           </button>
           <button onClick={sendBack} className="text-xs px-3 py-2 bg-ink text-paper rounded-sm hover:bg-accent inline-flex items-center gap-1.5">
             <RotateCcw className="h-3.5 w-3.5" /> Send back to draft

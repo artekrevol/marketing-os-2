@@ -27,7 +27,10 @@ async function main(): Promise<void> {
     const w = new Worker(name, (job: Job) => dispatch(job, name), {
       connection,
       autorun: true,
-      concurrency: name === "ai-jobs" ? 4 : 8,
+      // Sprint 3: `content` queue runs Quality Gate jobs which call
+      // Originality.ai (paid per-credit). Cap concurrency so a backlog
+      // burst can't blow the budget.
+      concurrency: name === "content" ? 5 : 8,
     });
 
     w.on("completed", (job) =>
