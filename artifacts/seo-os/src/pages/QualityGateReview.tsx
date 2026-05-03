@@ -152,15 +152,21 @@ export default function QualityGateReview({ id }: { id: string }) {
   const co = detail.contentObject;
   const run = detail.qaRun;
   const hardFails = detail.checks.filter((c) => c.severity === "hard_fail" && c.passed === false);
-  // Reject (request revision) is allowed any time the run has finished
-  // and the object is still in the reviewer queue. Approve carries the
-  // additional hard-fail gate — the service layer also enforces this,
-  // we just disable the button so reviewers don't get a confusing
-  // round-trip toast.
-  const runFinished = !!run && run.status === "completed";
+  // Reject (request revision) is allowed any time the qa_run has
+  // reached a terminal state and the object is still in the reviewer
+  // queue. The API maps the DB status `passed` → `completed`, but
+  // `failed` and `error` come through unchanged — so a hard-fail run
+  // (status === "failed") is a *finished* run for the purposes of the
+  // reviewer UI, just one where Approve is locked.
+  // Approve carries the additional hard-fail gate — the service layer
+  // enforces this too (HardFailBlockedError → 409); the UI disables
+  // the button so reviewers don't get a confusing round-trip error.
+  const runTerminal =
+    !!run && (run.status === "completed" || run.status === "failed" || run.status === "error");
   const inReviewerQueue = co.status === "submitted" || co.status === "in_review";
-  const rejectDisabled = !runFinished || !inReviewerQueue;
-  const approveDisabled = rejectDisabled || hardFails.length > 0;
+  const rejectDisabled = !runTerminal || !inReviewerQueue;
+  const approveDisabled =
+    rejectDisabled || hardFails.length > 0 || run?.status !== "completed";
 
   return (
     <div className="max-w-5xl mx-auto p-8">
@@ -233,8 +239,8 @@ export default function QualityGateReview({ id }: { id: string }) {
           {rejectDisabled && (
             <p className="text-xs text-unverified mb-3 flex items-center gap-1">
               <AlertTriangle className="h-3 w-3" />
-              {!runFinished
-                ? "Waiting for automated checks to complete."
+              {!runTerminal
+                ? "Waiting for automated checks to finish."
                 : "Not in a decidable state."}
             </p>
           )}

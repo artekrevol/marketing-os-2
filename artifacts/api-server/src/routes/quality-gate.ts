@@ -10,6 +10,7 @@ import {
   callerHasBrandAccess,
   ContentObjectNotFoundError,
   InvalidTransitionError,
+  HardFailBlockedError,
   MissingCommentError,
 } from "@workspace/quality-gate";
 import { requireAuth } from "../middlewares/auth";
@@ -153,6 +154,14 @@ router.post("/decide", async (req, res) => {
   } catch (err) {
     if (err instanceof MissingCommentError) {
       res.status(400).json({ error: "comment_required", message: err.message });
+      return;
+    }
+    if (err instanceof HardFailBlockedError) {
+      // Approve was attempted while the latest qa_run has unresolved
+      // hard-fail checks. The UI should disable approve in this case;
+      // returning 409 (instead of 500) gives the client a deterministic
+      // signal to render an inline error and offer "request revision".
+      res.status(409).json({ error: "hard_fail_blocked", message: err.message });
       return;
     }
     if (err instanceof InvalidTransitionError) {
