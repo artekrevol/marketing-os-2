@@ -146,19 +146,37 @@ create trigger recovery_initiatives_set_updated_at_trg
 --
 -- recovery_initiatives:
 --   SELECT  — admin OR brand_access
---   INSERT/UPDATE/DELETE — admin OR brand_access (lead/admin gating is
---                          enforced at the service layer; RLS just
---                          contains tenant isolation here).
+--   INSERT/UPDATE/DELETE — admin OR (editor with brand_access). The
+--     pack's "admin or lead" wording maps to the existing role enum:
+--     `lead` does not exist; pod leads carry `editor` role. Writers /
+--     strategists / analysts get read-only on initiatives. Service
+--     layer (Prompt 11) layers any additional gating on top.
 --
 -- recovery_snapshots:
 --   SELECT  — admin OR brand_access
 --   INSERT/UPDATE/DELETE — admin only. Worker writes via service_role
 --                          which bypasses RLS entirely.
 ----------------------------------------------------------------------
+-- Helper: admin OR caller has `editor` role AND brand_id is in their
+-- brand_access. SECURITY DEFINER so it can read user_profiles regardless
+-- of caller's RLS visibility on that table.
+create or replace function public.is_admin_or_editor_for_brand(target_brand uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.is_admin()
+      or exists (
+        select 1
+          from public.user_profiles
+         where user_id = auth.uid()
+           and role = 'editor'::public.app_user_role
+           and target_brand = any(brand_access)
+      );
+$$;
+
 do $$
 declare
-  read_pred  text := 'public.is_admin() or brand_id = any(public.current_user_brand_access())';
-  admin_pred text := 'public.is_admin()';
+  read_pred       text := 'public.is_admin() or brand_id = any(public.current_user_brand_access())';
+  admin_pred      text := 'public.is_admin()';
+  initiative_pred text := 'public.is_admin_or_editor_for_brand(brand_id)';
   t text;
 begin
   ----- recovery_baselines: read = standard, write = admin-only -----
@@ -195,13 +213,13 @@ begin
     read_pred);
   execute format(
     'create policy recovery_initiatives_insert on public.recovery_initiatives for insert with check (%s)',
-    read_pred);
+    initiative_pred);
   execute format(
     'create policy recovery_initiatives_update on public.recovery_initiatives for update using (%s) with check (%s)',
-    read_pred, read_pred);
+    initiative_pred, initiative_pred);
   execute format(
     'create policy recovery_initiatives_delete on public.recovery_initiatives for delete using (%s)',
-    read_pred);
+    initiative_pred);
 
   ----- recovery_snapshots: read = standard, write = admin-only (worker uses service_role) -----
   alter table public.recovery_snapshots enable row level security;

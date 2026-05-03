@@ -10,6 +10,7 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "../brands";
+import { userProfilesTable } from "../user-profiles";
 
 /**
  * One row per brand. Locks the pre-October-2025 baseline metrics for
@@ -41,7 +42,9 @@ export const recoveryBaselinesTable = pgTable(
     recoveryConsecutiveDays: integer("recovery_consecutive_days").notNull().default(60),
 
     lockedAt: timestamp("locked_at", { withTimezone: true }).notNull().defaultNow(),
-    lockedBy: uuid("locked_by").notNull(),
+    lockedBy: uuid("locked_by")
+      .notNull()
+      .references(() => userProfilesTable.userId, { onDelete: "restrict" }),
     notes: text("notes"),
   },
   (t) => [

@@ -10,6 +10,7 @@
 //   4. Reference it from worker code only inside `withBrandScope(...)`.
 
 export * from "./brands";
+export * from "./user-profiles";
 export * from "./events";
 export * from "./audit-log";
 export * from "./dead-jobs";

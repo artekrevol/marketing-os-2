@@ -8,6 +8,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "../brands";
+import { userProfilesTable } from "../user-profiles";
 
 /**
  * Manually logged recovery work. Brand-scoped (Pattern A). RLS: read
@@ -39,7 +40,9 @@ export const recoveryInitiativesTable = pgTable(
 
     actualImpactClicks14d: integer("actual_impact_clicks_14d"),
 
-    createdBy: uuid("created_by").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => userProfilesTable.userId, { onDelete: "restrict" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
