@@ -58,20 +58,29 @@ export const requireAuth: RequestHandler = async (
   const userId = claims.sub as string;
   const email = (claims["email"] as string | undefined) ?? null;
 
-  // Resolve admin status. Check both legacy user_roles and Sprint 1 user_profiles.role.
+  // Resolve admin status. Check Sprint 1 `user_profiles.role` first, then
+  // fall back to the legacy `user_roles` table. Each query is wrapped in
+  // its own try/catch so that a missing table on either side never locks
+  // legitimate admins out (e.g. environments where `user_roles` was never
+  // provisioned).
   let isAdmin = false;
   try {
-    const result = await db.execute(
-      sql`select exists(
-        select 1 from public.user_roles where user_id = ${userId}::uuid and role = 'admin'
-      ) or exists(
-        select 1 from public.user_profiles where user_id = ${userId}::uuid and role = 'admin'
-      ) as is_admin`,
+    const r = await db.execute(
+      sql`select 1 as ok from public.user_profiles where user_id = ${userId}::uuid and role = 'admin' limit 1`,
     );
-    const rows = (result as unknown as { rows: { is_admin: boolean }[] }).rows;
-    isAdmin = rows[0]?.is_admin === true;
+    if ((r as unknown as { rows: unknown[] }).rows.length > 0) isAdmin = true;
   } catch (err) {
-    req.log?.warn({ err }, "auth: admin lookup failed");
+    req.log?.warn({ err }, "auth: user_profiles admin lookup failed");
+  }
+  if (!isAdmin) {
+    try {
+      const r = await db.execute(
+        sql`select 1 as ok from public.user_roles where user_id = ${userId}::uuid and role = 'admin' limit 1`,
+      );
+      if ((r as unknown as { rows: unknown[] }).rows.length > 0) isAdmin = true;
+    } catch (err) {
+      req.log?.warn({ err }, "auth: user_roles admin lookup failed");
+    }
   }
 
   req.auth = { userId, email, isAdmin };

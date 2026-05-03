@@ -1,70 +1,223 @@
 /**
- * Unit tests for withBrandScope.
+ * Unit tests for withBrandScope + ScopedDb middleware.
  *
- * These tests require a live Postgres + DATABASE_URL pointing to the
- * Sprint 1 schema (brands + projects + RLS). They auto-skip when
- * DATABASE_URL is not set so CI can run without a database.
+ * Tests that depend on a live Postgres auto-skip when DATABASE_URL is
+ * absent. The pure-helper tests run unconditionally so CI catches
+ * regressions without a database.
+ *
+ * Required scenarios (per Sprint 2 acceptance):
+ *   1. assertBrandScope — pass / mismatch / missing
+ *   2. ScopedDb refuses non-brand-scoped tables
+ *   3. ScopedDb.insert auto-stamps brand_id; cross-brand throws
+ *   4. ScopedDb.update refuses mutation of brand_id
+ *   5. ScopedDb.select / .update / .delete only see scope's brand
+ *      (cross-brand reads return 0 rows; cross-brand writes are no-ops)
  */
-import { describe, it, expect } from "vitest";
-import { sql } from "drizzle-orm";
+import { describe, it, expect, beforeAll } from "vitest";
+import { sql, eq } from "drizzle-orm";
 import { db } from "../src/index";
 import { withBrandScope, assertBrandScope } from "../src/brand-scope";
-import { projectsTable, brandsTable } from "../src/schema";
+import {
+  BrandScopeViolationError,
+  ScopedDb,
+} from "../src/middleware";
+import { projectsTable, brandsTable, eventsTable } from "../src/schema";
 
-const HAS_DB = Boolean(process.env.DATABASE_URL);
-const d = HAS_DB ? describe : describe.skip;
+// Live-DB tests require a Postgres reachable via DATABASE_URL with the
+// Sprint 1 schema applied (brands + projects). When DATABASE_URL is
+// unset OR the brands table is missing (e.g. a fresh Replit DB without
+// migrations), we skip so CI is not gated on a fully-seeded environment.
+const HAS_URL = Boolean(process.env.DATABASE_URL);
+let SCHEMA_READY = false;
+const dbDescribe = HAS_URL ? describe : describe.skip;
 
-d("withBrandScope", () => {
-  it("rejects missing brandId", async () => {
-    // @ts-expect-error – intentional misuse
+describe("assertBrandScope", () => {
+  it("passes when brand_id matches (camelCase)", () => {
+    expect(() => assertBrandScope("b1", { brandId: "b1" })).not.toThrow();
+  });
+  it("passes when brand_id matches (snake_case)", () => {
+    expect(() => assertBrandScope("b1", { brand_id: "b1" })).not.toThrow();
+  });
+  it("throws on mismatch", () => {
+    expect(() => assertBrandScope("b1", { brandId: "b2" })).toThrow(/mismatch/);
+  });
+  it("throws when brand_id missing", () => {
+    expect(() => assertBrandScope("b1", {})).toThrow(/missing/);
+  });
+});
+
+describe("ScopedDb runtime guards (no DB required)", () => {
+  // Use a fake tx — these tests assert the guard fires BEFORE any SQL is executed.
+  const fakeTx = {} as never;
+  const scoped = new ScopedDb("b-fixture", fakeTx);
+
+  it("refuses select against a non-brand-scoped table", () => {
+    expect(() => scoped.select(eventsTable)).toThrow(BrandScopeViolationError);
+    expect(() => scoped.select(eventsTable)).toThrow(/not in BRAND_SCOPED_TABLES/);
+  });
+
+  it("refuses insert against a non-brand-scoped table", async () => {
+    await expect(
+      scoped.insert(eventsTable, { eventType: "x", subjectType: "y", subjectId: "z" }),
+    ).rejects.toThrow(BrandScopeViolationError);
+  });
+
+  it("refuses update against a non-brand-scoped table", async () => {
+    await expect(scoped.update(eventsTable, { subjectId: "x" })).rejects.toThrow(
+      BrandScopeViolationError,
+    );
+  });
+
+  it("refuses delete against a non-brand-scoped table", async () => {
+    await expect(scoped.delete(eventsTable)).rejects.toThrow(BrandScopeViolationError);
+  });
+
+  it("refuses cross-brand insert (row brand_id != scope)", async () => {
+    await expect(
+      scoped.insert(projectsTable, {
+        brandId: "b-other",
+        topic: "x",
+        contentType: "blog",
+      }),
+    ).rejects.toThrow(/cross_brand_insert|does not match scope/);
+  });
+
+  it("refuses update that would mutate brand_id", async () => {
+    await expect(
+      scoped.update(projectsTable, { brandId: "b-other", topic: "y" }),
+    ).rejects.toThrow(/cannot mutate brand_id|mutate_brand_id/);
+  });
+});
+
+dbDescribe("withBrandScope (live DB)", () => {
+  beforeAll(async () => {
+    try {
+      await db.select({ id: brandsTable.id }).from(brandsTable).limit(1);
+      SCHEMA_READY = true;
+    } catch {
+      SCHEMA_READY = false;
+      // eslint-disable-next-line no-console
+      console.warn("[brand-scope.test] brands table not found — live-DB tests skipped");
+    }
+  });
+
+  it("rejects empty brandId", async () => {
     await expect(withBrandScope("", async () => 1)).rejects.toThrow();
   });
 
   it("sets app.current_brand inside the transaction", async () => {
-    const [{ id: brandId }] = await db.select({ id: brandsTable.id }).from(brandsTable).limit(1);
-    expect(brandId).toBeDefined();
-    const got = await withBrandScope(brandId, async ({ db: tx }) => {
-      const result = await tx.execute(sql`select current_setting('app.current_brand', true) as v`);
-      // node-postgres returns rows on .rows
-      const rows = (result as unknown as { rows: { v: string }[] }).rows;
-      return rows[0]?.v;
+    if (!SCHEMA_READY) return;
+    const [{ id: brandId }] = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(1);
+    expect(brandId).toBeTruthy();
+    const got = await withBrandScope(brandId!, async ({ db: tx }) => {
+      const r = await tx.execute(sql`select current_setting('app.current_brand', true) as v`);
+      return (r as unknown as { rows: { v: string }[] }).rows[0]?.v;
     });
     expect(got).toBe(brandId);
   });
 
-  it("assertBrandScope passes when brand_id matches", () => {
-    expect(() => assertBrandScope("b1", { brandId: "b1" })).not.toThrow();
-    expect(() => assertBrandScope("b1", { brand_id: "b1" })).not.toThrow();
-  });
+  it("scope.scoped.insert succeeds and stamps brand_id from scope", async () => {
+    if (!SCHEMA_READY) return;
+    const [{ id: brandId }] = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(1);
+    const topic = `scope-insert-ok-${Date.now()}`;
+    let insertedId: string | undefined;
 
-  it("assertBrandScope throws on mismatch", () => {
-    expect(() => assertBrandScope("b1", { brandId: "b2" })).toThrow(/mismatch/);
-  });
-
-  it("assertBrandScope throws when brand_id missing", () => {
-    expect(() => assertBrandScope("b1", {})).toThrow(/missing/);
-  });
-
-  it("inserts succeed when brand_id matches scope", async () => {
-    const [{ id: brandId }] = await db.select({ id: brandsTable.id }).from(brandsTable).limit(1);
-    await withBrandScope(brandId, async ({ db: tx, brandId: scopeBrand }) => {
-      const row = { brandId: scopeBrand, topic: `scope-test-${Date.now()}`, contentType: "blog" };
-      assertBrandScope(scopeBrand, row);
-      const inserted = await tx.insert(projectsTable).values(row).returning({ id: projectsTable.id });
-      expect(inserted[0]?.id).toBeDefined();
-      // rollback so the test doesn't pollute the database
-      await tx.execute(sql`select 1 / 0`).catch(() => {});
-    }).catch(() => {});
-  });
-
-  it("rejects cross-brand inserts via assertBrandScope", async () => {
-    const rows = await db.select({ id: brandsTable.id }).from(brandsTable).limit(2);
-    if (rows.length < 2) return; // need at least two brands
-    const [a, b] = rows;
+    // Use savepoint-style rollback: throw a sentinel at the end so the
+    // outer transaction rolls back without polluting the database, but
+    // the assertion result is captured before the throw.
+    class Rollback extends Error {}
     await expect(
-      withBrandScope(a.id, async ({ brandId }) => {
-        assertBrandScope(brandId, { brandId: b.id, topic: "x", contentType: "blog" });
+      withBrandScope(brandId!, async ({ scoped }) => {
+        const rows = (await scoped.insert(
+          projectsTable,
+          { topic, contentType: "blog" },
+          { returning: true },
+        )) as { id: string; brandId: string }[];
+        insertedId = rows[0]?.id;
+        expect(insertedId).toBeTruthy();
+        expect(rows[0]?.brandId).toBe(brandId);
+        throw new Rollback("intentional rollback");
       }),
-    ).rejects.toThrow(/mismatch/);
+    ).rejects.toThrow(Rollback);
+
+    // Confirm the row is gone after rollback.
+    const after = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(eq(projectsTable.topic, topic));
+    expect(after).toHaveLength(0);
+  });
+
+  it("scope.scoped.select only sees the scope's brand", async () => {
+    if (!SCHEMA_READY) return;
+    const rows = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(2);
+    if (rows.length < 2) return;
+    const [a, b] = rows;
+    const topicA = `scope-iso-A-${Date.now()}`;
+    const topicB = `scope-iso-B-${Date.now()}`;
+
+    class Rollback extends Error {}
+    await expect(
+      withBrandScope(a!.id, async ({ scoped, db: tx }) => {
+        // Seed one project under scope A, one directly under brand B (raw tx).
+        await scoped.insert(projectsTable, { topic: topicA, contentType: "blog" });
+        await tx
+          .insert(projectsTable)
+          .values({ brandId: b!.id, topic: topicB, contentType: "blog" });
+
+        // ScopedDb.select MUST return only the scope-A row.
+        const seen = (await scoped.select(projectsTable)) as Array<{
+          id: string;
+          brand_id: string;
+          topic: string;
+        }>;
+        const topics = seen.map((r) => r.topic);
+        expect(topics).toContain(topicA);
+        expect(topics).not.toContain(topicB);
+
+        throw new Rollback("intentional rollback");
+      }),
+    ).rejects.toThrow(Rollback);
+  });
+
+  it("scope.scoped.delete cannot delete other brand's rows", async () => {
+    if (!SCHEMA_READY) return;
+    const rows = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(2);
+    if (rows.length < 2) return;
+    const [a, b] = rows;
+    const topicB = `scope-del-B-${Date.now()}`;
+
+    class Rollback extends Error {}
+    await expect(
+      withBrandScope(a!.id, async ({ scoped, db: tx }) => {
+        await tx
+          .insert(projectsTable)
+          .values({ brandId: b!.id, topic: topicB, contentType: "blog" });
+
+        // Try to delete brand-B rows from inside scope A — must be a no-op.
+        await scoped.delete(projectsTable, eq(projectsTable.topic, topicB));
+
+        // Verify the row still exists.
+        const stillThere = await tx
+          .select({ id: projectsTable.id })
+          .from(projectsTable)
+          .where(eq(projectsTable.topic, topicB));
+        expect(stillThere).toHaveLength(1);
+
+        throw new Rollback("intentional rollback");
+      }),
+    ).rejects.toThrow(Rollback);
   });
 });
