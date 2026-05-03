@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "ContentForge"
+version = "1.0.0"
+id = "artifacts/insight-forge"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20419
+
+[services.development]
+run = "pnpm --filter @workspace/insight-forge run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/insight-forge", "run", "build" ]
+publicDir = "artifacts/insight-forge/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20419"
+BASE_PATH = "/"
