@@ -1,4 +1,4 @@
-import { db, integrationCallLogTable } from "@workspace/db";
+import { guardedDb as db, integrationCallLogTable } from "@workspace/db";
 import { DataForSEOError } from "./errors";
 import { TokenBucket } from "./rate-limit";
 import {

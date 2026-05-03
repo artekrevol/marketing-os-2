@@ -1,4 +1,4 @@
-import { db, eventsTable } from "@workspace/db";
+import { guardedDb as db, eventsTable } from "@workspace/db";
 import type { Job } from "bullmq";
 import type { Logger } from "pino";
 

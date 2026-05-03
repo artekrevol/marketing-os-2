@@ -1,4 +1,4 @@
-import { db, eventsTable } from "@workspace/db";
+import { guardedDb as db, eventsTable } from "@workspace/db";
 import type { JobData } from "@workspace/jobs";
 import { DataForSEOClient } from "@workspace/integrations-dataforseo";
 import type { Logger } from "pino";

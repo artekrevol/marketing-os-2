@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { db, eventsTable } from "@workspace/db";
+import { guardedDb as db, eventsTable } from "@workspace/db";
 import type { Logger } from "pino";
 
 /**

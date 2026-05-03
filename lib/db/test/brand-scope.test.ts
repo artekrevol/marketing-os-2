@@ -32,6 +32,23 @@ const HAS_URL = Boolean(process.env.DATABASE_URL);
 let SCHEMA_READY = false;
 const dbDescribe = HAS_URL ? describe : describe.skip;
 
+describe("guardedDb (root export — protects worker tier)", () => {
+  it("throws when worker code calls insert() on a brand-scoped table outside withBrandScope", async () => {
+    const { guardedDb } = await import("../src/index");
+    expect(() => guardedDb.insert(projectsTable).values({ brandId: "b1", name: "x" } as never)).toThrow(
+      BrandScopeViolationError,
+    );
+  });
+  it("throws when worker code calls select().from() on a brand-scoped table outside withBrandScope", async () => {
+    const { guardedDb } = await import("../src/index");
+    expect(() => guardedDb.select().from(projectsTable)).toThrow(BrandScopeViolationError);
+  });
+  it("allows select().from() on system tables (events) without scope", async () => {
+    const { guardedDb } = await import("../src/index");
+    expect(() => guardedDb.select().from(eventsTable)).not.toThrow();
+  });
+});
+
 describe("stampBrandId (pure transform — no DB required)", () => {
   it("emits Drizzle camelCase `brandId` (not `brand_id`)", () => {
     const out = stampBrandId("b1", { topic: "t" });

@@ -7,7 +7,7 @@
  * Requires the worker process to be running (Railway or `pnpm dev`).
  */
 import { sql } from "drizzle-orm";
-import { db, eventsTable } from "@workspace/db";
+import { guardedDb as db, eventsTable } from "@workspace/db";
 import { enqueue, closeAllQueues, closeRedisConnection } from "@workspace/jobs";
 
 const TIMEOUT_MS = 5_000;

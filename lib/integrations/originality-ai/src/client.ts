@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { db, integrationCallLogTable } from "@workspace/db";
+import { guardedDb as db, integrationCallLogTable } from "@workspace/db";
 import { OriginalityAIError } from "./errors";
 
 const BASE = "https://api.originality.ai/api/v1";
