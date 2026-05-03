@@ -57,7 +57,11 @@ export const UpdateInitiativeInputSchema = z.object({
   expectedImpactPct: z.number().nullable().optional(),
   expectedImpactClicks: z.number().int().nullable().optional(),
   startedAt: z.coerce.date().optional(),
-  status: RecoveryInitiativeStatusSchema.optional(),
+  // `completed` is intentionally not accepted here — completion has
+  // side effects (timestamp + delayed BullMQ impact job) that only
+  // `completeInitiative` performs. Allow transitions among the other
+  // statuses (e.g. paused/abandoned).
+  status: RecoveryInitiativeStatusSchema.exclude(["completed"]).optional(),
 });
 export type UpdateInitiativeInput = z.infer<typeof UpdateInitiativeInputSchema>;
 
