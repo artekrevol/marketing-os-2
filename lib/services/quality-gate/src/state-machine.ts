@@ -7,10 +7,17 @@ import { InvalidTransitionError } from "./errors";
  * Allowed transitions:
  *
  *   drafting   → submitted   (writer presses "Submit for Review")
- *   submitted  → in_review   (qa_run completes with status='passed')
- *   submitted  → drafting    (qa_run completes with status='failed' — auto-bounce)
- *   in_review  → approved    (reviewer approves)
- *   in_review  → rejected    (reviewer rejects with comment)
+ *   submitted  → in_review   (qa_run reaches a terminal state — passed,
+ *                             failed, or error). Hard-failed and errored
+ *                             runs LAND in the reviewer queue (not
+ *                             auto-bounced to drafting). The reviewer
+ *                             can only request revisions for them; the
+ *                             approve path is gated in `decide()`.
+ *   in_review  → approved    (reviewer approves — only when the latest
+ *                             qa_run.status is 'passed'; enforced in
+ *                             `decide()`, not the transition table)
+ *   in_review  → rejected    (reviewer rejects with a comment; always
+ *                             allowed regardless of qa_run outcome)
  *   rejected   → drafting    (writer reopens to revise)
  *
  * Any other transition throws `InvalidTransitionError`. The state
@@ -19,7 +26,7 @@ import { InvalidTransitionError } from "./errors";
  */
 const TRANSITIONS: Record<ContentStatus, ReadonlyArray<ContentStatus>> = {
   drafting:  ["submitted"],
-  submitted: ["in_review", "drafting"],
+  submitted: ["in_review"],
   in_review: ["approved", "rejected"],
   approved:  [],
   rejected:  ["drafting"],
@@ -36,24 +43,35 @@ export function assertTransition(from: ContentStatus, to: ContentStatus): void {
 }
 
 /**
- * Map a completed QA run to the next content_object.status.
- *
- *   passed → in_review
- *   failed → drafting       (auto-bounce, writer fixes and resubmits)
- *   error  → drafting       (handler crashed — surface to writer)
+ * Map a completed QA run to the next content_object.status. All three
+ * terminal qa_run states funnel into `in_review` so the reviewer queue
+ * is the single source of truth for "needs human attention". Approve
+ * is hard-gated in `decide()` for failed/errored runs — the queue UI
+ * surfaces the qa_run status so reviewers know which runs are
+ * approve-eligible vs revision-only.
  *
  * `queued` and `running` are non-terminal and never feed this function.
  */
 export function statusFromQaRun(qaStatus: QaRunStatus): ContentStatus {
   switch (qaStatus) {
     case "passed":
-      return "in_review";
     case "failed":
     case "error":
-      return "drafting";
+      return "in_review";
     default:
       throw new Error(
         `statusFromQaRun: cannot derive content status from qa_run status="${qaStatus}"`,
       );
   }
+}
+
+/**
+ * Returns true if a reviewer is allowed to approve a content_object
+ * whose latest qa_run has the given status. Only `passed` qualifies.
+ * `null` (no qa_run yet) and any non-terminal/failed status block
+ * approval. Rejection / request-revision is allowed regardless and is
+ * not routed through this guard.
+ */
+export function canApproveForQaStatus(qaStatus: QaRunStatus | null): boolean {
+  return qaStatus === "passed";
 }

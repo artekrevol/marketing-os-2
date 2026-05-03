@@ -27,8 +27,9 @@ import {
   MissingCommentError,
   NotImplementedError,
   InvalidTransitionError,
+  HardFailBlockedError,
 } from "./errors";
-import { assertTransition, statusFromQaRun } from "./state-machine";
+import { assertTransition, statusFromQaRun, canApproveForQaStatus } from "./state-machine";
 import type { DbClient } from "@workspace/db";
 
 /**
@@ -190,6 +191,21 @@ export async function decide(
       throw new InvalidTransitionError(obj.status as ContentStatus, input.decision);
     }
     assertTransition(obj.status as ContentStatus, input.decision);
+
+    // Hard-fail gate: approve is blocked when the latest qa_run did not
+    // pass. Reject (request revision) is always allowed so reviewers can
+    // bounce a failed run back to the writer with a comment.
+    if (input.decision === "approved") {
+      const latestRuns = (await scoped.select(qaRunsTable, {
+        where: eq(qaRunsTable.contentObjectId, input.contentObjectId),
+        orderBy: desc(qaRunsTable.createdAt),
+        limit: 1,
+      })) as QaRun[];
+      const qaStatus = latestRuns[0]?.status ?? null;
+      if (!canApproveForQaStatus(qaStatus as never)) {
+        throw new HardFailBlockedError(qaStatus);
+      }
+    }
 
     const inserted = (await scoped.insert(
       qaSignoffsTable,

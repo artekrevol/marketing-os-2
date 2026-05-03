@@ -5,7 +5,14 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { BrandProvider, useActiveBrand } from "@/lib/brands";
 
-type AuthState = "loading" | "in" | "out" | "blocked";
+type AuthState = "loading" | "in" | "out" | "blocked" | "writer";
+
+/**
+ * Roles allowed to enter SEO OS. Sprint 3 D2 locks this to admins and
+ * reviewers; writers / strategists / analysts / editors stay in
+ * ContentForge and only see the submitted-status view there.
+ */
+const SEO_OS_ROLES = new Set(["admin", "reviewer"]);
 
 /**
  * Auth shell. Mirrors the ContentForge auth-lock pattern: never await
@@ -35,9 +42,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
       const e = (session.user?.email || "").toLowerCase();
       setEmail(e);
       setUserId(session.user!.id);
-      const isTek = e.endsWith("@tekrevol.com");
-      if (isTek) setAuthState("in");
 
+      // SEO OS is reviewer-or-admin only. We must not flip the user
+      // "in" before the role lookup resolves — that would briefly
+      // expose the review surface to writers.
       setTimeout(async () => {
         if (cancelled) return;
         try {
@@ -50,20 +58,29 @@ export default function AppShell({ children }: { children: ReactNode }) {
               .maybeSingle(),
           ]);
           if (cancelled) return;
+          const profileRole = (profile as { role?: string } | null)?.role ?? null;
           const admin =
             !!(roles ?? []).find((r: { role: string }) => r.role === "admin") ||
-            (profile as { role?: string } | null)?.role === "admin";
+            profileRole === "admin";
           setIsAdmin(!!admin);
           const access: string[] =
             ((profile as { brand_access?: string[] } | null)?.brand_access) ?? [];
-          if (!isTek) {
-            setAuthState(admin || access.length > 0 ? "in" : "blocked");
+
+          if (admin || (profileRole && SEO_OS_ROLES.has(profileRole))) {
+            setAuthState("in");
+          } else if (access.length > 0 || profileRole) {
+            // User exists in the system but isn't a reviewer/admin —
+            // surface the writer-facing message instead of a generic
+            // "no brand access" block.
+            setAuthState("writer");
+          } else {
+            setAuthState("blocked");
           }
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn("[AppShell] role/profile lookup failed:", err);
           if (cancelled) return;
-          if (!isTek) setAuthState("blocked");
+          setAuthState("blocked");
         }
       }, 0);
     };
@@ -114,10 +131,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <div className="max-w-sm border border-rule rounded-md bg-background p-8 text-center">
           <h1 className="font-serif text-xl mb-2">Access denied</h1>
           <p className="text-sm text-ink-muted mb-1">
-            <span className="font-mono">{email}</span> has no brand access yet.
+            <span className="font-mono">{email}</span> has no profile yet.
           </p>
           <p className="text-sm text-ink-muted mb-6">
-            Ask an admin to grant brand access in ContentForge → Users &amp; access.
+            Ask an admin to set up your account in ContentForge → Users &amp; access.
           </p>
           <button
             onClick={signOut}
@@ -125,6 +142,37 @@ export default function AppShell({ children }: { children: ReactNode }) {
           >
             Sign out
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (authState === "writer") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-paper text-ink px-6">
+        <div className="max-w-md border border-rule rounded-md bg-background p-8 text-center">
+          <h1 className="font-serif text-xl mb-2">SEO OS is for reviewers</h1>
+          <p className="text-sm text-ink-muted mb-1">
+            <span className="font-mono">{email}</span> isn’t a reviewer or admin.
+          </p>
+          <p className="text-sm text-ink-muted mb-6">
+            Writers stay in ContentForge — submitted drafts surface there with
+            their QA status. Ask an admin if you need the reviewer role.
+          </p>
+          <div className="flex items-center justify-center gap-2">
+            <a
+              href="/insight-forge"
+              className="bg-ink text-paper px-4 py-2 rounded-sm text-sm font-medium hover:bg-accent"
+            >
+              Open ContentForge
+            </a>
+            <button
+              onClick={signOut}
+              className="border border-rule px-4 py-2 rounded-sm text-sm font-medium hover:bg-secondary"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </div>
     );

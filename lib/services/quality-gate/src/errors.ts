@@ -22,6 +22,21 @@ export class MissingCommentError extends Error {
   }
 }
 
+/**
+ * Thrown when a reviewer attempts to approve a content_object whose
+ * latest qa_run did not pass. Hard-failed runs may only be sent back
+ * for revision (or override-approved in Sprint 3 Part 2).
+ */
+export class HardFailBlockedError extends Error {
+  constructor(public readonly qaStatus: string | null) {
+    super(
+      `Quality gate: cannot approve — latest QA run is "${qaStatus ?? "missing"}". ` +
+        `Request revision instead, or use the override path (Part 2).`,
+    );
+    this.name = "HardFailBlockedError";
+  }
+}
+
 /** Thrown by the override path. Override modal is out of scope for Sprint 3 Part 1. */
 export class NotImplementedError extends Error {
   constructor(feature: string) {

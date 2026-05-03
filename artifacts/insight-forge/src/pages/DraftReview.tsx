@@ -156,10 +156,13 @@ export default function DraftReview() {
    *      (or finds) a content_object pinned to this project's latest draft.
    *   2. POST /api/quality-gate/submit          → flips the row to
    *      'submitted' and enqueues the qa_run.
-   * On success we navigate to the SEO OS review surface so the writer can
-   * watch the automated checks land in real time.
+   *
+   * D2 keeps writers in ContentForge: instead of opening SEO OS we
+   * render a "Submitted, awaiting review" panel here. The reviewer
+   * surface lives in SEO OS and is gated to admin/reviewer roles.
    */
   const [submittingQg, setSubmittingQg] = useState(false);
+  const [submittedContentObjectId, setSubmittedContentObjectId] = useState<string | null>(null);
   const submitForReview = async () => {
     if (!project.brand_id) {
       toast.error("Project has no brand assigned.");
@@ -205,11 +208,8 @@ export default function DraftReview() {
         { project_id: project.id },
         project.brand_id ?? null,
       );
-      toast.success("Submitted to SEO OS quality gate.");
-      // Open the review surface in a new tab so the writer keeps the
-      // ContentForge export view open as a reference.
-      const seoOsUrl = `/seo-os/quality-gate/${contentObjectId}`;
-      window.open(seoOsUrl, "_blank", "noopener,noreferrer");
+      setSubmittedContentObjectId(contentObjectId);
+      toast.success("Submitted for review. A reviewer will pick this up shortly.");
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -219,6 +219,17 @@ export default function DraftReview() {
 
   // ----- Empty / gating states ---------------------------------------------
   if (loading) return <div className="p-12 text-ink-muted">Loading review…</div>;
+
+  // After submit: keep the writer in ContentForge with a status view.
+  // Writers do not navigate to SEO OS — that surface is reviewer-only.
+  if (submittedContentObjectId) {
+    return (
+      <SubmittedForReview
+        contentObjectId={submittedContentObjectId}
+        onReturn={() => setSubmittedContentObjectId(null)}
+      />
+    );
+  }
 
   if (!allApproved) {
     return (
@@ -495,6 +506,128 @@ export default function DraftReview() {
             <RotateCcw className="h-3.5 w-3.5" /> Send back to draft
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * After submit: writers stay in ContentForge with a live status panel
+ * fed by Supabase Realtime on `content_objects` + `qa_runs`. They never
+ * navigate to SEO OS; that surface is gated to admin/reviewer roles.
+ */
+function SubmittedForReview({
+  contentObjectId,
+  onReturn,
+}: {
+  contentObjectId: string;
+  onReturn: () => void;
+}) {
+  const [obj, setObj] = useState<{ status: string; title: string } | null>(null);
+  const [run, setRun] = useState<{
+    status: string;
+    started_at: string | null;
+    completed_at: string | null;
+    summary: any;
+  } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      // content_objects and qa_runs are Sprint 3 tables not yet in
+      // the generated Supabase types; cast to `any` until the types
+      // regen lands.
+      const sb = supabase as any;
+      const [{ data: o }, { data: r }] = await Promise.all([
+        sb
+          .from("content_objects")
+          .select("status,title")
+          .eq("id", contentObjectId)
+          .maybeSingle(),
+        sb
+          .from("qa_runs")
+          .select("status,started_at,completed_at,summary")
+          .eq("content_object_id", contentObjectId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (!mounted) return;
+      if (o) setObj(o as any);
+      if (r) setRun(r as any);
+    };
+    load();
+    const ch = supabase
+      .channel(`co-${contentObjectId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "content_objects", filter: `id=eq.${contentObjectId}` },
+        load,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "qa_runs", filter: `content_object_id=eq.${contentObjectId}` },
+        load,
+      )
+      .subscribe();
+    return () => {
+      mounted = false;
+      supabase.removeChannel(ch);
+    };
+  }, [contentObjectId]);
+
+  const tone =
+    obj?.status === "approved"
+      ? "text-verified"
+      : obj?.status === "rejected"
+        ? "text-danger"
+        : "text-accent";
+
+  const qaLabel: Record<string, string> = {
+    queued: "Queued — checks haven’t started yet.",
+    running: "Running automated checks…",
+    passed: "All hard checks passed. Awaiting reviewer sign-off.",
+    failed: "One or more hard checks failed. Reviewer will request revisions.",
+    error: "A check errored out. Reviewer will pick it up.",
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto px-10 py-16">
+      <p className="text-[10px] uppercase tracking-widest text-ink-muted">Stage 4 · Submitted</p>
+      <h2 className="font-serif text-2xl mt-1">{obj?.title ?? "Submitted for review"}</h2>
+      <p className="text-sm text-ink-muted mt-2">
+        Your draft is in the reviewer queue. You can leave this page —
+        you’ll see the decision back here when a reviewer signs off.
+      </p>
+
+      <div className="mt-8 border border-rule rounded-sm divide-y divide-rule">
+        <div className="flex items-center justify-between px-4 py-3">
+          <span className="text-xs uppercase tracking-widest text-ink-muted">Status</span>
+          <span className={`text-sm font-medium ${tone}`}>{obj?.status ?? "submitted"}</span>
+        </div>
+        <div className="flex items-center justify-between px-4 py-3">
+          <span className="text-xs uppercase tracking-widest text-ink-muted">QA run</span>
+          <span className="text-sm">
+            {run?.status ? qaLabel[run.status] ?? run.status : "Queued — checks haven’t started yet."}
+          </span>
+        </div>
+        {run?.summary && Object.keys(run.summary).length > 0 && (
+          <div className="px-4 py-3 text-xs text-ink-muted">
+            <pre className="font-mono whitespace-pre-wrap">{JSON.stringify(run.summary, null, 2)}</pre>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 flex items-center gap-2">
+        <button
+          onClick={onReturn}
+          className="text-xs px-3 py-2 border border-rule rounded-sm hover:bg-secondary"
+        >
+          Back to export view
+        </button>
+        <span className="text-[11px] text-ink-muted font-mono">
+          content_object: {contentObjectId.slice(0, 8)}…
+        </span>
       </div>
     </div>
   );
