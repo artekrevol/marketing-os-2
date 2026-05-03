@@ -368,6 +368,7 @@ export type Database = {
         Row: {
           ai_proposed_brief: Json | null
           benchmark_url: string | null
+          brand_id: string
           brief_confirmed_at: string | null
           brief_error: string | null
           company_domain: string | null
@@ -395,6 +396,7 @@ export type Database = {
         Insert: {
           ai_proposed_brief?: Json | null
           benchmark_url?: string | null
+          brand_id: string
           brief_confirmed_at?: string | null
           brief_error?: string | null
           company_domain?: string | null
@@ -422,6 +424,7 @@ export type Database = {
         Update: {
           ai_proposed_brief?: Json | null
           benchmark_url?: string | null
+          brand_id?: string
           brief_confirmed_at?: string | null
           brief_error?: string | null
           company_domain?: string | null

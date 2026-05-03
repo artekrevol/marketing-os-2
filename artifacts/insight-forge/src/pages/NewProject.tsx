@@ -83,6 +83,9 @@ export default function NewProject() {
         console.warn("[NewProject] brand resolution failed", e);
       }
 
+      if (!activeBrandId) {
+        throw new Error("No brand selected. Ask an admin to grant brand access.");
+      }
       const { data: project, error } = await supabase
         .from("projects")
         .insert({
@@ -94,8 +97,8 @@ export default function NewProject() {
           status: "proposing_brief",
           current_stage: 0,
           created_by: user.id,
-          ...(activeBrandId ? { brand_id: activeBrandId } : {}),
-        } as any)
+          brand_id: activeBrandId,
+        })
         .select()
         .single();
       if (error) throw error;

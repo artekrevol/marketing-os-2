@@ -250,10 +250,10 @@ function ProjectList() {
       const { data } = await supabase
         .from("projects")
         .select("*")
-        .eq("brand_id" as never, activeBrand.id as never)
+        .eq("brand_id", activeBrand.id)
         .order("updated_at", { ascending: false })
         .limit(50);
-      if (mounted) setProjects(((data as unknown) as Project[]) || []);
+      if (mounted) setProjects((data as Project[] | null) || []);
     };
     load();
     const ch = supabase

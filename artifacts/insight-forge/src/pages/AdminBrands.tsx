@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import { Loader2, Building2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { recordAudit } from "@/lib/audit";
@@ -75,8 +76,8 @@ export default function AdminBrands() {
       .from("brands")
       .update({
         primary_domain: draft.domain || null,
-        voice_profile: voice as never,
-        thresholds: thresholds as never,
+        voice_profile: voice as Json,
+        thresholds: thresholds as Json,
         updated_at: new Date().toISOString(),
       })
       .eq("id", b.id);

@@ -47,11 +47,11 @@ export default function AdminUsers() {
         setAuthorized(false);
       } else {
         setUsers(
-          (legacy || []).map((r: any) => ({
+          (legacy || []).map((r) => ({
             ...r,
-            role: r.is_admin ? "admin" : "writer",
-            pod: null,
-            brand_access: [],
+            role: (r.is_admin ? "admin" : "writer") as RoleEnum,
+            pod: null as PodEnum | null,
+            brand_access: [] as string[],
           })),
         );
         setBrands((bs as Brand[]) || []);

@@ -456,6 +456,13 @@ export default function DraftingInterface() {
       toast.error(error.message);
       return;
     }
+    emit(
+      "draft.submitted",
+      "project",
+      project.id,
+      { sections: sections.length, drafted: draftedCount },
+      project.brand_id ?? null,
+    );
     nav(`/project/${project.id}/review`);
   };
 
