@@ -7,6 +7,7 @@ import type { Project, ProofPoint } from "@/lib/types";
 import { DiscardProjectDialog } from "@/components/DiscardProjectDialog";
 import { recordAudit } from "@/lib/audit";
 import { emit } from "@/lib/events";
+import { useActiveBrand } from "@/lib/brands";
 
 type StageKey =
   | "search_intent"
@@ -47,6 +48,10 @@ export default function ResearchDashboard() {
   const [advancing, setAdvancing] = useState(false);
   const [aborting, setAborting] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  // audit_log is admin-only insert by RLS, and project.delete is an
+  // audit-required action, so the abort/discard control is gated to
+  // admins. Writers should request a delete from an admin.
+  const { isAdmin } = useActiveBrand();
 
   useEffect(() => {
     let mounted = true;
@@ -250,14 +255,19 @@ export default function ResearchDashboard() {
           <button onClick={rerun} className="text-xs text-accent hover:underline inline-flex items-center gap-1">
             <RefreshCw className="h-3 w-3" /> Re-trigger all
           </button>
-          <span className="text-ink-muted">·</span>
-          <button
-            onClick={abort}
-            disabled={aborting}
-            className="text-xs text-destructive hover:underline inline-flex items-center gap-1 disabled:opacity-50"
-          >
-            <X className="h-3 w-3" /> {aborting ? "Aborting…" : "Abort & edit project"}
-          </button>
+          {isAdmin && (
+            <>
+              <span className="text-ink-muted">·</span>
+              <button
+                onClick={abort}
+                disabled={aborting}
+                className="text-xs text-destructive hover:underline inline-flex items-center gap-1 disabled:opacity-50"
+                title="Admin-only — deletion is audit-logged."
+              >
+                <X className="h-3 w-3" /> {aborting ? "Aborting…" : "Abort & edit project"}
+              </button>
+            </>
+          )}
         </div>
       </div>
       </>
