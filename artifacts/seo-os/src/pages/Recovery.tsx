@@ -1,9 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
+  Building2,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Lock,
   TrendingDown,
@@ -51,10 +54,10 @@ export default function Recovery() {
     );
   }
 
-  return <RecoveryForBrand brandId={activeBrand.id} brandName={activeBrand.name} />;
+  return <RecoveryForBrand brandId={activeBrand.id} />;
 }
 
-function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: string }) {
+function RecoveryForBrand({ brandId }: { brandId: string }) {
   // Snapshots are recomputed nightly so a 1h client cache is fine and
   // matches the spec; overview/initiatives stay shorter so an admin
   // who locks a baseline or starts an initiative sees it quickly.
@@ -74,18 +77,17 @@ function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: 
     staleTime: 60_000,
   });
 
-  const subtitle = `Brand: ${brandName}`;
   const overview = overviewQ.data;
   const snapshots = snapshotsQ.data ?? [];
   const initiatives = initiativesQ.data ?? [];
 
   if (overviewQ.isLoading) {
-    return <Shell title="Recovery War Room" subtitle={subtitle}>{loadingBlock()}</Shell>;
+    return <Shell title="Recovery War Room" showBrandSelector>{loadingBlock()}</Shell>;
   }
 
   if (overviewQ.isError) {
     return (
-      <Shell title="Recovery War Room" subtitle={subtitle}>
+      <Shell title="Recovery War Room" showBrandSelector>
         <ErrorBlock
           title="Failed to load overview"
           message={(overviewQ.error as Error).message}
@@ -101,7 +103,7 @@ function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: 
   // sense to render.
   if (!overview.baseline) {
     return (
-      <Shell title="Recovery War Room" subtitle={subtitle}>
+      <Shell title="Recovery War Room" showBrandSelector>
         <BaselineLockEmptyState />
       </Shell>
     );
@@ -110,14 +112,14 @@ function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: 
   // Empty state #2: baseline locked but no snapshots yet.
   if (!overview.current) {
     return (
-      <Shell title="Recovery War Room" subtitle={subtitle}>
-        <SnapshotsEmptyState lockedAt={overview.baseline.locked_at} />
+      <Shell title="Recovery War Room" showBrandSelector>
+        <SnapshotsEmptyState />
       </Shell>
     );
   }
 
   return (
-    <Shell title="Recovery War Room" subtitle={subtitle}>
+    <Shell title="Recovery War Room" showBrandSelector>
       <div className="grid gap-6 lg:grid-cols-3">
         <HeadlineCard overview={overview} />
         <ProjectionCard overview={overview} />
@@ -153,19 +155,87 @@ function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: 
 function Shell({
   title,
   subtitle,
+  showBrandSelector = false,
   children,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
+  showBrandSelector?: boolean;
   children?: React.ReactNode;
 }) {
   return (
     <div className="min-h-full">
       <header className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-rule px-8 py-4">
-        <h1 className="font-serif text-2xl tracking-tight">{title}</h1>
-        <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="font-serif text-2xl tracking-tight">{title}</h1>
+            {subtitle && (
+              <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>
+            )}
+          </div>
+          {showBrandSelector && <HeaderBrandSelector />}
+        </div>
       </header>
       <div className="px-8 py-6">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Brand selector embedded in the Recovery page sticky header.
+ * Mirrors the AppShell sidebar switcher and uses the same
+ * useActiveBrand context so changes stay in sync across the app.
+ */
+function HeaderBrandSelector() {
+  const { loading, accessible, activeBrand, setActiveBrand } = useActiveBrand();
+  const [open, setOpen] = useState(false);
+
+  if (loading || accessible.length === 0) return null;
+
+  if (accessible.length === 1) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-ink-muted px-3 py-1.5 border border-rule rounded-sm">
+        <Building2 className="h-3.5 w-3.5" />
+        <span className="font-medium text-ink">{accessible[0]!.name}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 px-3 py-1.5 border border-rule rounded-sm text-sm hover:bg-secondary transition-colors min-w-[12rem]"
+      >
+        <Building2 className="h-3.5 w-3.5 text-ink-muted shrink-0" />
+        <span className="flex-1 text-left truncate font-medium">
+          {activeBrand?.name ?? "Select brand"}
+        </span>
+        <ChevronDown
+          className={`h-3.5 w-3.5 text-ink-muted transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-64 bg-background border border-rule rounded-sm shadow-md z-50 max-h-64 overflow-y-auto">
+          {accessible.map((b) => (
+            <button
+              key={b.id}
+              onClick={() => {
+                setActiveBrand(b);
+                setOpen(false);
+              }}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-secondary ${
+                activeBrand?.id === b.id ? "bg-secondary/60 font-medium" : ""
+              }`}
+            >
+              {b.name}
+              <span className="ml-2 text-[10px] font-mono text-ink-muted">
+                {b.slug}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -195,39 +265,51 @@ function ErrorBlock({ title, message }: { title: string; message: string }) {
 }
 
 function BaselineLockEmptyState() {
+  // Spec D.5: exact heading + admin lock CTA. The CTA is shown to
+  // admins only — non-admins get a clear pointer to who owns the
+  // action instead of a button that will 403.
+  const { isAdmin } = useActiveBrand();
   return (
     <div className="border border-rule rounded-md bg-background p-8 max-w-2xl">
       <div className="flex items-start gap-3">
         <Lock className="h-5 w-5 text-accent shrink-0 mt-0.5" />
-        <div>
-          <h2 className="font-serif text-lg">Baseline not yet locked</h2>
+        <div className="flex-1">
+          <h2 className="font-serif text-lg">Baseline not yet locked for this brand</h2>
           <p className="text-sm text-ink-muted mt-1">
             The Recovery War Room compares each day’s rankings against a locked
             pre-October-2025 baseline. An admin needs to lock that baseline
             before the dashboard can render.
           </p>
-          <p className="text-sm text-ink-muted mt-3">
-            Run the baseline lock from the admin console (Sprint 4 Prompt 2),
-            or ask the workspace admin if you’re not sure who owns it.
-          </p>
+          {isAdmin ? (
+            <Link
+              href="/admin/recovery-baseline"
+              className="inline-flex items-center gap-2 mt-4 px-4 py-2 border border-ink bg-ink text-paper text-sm rounded-sm hover:bg-ink/90 transition-colors"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              Lock baseline
+            </Link>
+          ) : (
+            <p className="text-sm text-ink-muted mt-3">
+              Ask a workspace admin to lock the baseline for this brand from
+              the admin console.
+            </p>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function SnapshotsEmptyState({ lockedAt }: { lockedAt: string }) {
-  const dateStr = new Date(lockedAt).toLocaleDateString();
+function SnapshotsEmptyState() {
   return (
     <div className="border border-rule rounded-md bg-background p-8 max-w-2xl">
       <div className="flex items-start gap-3">
         <Clock className="h-5 w-5 text-accent shrink-0 mt-0.5" />
         <div>
-          <h2 className="font-serif text-lg">Waiting on first snapshot</h2>
-          <p className="text-sm text-ink-muted mt-1">
-            Baseline locked on {dateStr}. The nightly snapshot worker rolls up
-            recovery metrics each night — your first datapoint will appear after
-            the next run.
+          <h2 className="font-serif text-lg">Snapshots not yet computed. Check back tomorrow.</h2>
+          <p className="text-sm text-ink-muted mt-2">
+            The nightly snapshot worker rolls up recovery metrics each night —
+            your first datapoint will appear after the next run.
           </p>
         </div>
       </div>
@@ -347,8 +429,8 @@ function HeadlineCard({ overview }: { overview: RecoveryOverview }) {
           <span className={deltaTone(top3Delta)}>({fmtDelta(top3Delta)})</span>
         </div>
       </div>
-      <div className="mt-3 pt-3 border-t border-rule/60 text-[11px] text-ink-muted">
-        Clicks: — (pending GSC ingestion)
+      <div className="mt-3 pt-3 border-t border-rule/60 text-[11px] text-ink-muted font-mono">
+        — (pending GSC ingestion)
       </div>
     </div>
   );
