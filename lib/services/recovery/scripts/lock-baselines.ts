@@ -44,6 +44,19 @@ import {
 } from "../src/errors";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Anchor doc paths to the workspace root, NOT `process.cwd()`. When
+ * invoked via `pnpm --filter @workspace/services-recovery run
+ * lock-baselines`, pnpm sets cwd to `lib/services/recovery`, which
+ * would otherwise drop the docs under that package instead of the
+ * repo-root `docs/`. The script lives at
+ * `lib/services/recovery/scripts/lock-baselines.ts` — three levels up
+ * from `scripts/` is the workspace root.
+ */
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const WORKSPACE_ROOT = resolve(SCRIPT_DIR, "..", "..", "..", "..");
 
 // ---------------------------------------------------------------------------
 // Per-brand parameters (pack Prompt 3 + amendments §D).
@@ -430,9 +443,12 @@ function renderLockedDoc(rows: ReadonlyArray<LiveRow>, lockedBy: string): string
 }
 
 function writeDoc(relPath: string, content: string): void {
-  const abs = resolve(process.cwd(), relPath);
+  const abs = resolve(WORKSPACE_ROOT, relPath);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, content, "utf8");
+  // Echo the absolute path so the operator can verify location even
+  // when the script is invoked from a non-root cwd.
+  console.log(`  → ${abs}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -458,8 +474,8 @@ async function main(): Promise<void> {
     baselineDateOverride: args.baselineDateOverride,
     lockedBy,
   });
-  writeDoc("docs/recovery-baseline-dry-run.md", dryRunMd);
   console.log("✓ wrote docs/recovery-baseline-dry-run.md");
+  writeDoc("docs/recovery-baseline-dry-run.md", dryRunMd);
 
   if (!args.confirm) {
     console.log("");
@@ -539,9 +555,9 @@ async function main(): Promise<void> {
     }
   }
 
-  writeDoc("docs/recovery-baselines.md", renderLockedDoc(liveRows, lockedBy));
   console.log("");
   console.log("✓ wrote docs/recovery-baselines.md");
+  writeDoc("docs/recovery-baselines.md", renderLockedDoc(liveRows, lockedBy));
 
   // Post-run invariant check. The lock is a one-shot, irreversible
   // operation; we MUST end with all four target brands in a terminal
