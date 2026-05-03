@@ -23,6 +23,77 @@ import { runBriefComplianceCheck } from "./checks/brief-compliance";
 
 const SUCCESS_EVENT = "qa_run.checks_completed";
 
+/**
+ * Build the realtime fan-out event row for a single check result, or
+ * `null` if the outcome is `pass` (no event emitted).
+ *
+ * Exported so we can unit-test the branching without spinning up a DB.
+ *   - outcome="fail"  → qa.check_failed   (subject=qa_run)
+ *   - outcome="error" → qa.check_errored  (subject=qa_check_result)
+ *   - outcome="pass"  → null (no event)
+ */
+export function buildCheckResultEvent(args: {
+  result: CheckRunResult;
+  brandId: string;
+  qaRunId: string;
+  contentObjectId: string;
+  checkName: CheckName;
+  severity: CheckSeverity;
+  checkResultId: string | null;
+}): {
+  brandId: string;
+  eventType: string;
+  subjectType: string;
+  subjectId: string | null;
+  payload: Record<string, unknown>;
+} | null {
+  const { result, brandId, qaRunId, contentObjectId, checkName, severity, checkResultId } = args;
+  if (result.outcome === "fail") {
+    return {
+      brandId,
+      eventType: "qa.check_failed",
+      subjectType: "qa_run",
+      subjectId: qaRunId,
+      payload: {
+        contentObjectId,
+        checkName,
+        severity,
+        outcome: result.outcome,
+        score: result.score,
+        threshold: result.threshold,
+        summary: result.summary,
+      },
+    };
+  }
+  if (result.outcome === "error") {
+    const details = (result.details ?? {}) as Record<string, unknown>;
+    const errorClass =
+      typeof details.errorClass === "string" ? details.errorClass : null;
+    const attempts =
+      typeof details.attempts === "number" ? details.attempts : null;
+    const errorTag =
+      typeof details.error === "string" ? details.error : null;
+    return {
+      brandId,
+      eventType: "qa.check_errored",
+      subjectType: "qa_check_result",
+      subjectId: checkResultId,
+      payload: {
+        sourceService: "worker",
+        contentObjectId,
+        qaRunId,
+        checkName,
+        severity,
+        errorClass,
+        attempts,
+        error: errorTag,
+        summary: result.summary,
+      },
+    };
+  }
+  return null;
+}
+
 export interface CheckRunInput {
   brandId: string;
   contentObjectId: string;
@@ -151,6 +222,7 @@ export async function handleQaRunChecks(
   let warnFailed = 0;
   let executed = 0;
   let crashCount = 0;
+  let errorCount = 0;
 
   for (let i = 0; i < slots.length; i++) {
     const slot = slots[i]!;
@@ -200,69 +272,44 @@ export async function handleQaRunChecks(
       // timeout, 5xx, missing brand, etc.) so Sprint 7 / Sprint 9
       // dashboards can graph "% errored vs failed vs passed" with one
       // Postgres group-by, instead of dumpster-diving Sentry.
-      if (result.outcome === "fail") {
-        await db.insert(eventsTable).values({
-          brandId: payload.brandId,
-          eventType: "qa.check_failed",
-          subjectType: "qa_run",
-          subjectId: payload.qaRunId,
-          payload: {
-            contentObjectId: payload.contentObjectId,
-            checkName: slot.checkName,
-            severity: slot.severity,
-            outcome: result.outcome,
-            score: result.score,
-            threshold: result.threshold,
-            summary: result.summary,
-          },
-        });
-      } else if (result.outcome === "error") {
-        const details = (result.details ?? {}) as Record<string, unknown>;
-        const errorClass =
-          typeof details.errorClass === "string" ? details.errorClass : null;
-        const attempts =
-          typeof details.attempts === "number" ? details.attempts : null;
-        const errorTag =
-          typeof details.error === "string" ? details.error : null;
-        await db.insert(eventsTable).values({
-          brandId: payload.brandId,
-          eventType: "qa.check_errored",
-          subjectType: "qa_check_result",
-          subjectId: checkResultId,
-          payload: {
-            sourceService: "worker",
-            contentObjectId: payload.contentObjectId,
-            qaRunId: payload.qaRunId,
-            checkName: slot.checkName,
-            severity: slot.severity,
-            errorClass,
-            attempts,
-            error: errorTag,
-            summary: result.summary,
-          },
-        });
+      const evt = buildCheckResultEvent({
+        result,
+        brandId: payload.brandId,
+        qaRunId: payload.qaRunId,
+        contentObjectId: payload.contentObjectId,
+        checkName: slot.checkName,
+        severity: slot.severity,
+        checkResultId,
+      });
+      if (evt) {
+        await db.insert(eventsTable).values(evt);
       }
     });
 
     if (result.outcome === "fail") {
       if (slot.severity === "hard") hardFailed = true;
       else warnFailed += 1;
+    } else if (result.outcome === "error") {
+      errorCount += 1;
     }
   }
 
   // Terminal-status policy:
   //   - Any hard-fail outcome ⇒ 'failed' (reviewer can still request
   //     revision; approve is blocked by HardFailBlockedError).
-  //   - Any check that crashed (Originality unreachable, OpenAI 5xx,
-  //     etc.) ⇒ 'error'. We deliberately do NOT swallow partial
-  //     errors as 'passed' — an unverified Originality check must
-  //     never silently let approval through. crashCount>0 wins over
-  //     a clean pass; hard-fail still wins over crash because a
-  //     hard-fail is a deterministic block while a crash means
-  //     "result unknown, run again".
+  //   - Any check that returned outcome="error" (Originality
+  //     unreachable, OpenAI timeout, brand_not_found, etc.) OR a
+  //     runner that crashed (promise rejected) ⇒ 'error'. We
+  //     deliberately do NOT swallow partial errors as 'passed' — an
+  //     unverified Originality / brand-voice check must never silently
+  //     let approval through. errorCount/crashCount > 0 wins over a
+  //     clean pass; hard-fail still wins over error because a hard-fail
+  //     is a deterministic block while an error means "result unknown,
+  //     run again".
+  const erroredOrCrashed = errorCount + crashCount;
   const qaStatus: "passed" | "failed" | "error" = hardFailed
     ? "failed"
-    : crashCount > 0
+    : erroredOrCrashed > 0
       ? "error"
       : "passed";
 
@@ -270,6 +317,7 @@ export async function handleQaRunChecks(
     executed,
     hardFailed,
     warns: warnFailed,
+    errors: errorCount,
     crashCount,
     title: obj.title,
     wordCount: obj.wordCount,
