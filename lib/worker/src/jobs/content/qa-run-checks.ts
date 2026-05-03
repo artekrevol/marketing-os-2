@@ -58,8 +58,11 @@ const RUNNERS: Record<CheckName, CheckRunner> = {
  *      so a slow Originality.ai call cannot block the warns. Each
  *      result is persisted regardless of outcome (errors recorded
  *      with outcome='error').
- *   5. Per failed check, emit a `qa.check_failed` event so the UI
- *      can react in realtime. Hard-fail check failures => qa_run.status='failed'.
+ *   5. Per non-pass check, emit a discrete event so the UI can react in
+ *      realtime: `qa.check_failed` for outcome='fail',
+ *      `qa.check_errored` for outcome='error' (timeout, 5xx, missing
+ *      data — verification could not be obtained). Hard-fail check
+ *      failures => qa_run.status='failed'.
  *      Otherwise (including warns) => qa_run.status='passed'.
  *      Handler crash => qa_run.status='error', re-thrown for retry.
  *   6. finalizeQaRun() emits the terminal `qa.run_completed` event
@@ -171,22 +174,33 @@ export async function handleQaRunChecks(
     executed += 1;
 
     await withBrandScope(payload.brandId, async ({ scoped, db }) => {
-      await scoped.insert(qaCheckResultsTable, {
-        qaRunId: payload.qaRunId,
-        checkName: slot.checkName,
-        severity: slot.severity,
-        outcome: result.outcome,
-        score: result.score === null ? null : result.score.toString(),
-        threshold: result.threshold === null ? null : result.threshold.toString(),
-        summary: result.summary,
-        details: result.details,
-        durationMs: Date.now() - slot.startedAt,
-      });
+      const inserted = (await scoped.insert(
+        qaCheckResultsTable,
+        {
+          qaRunId: payload.qaRunId,
+          checkName: slot.checkName,
+          severity: slot.severity,
+          outcome: result.outcome,
+          score: result.score === null ? null : result.score.toString(),
+          threshold: result.threshold === null ? null : result.threshold.toString(),
+          summary: result.summary,
+          details: result.details,
+          durationMs: Date.now() - slot.startedAt,
+        },
+        { returning: true },
+      )) as Array<{ id: string }>;
+      const checkResultId = inserted[0]?.id ?? null;
 
-      // Realtime fan-out: surface every fail/error as a discrete
-      // event so the seo-os queue can flag the run before the
-      // terminal `qa.run_completed` lands.
-      if (result.outcome !== "pass") {
+      // Realtime fan-out: surface every non-pass outcome as a discrete
+      // event so the seo-os queue can flag the run before the terminal
+      // `qa.run_completed` lands.
+      //
+      // Part 1.5: split `outcome="fail"` (deterministic check failure)
+      // from `outcome="error"` (verification could not be obtained —
+      // timeout, 5xx, missing brand, etc.) so Sprint 7 / Sprint 9
+      // dashboards can graph "% errored vs failed vs passed" with one
+      // Postgres group-by, instead of dumpster-diving Sentry.
+      if (result.outcome === "fail") {
         await db.insert(eventsTable).values({
           brandId: payload.brandId,
           eventType: "qa.check_failed",
@@ -199,6 +213,31 @@ export async function handleQaRunChecks(
             outcome: result.outcome,
             score: result.score,
             threshold: result.threshold,
+            summary: result.summary,
+          },
+        });
+      } else if (result.outcome === "error") {
+        const details = (result.details ?? {}) as Record<string, unknown>;
+        const errorClass =
+          typeof details.errorClass === "string" ? details.errorClass : null;
+        const attempts =
+          typeof details.attempts === "number" ? details.attempts : null;
+        const errorTag =
+          typeof details.error === "string" ? details.error : null;
+        await db.insert(eventsTable).values({
+          brandId: payload.brandId,
+          eventType: "qa.check_errored",
+          subjectType: "qa_check_result",
+          subjectId: checkResultId,
+          payload: {
+            sourceService: "worker",
+            contentObjectId: payload.contentObjectId,
+            qaRunId: payload.qaRunId,
+            checkName: slot.checkName,
+            severity: slot.severity,
+            errorClass,
+            attempts,
+            error: errorTag,
             summary: result.summary,
           },
         });
