@@ -55,6 +55,9 @@ export default function Recovery() {
 }
 
 function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: string }) {
+  // Snapshots are recomputed nightly so a 1h client cache is fine and
+  // matches the spec; overview/initiatives stay shorter so an admin
+  // who locks a baseline or starts an initiative sees it quickly.
   const overviewQ = useQuery({
     queryKey: ["recovery", "overview", brandId],
     queryFn: () => recovery.overview(brandId),
@@ -63,7 +66,7 @@ function RecoveryForBrand({ brandId, brandName }: { brandId: string; brandName: 
   const snapshotsQ = useQuery({
     queryKey: ["recovery", "snapshots", brandId, 90],
     queryFn: () => recovery.snapshots(brandId, 90),
-    staleTime: 60_000,
+    staleTime: 60 * 60 * 1000,
   });
   const initiativesQ = useQuery({
     queryKey: ["recovery", "initiatives", brandId],
@@ -234,19 +237,19 @@ function SnapshotsEmptyState({ lockedAt }: { lockedAt: string }) {
 
 // ---- Cards ----
 
-function gapTone(gapPct: number | null): "green" | "yellow" | "red" | "neutral" {
-  // Amendments §D.5 thresholds, applied to gap_to_baseline_top10_pct.
-  // gapPct >= 0 → at/above baseline (green). gapPct in (-20, 0) → yellow.
-  // gapPct <= -20 → red. Translates roughly to "0–3 keywords behind" vs
-  // ">3 keywords behind" depending on baseline size; precise mapping is
-  // a follow-up if pack tuning needs it.
-  if (gapPct == null) return "neutral";
-  if (gapPct >= 0) return "green";
-  if (gapPct > -20) return "yellow";
+function positionTone(
+  positionDelta: number | null,
+): "green" | "yellow" | "red" | "neutral" {
+  // Amendments §D.5: green if avg_position_30d at/above baseline
+  // (delta ≤ 0 — lower position numbers are better), yellow if 0–3
+  // worse, red if >3 worse.
+  if (positionDelta == null) return "neutral";
+  if (positionDelta <= 0) return "green";
+  if (positionDelta <= 3) return "yellow";
   return "red";
 }
 
-function toneClasses(tone: ReturnType<typeof gapTone>): {
+function toneClasses(tone: ReturnType<typeof positionTone>): {
   border: string;
   bg: string;
   fg: string;
@@ -291,32 +294,58 @@ function fmtNum(v: string | null | undefined, digits = 1): string {
 }
 
 function HeadlineCard({ overview }: { overview: RecoveryOverview }) {
-  const tone = gapTone(overview.gapPct);
-  const t = toneClasses(tone);
   const baseline = overview.baseline!;
   const current = overview.current!;
-  const cur = fmtNum(current.avg_position_30d, 1);
-  const base = fmtNum(baseline.baseline_avg_position, 1);
-  const gapNum = current.gap_to_baseline_top10_pct;
-  const gapStr = gapNum != null ? `${Number(gapNum) >= 0 ? "+" : ""}${fmtNum(gapNum, 1)}%` : "—";
+  const curPosNum = current.avg_position_30d != null ? Number(current.avg_position_30d) : null;
+  const basePosNum =
+    baseline.baseline_avg_position != null ? Number(baseline.baseline_avg_position) : null;
+  // Position delta: positive = we slipped, negative/zero = at or above baseline.
+  // Lower numerical position is better, so delta = current - baseline.
+  const positionDelta =
+    curPosNum != null && basePosNum != null && Number.isFinite(curPosNum) && Number.isFinite(basePosNum)
+      ? curPosNum - basePosNum
+      : null;
+  const tone = positionTone(positionDelta);
+  const t = toneClasses(tone);
+
+  // Required headline format: "11.1 (was 8.4, gap +2.7)".
+  const headline = (() => {
+    if (curPosNum == null || basePosNum == null || positionDelta == null) {
+      return curPosNum != null ? curPosNum.toFixed(1) : "—";
+    }
+    const sign = positionDelta >= 0 ? "+" : "";
+    return `${curPosNum.toFixed(1)} (was ${basePosNum.toFixed(1)}, gap ${sign}${positionDelta.toFixed(1)})`;
+  })();
+
+  // Sub-metrics: keyword count deltas vs baseline for top-10 and top-3.
+  const top10Cur = current.keywords_in_top_10;
+  const top10Base = baseline.baseline_keywords_in_top_10;
+  const top10Delta = top10Cur - top10Base;
+  const top3Cur = current.keywords_in_top_3;
+  const top3Base = baseline.baseline_keywords_in_top_3;
+  const top3Delta = top3Cur - top3Base;
+  const fmtDelta = (n: number) => `${n >= 0 ? "+" : ""}${n}`;
+  const deltaTone = (n: number) =>
+    n >= 0 ? "text-emerald-700" : "text-red-700";
 
   return (
     <div className={`border ${t.border} ${t.bg} rounded-md p-5`}>
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-ink-muted">
         <span className={`h-2 w-2 rounded-full ${t.dot}`} />
-        Gap to baseline (Top-10 %)
+        Avg position (30d) vs baseline
       </div>
-      <div className={`mt-3 font-serif text-3xl ${t.fg}`}>{gapStr}</div>
-      <div className="mt-2 text-xs text-ink-muted">
-        Avg position: <span className="font-mono">{cur}</span>
-        <span className="mx-1">·</span>
-        baseline: <span className="font-mono">{base}</span>
-      </div>
-      <div className="mt-1 text-xs text-ink-muted">
-        Top-10 keywords:{" "}
-        <span className="font-mono">{current.keywords_in_top_10}</span>
-        <span className="mx-1">/</span>
-        <span className="font-mono">{baseline.baseline_keywords_in_top_10}</span>
+      <div className={`mt-3 font-serif text-2xl ${t.fg}`}>{headline}</div>
+      <div className="mt-3 grid grid-cols-2 gap-y-1 gap-x-3 text-xs">
+        <div className="text-ink-muted">Keywords in Top-10</div>
+        <div className="font-mono">
+          {top10Cur} / {top10Base}{" "}
+          <span className={deltaTone(top10Delta)}>({fmtDelta(top10Delta)})</span>
+        </div>
+        <div className="text-ink-muted">Keywords in Top-3</div>
+        <div className="font-mono">
+          {top3Cur} / {top3Base}{" "}
+          <span className={deltaTone(top3Delta)}>({fmtDelta(top3Delta)})</span>
+        </div>
       </div>
       <div className="mt-3 pt-3 border-t border-rule/60 text-[11px] text-ink-muted">
         Clicks: — (pending GSC ingestion)
@@ -428,7 +457,13 @@ function BaselineCard({ overview }: { overview: RecoveryOverview }) {
 type ChartPoint = {
   date: string;
   ts: number;
-  gap: number | null;
+  // Sign-split series so Recharts can render the trend in red below
+  // zero (we're behind baseline) and green at/above zero (we're at or
+  // beyond it). Each row populates exactly one of gapNeg / gapPos; the
+  // other is null. We also seed both at zero-crossings so adjacent
+  // segments visually meet the x-axis.
+  gapNeg: number | null;
+  gapPos: number | null;
   projected?: number | null;
 };
 
@@ -444,30 +479,30 @@ function TrendChart({
   const data: ChartPoint[] = useMemo(() => {
     const base: ChartPoint[] = snapshots.map((s) => {
       const ts = new Date(s.snapshot_date).getTime();
-      return {
-        date: s.snapshot_date,
-        ts,
-        gap:
-          s.gap_to_baseline_top10_pct != null
-            ? Number(s.gap_to_baseline_top10_pct)
-            : null,
-      };
+      const g =
+        s.gap_to_baseline_top10_pct != null
+          ? Number(s.gap_to_baseline_top10_pct)
+          : null;
+      // Split into negative and non-negative series so each can be
+      // rendered with its own color. At exactly zero we populate both
+      // so the green and red segments share that point.
+      const gapNeg = g != null && g < 0 ? g : null;
+      const gapPos = g != null && g >= 0 ? g : null;
+      return { date: s.snapshot_date, ts, gapNeg, gapPos };
     });
 
     if (projection.status === "projecting" && base.length > 0) {
       const target = new Date(projection.projectedRecoveryDate).getTime();
       const last = base[base.length - 1]!;
-      const lastGap = last.gap ?? projection.latestGapPct;
-      // Append a synthetic future point to draw the dashed projection
-      // line ending at zero on the projected recovery date.
+      const lastGap =
+        last.gapNeg ?? last.gapPos ?? projection.latestGapPct;
       base.push({
         date: new Date(target).toISOString().slice(0, 10),
         ts: target,
-        gap: null,
+        gapNeg: null,
+        gapPos: null,
         projected: 0,
       });
-      // Mark the latest real point as the projection's start for
-      // continuity (so the dashed line connects to today's actual gap).
       last.projected = lastGap;
     }
     return base;
@@ -541,9 +576,19 @@ function TrendChart({
           ))}
           <Line
             type="monotone"
-            dataKey="gap"
-            name="Gap (Top-10 %)"
+            dataKey="gapNeg"
+            name="Gap (below baseline)"
             stroke="#c0392b"
+            strokeWidth={2}
+            dot={false}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="gapPos"
+            name="Gap (at or above baseline)"
+            stroke="#16a34a"
             strokeWidth={2}
             dot={false}
             connectNulls={false}
@@ -569,25 +614,31 @@ function TrendChart({
 // ---- Initiatives ribbon ----
 
 function InitiativesRibbon({ initiatives }: { initiatives: RecoveryInitiative[] }) {
-  if (initiatives.length === 0) {
+  // Spec: read-only horizontal ribbon of ACTIVE initiatives only.
+  // Completed/paused initiatives still show as markers on the trend
+  // chart but are not surfaced here.
+  const active = initiatives
+    .filter((i) => i.status === "active")
+    .sort(
+      (a, b) =>
+        new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
+    );
+
+  if (active.length === 0) {
     return (
       <div className="border border-rule rounded-md bg-background p-6 text-sm text-ink-muted">
-        No initiatives logged yet. Track recovery work as initiatives so you can
+        No active initiatives. Track recovery work as initiatives so you can
         see what changed when the slope shifts.
       </div>
     );
   }
-  // Sort: active first, then by started_at desc.
-  const sorted = [...initiatives].sort((a, b) => {
-    if (a.status === "active" && b.status !== "active") return -1;
-    if (b.status === "active" && a.status !== "active") return 1;
-    return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
-  });
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {sorted.map((i) => (
-        <InitiativeCard key={i.id} initiative={i} />
-      ))}
+    <div className="overflow-x-auto -mx-1 px-1">
+      <div className="flex gap-3 pb-1">
+        {active.map((i) => (
+          <InitiativeCard key={i.id} initiative={i} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -602,7 +653,7 @@ function InitiativeCard({ initiative }: { initiative: RecoveryInitiative }) {
           ? "bg-amber-500"
           : "bg-ink-muted";
   return (
-    <div className="border border-rule rounded-md bg-background p-4">
+    <div className="border border-rule rounded-md bg-background p-4 w-72 shrink-0">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-medium truncate">{initiative.name}</div>

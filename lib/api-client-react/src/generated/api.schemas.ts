@@ -328,3 +328,11 @@ export type QualityGateReviewDetailParams = {
   contentObjectId: string;
   brandId: string;
 };
+
+export type GetRecoverySnapshotsParams = {
+  /**
+   * @minimum 1
+   * @maximum 730
+   */
+  days?: number;
+};

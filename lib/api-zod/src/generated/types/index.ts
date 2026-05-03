@@ -16,6 +16,7 @@ export * from "./eventRow";
 export * from "./eventRowPayload";
 export * from "./forbiddenResponse";
 export * from "./getRecentEventsParams";
+export * from "./getRecoverySnapshotsParams";
 export * from "./healthStatus";
 export * from "./heartbeatFreshness";
 export * from "./heartbeatFreshnessPayload";

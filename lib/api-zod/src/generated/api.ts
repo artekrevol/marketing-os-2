@@ -227,6 +227,16 @@ export const GetRecoverySnapshotsParams = zod.object({
   brandId: zod.coerce.string().uuid(),
 });
 
+export const getRecoverySnapshotsQueryDaysMax = 730;
+
+export const GetRecoverySnapshotsQueryParams = zod.object({
+  days: zod.coerce
+    .number()
+    .min(1)
+    .max(getRecoverySnapshotsQueryDaysMax)
+    .optional(),
+});
+
 export const GetRecoverySnapshotsResponse = zod.object({
   snapshots: zod.array(
     zod.object({

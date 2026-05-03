@@ -23,6 +23,7 @@ import type {
   EventList,
   ForbiddenResponse,
   GetRecentEventsParams,
+  GetRecoverySnapshotsParams,
   HealthStatus,
   HeartbeatFreshness,
   QualityGateDecideRequest,
@@ -1194,16 +1195,32 @@ export function useGetRecoveryOverview<
 /**
  * @summary Recovery snapshots within a trailing window (default 90 days)
  */
-export const getGetRecoverySnapshotsUrl = (brandId: string) => {
-  return `/api/recovery/snapshots/${brandId}`;
+export const getGetRecoverySnapshotsUrl = (
+  brandId: string,
+  params?: GetRecoverySnapshotsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/recovery/snapshots/${brandId}?${stringifiedParams}`
+    : `/api/recovery/snapshots/${brandId}`;
 };
 
 export const getRecoverySnapshots = async (
   brandId: string,
+  params?: GetRecoverySnapshotsParams,
   options?: RequestInit,
 ): Promise<RecoverySnapshotList> => {
   return customFetch<RecoverySnapshotList>(
-    getGetRecoverySnapshotsUrl(brandId),
+    getGetRecoverySnapshotsUrl(brandId, params),
     {
       ...options,
       method: "GET",
@@ -1211,8 +1228,14 @@ export const getRecoverySnapshots = async (
   );
 };
 
-export const getGetRecoverySnapshotsQueryKey = (brandId: string) => {
-  return [`/api/recovery/snapshots/${brandId}`] as const;
+export const getGetRecoverySnapshotsQueryKey = (
+  brandId: string,
+  params?: GetRecoverySnapshotsParams,
+) => {
+  return [
+    `/api/recovery/snapshots/${brandId}`,
+    ...(params ? [params] : []),
+  ] as const;
 };
 
 export const getGetRecoverySnapshotsQueryOptions = <
@@ -1220,6 +1243,7 @@ export const getGetRecoverySnapshotsQueryOptions = <
   TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
 >(
   brandId: string,
+  params?: GetRecoverySnapshotsParams,
   options?: {
     query?: UseQueryOptions<
       Awaited<ReturnType<typeof getRecoverySnapshots>>,
@@ -1232,12 +1256,12 @@ export const getGetRecoverySnapshotsQueryOptions = <
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
   const queryKey =
-    queryOptions?.queryKey ?? getGetRecoverySnapshotsQueryKey(brandId);
+    queryOptions?.queryKey ?? getGetRecoverySnapshotsQueryKey(brandId, params);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getRecoverySnapshots>>
   > = ({ signal }) =>
-    getRecoverySnapshots(brandId, { signal, ...requestOptions });
+    getRecoverySnapshots(brandId, params, { signal, ...requestOptions });
 
   return {
     queryKey,
@@ -1267,6 +1291,7 @@ export function useGetRecoverySnapshots<
   TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
 >(
   brandId: string,
+  params?: GetRecoverySnapshotsParams,
   options?: {
     query?: UseQueryOptions<
       Awaited<ReturnType<typeof getRecoverySnapshots>>,
@@ -1276,7 +1301,11 @@ export function useGetRecoverySnapshots<
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getGetRecoverySnapshotsQueryOptions(brandId, options);
+  const queryOptions = getGetRecoverySnapshotsQueryOptions(
+    brandId,
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
