@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 
 /**
  * Append-only event log helper. Fire-and-forget — failures are logged to
@@ -16,11 +17,11 @@ export async function emit(
   try {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-    const { error } = await (supabase as any).from("events").insert({
+    const { error } = await supabase.from("events").insert({
       event_type: eventType,
       subject_type: subjectType,
       subject_id: subjectId,
-      payload,
+      payload: payload as Json,
       brand_id: brandId,
       actor_id: user.id,
     });

@@ -63,21 +63,21 @@ export default function NewProject() {
       let activeBrandId: string | null = null;
       try {
         const slug = localStorage.getItem("contentforge.activeBrandSlug");
-        const { data: brandRows } = await (supabase as any).from("brands").select("id,slug");
-        const { data: prof } = await (supabase as any)
+        const { data: brandRows } = await supabase.from("brands").select("id,slug");
+        const { data: prof } = await supabase
           .from("user_profiles")
           .select("brand_access")
           .eq("user_id", user.id)
           .maybeSingle();
-        const access: string[] = (prof as any)?.brand_access || [];
-        const slugMatch = slug ? (brandRows || []).find((b: any) => b.slug === slug) : null;
+        const access: string[] = prof?.brand_access || [];
+        const slugMatch = slug ? (brandRows || []).find((b) => b.slug === slug) : null;
         if (slugMatch && (access.includes(slugMatch.id) || access.length === 0)) {
           activeBrandId = slugMatch.id;
         } else if (access.length > 0) {
           activeBrandId = access[0];
         } else if ((brandRows || []).length > 0) {
           // Admin with no brand_access yet — default to TekRevol.
-          activeBrandId = (brandRows || []).find((b: any) => b.slug === "tekrevol")?.id || null;
+          activeBrandId = (brandRows || []).find((b) => b.slug === "tekrevol")?.id || null;
         }
       } catch (e) {
         console.warn("[NewProject] brand resolution failed", e);

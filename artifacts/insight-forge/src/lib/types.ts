@@ -26,6 +26,7 @@ export interface Project {
   user_overrides?: Record<string, any>;
   playbook_version?: number | null;
   brief_confirmed_at?: string | null;
+  brand_id?: string | null;
 }
 
 export interface KeywordEntry {

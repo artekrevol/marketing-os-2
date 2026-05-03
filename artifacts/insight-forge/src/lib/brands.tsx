@@ -56,16 +56,19 @@ export function BrandProvider({
     }
     setLoading(true);
     const [{ data: bs }, { data: prof }] = await Promise.all([
-      (supabase as any).from("brands").select("*").order("name"),
-      (supabase as any).from("user_profiles").select("brand_access").eq("user_id", userId).maybeSingle(),
+      supabase.from("brands").select("*").order("name"),
+      supabase.from("user_profiles").select("brand_access").eq("user_id", userId).maybeSingle(),
     ]);
-    const allBrands = ((bs as Brand[]) || []).map((b) => ({
-      ...b,
-      voice_profile: (b.voice_profile as any) || {},
-      thresholds: (b.thresholds as any) || {},
+    const allBrands: Brand[] = (bs || []).map((b) => ({
+      id: b.id,
+      slug: b.slug,
+      name: b.name,
+      primary_domain: b.primary_domain,
+      voice_profile: (b.voice_profile as Record<string, unknown>) || {},
+      thresholds: (b.thresholds as Record<string, unknown>) || {},
     }));
     setBrands(allBrands);
-    const access: string[] = (prof as any)?.brand_access || [];
+    const access: string[] = prof?.brand_access || [];
     // Admins see every brand.
     const visibleIds = isAdmin ? allBrands.map((b) => b.id) : access;
     setAccessibleIds(visibleIds);

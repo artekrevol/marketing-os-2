@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 
 /**
  * Admin-sensitive audit log. Justification is mandatory at the DB level
@@ -19,12 +20,12 @@ export async function recordAudit(
   try {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { ok: false, error: "Not signed in." };
-    const { error } = await (supabase as any).from("audit_log").insert({
+    const { error } = await supabase.from("audit_log").insert({
       action,
       target_type: targetType,
       target_id: targetId,
       justification: justification.trim(),
-      metadata,
+      metadata: metadata as Json,
       brand_id: brandId,
       actor_id: user.id,
     });

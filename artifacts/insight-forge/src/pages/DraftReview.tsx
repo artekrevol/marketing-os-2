@@ -10,6 +10,7 @@ import type { Project, ProofPoint, OutlineSection } from "@/lib/types";
 import { buildWhitelistHosts, citationStatus } from "@/lib/citationWhitelist";
 import { toMarkdown, toHtml, toPlainText, buildHtmlDocument } from "@/lib/exportRenderers";
 import { buildExportSchemas, exportFilename, isoDate } from "@/lib/exportSchema";
+import { emit } from "@/lib/events";
 
 /**
  * Stage 4 — Final review & export.
@@ -132,11 +133,19 @@ export default function DraftReview() {
       toast.error(error.message);
       return;
     }
+    emit(
+      "review.completed",
+      "project",
+      project.id,
+      { auto: silent },
+      project.brand_id ?? null,
+    );
     if (!silent) toast.success("Final draft re-stitched.");
   };
 
   const sendBack = async () => {
     await supabase.from("projects").update({ current_stage: 3, status: "drafting" }).eq("id", project.id);
+    emit("review.sent_back", "project", project.id, {}, project.brand_id ?? null);
     toast.success("Sent back to drafting.");
   };
 

@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { GripVertical, Trash2, Plus, Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
 import type { Project, OutlineSection } from "@/lib/types";
+import { emit } from "@/lib/events";
 
 export default function OutlineEditor() {
   const { project } = useOutletContext<{ project: Project }>();
@@ -72,6 +73,7 @@ export default function OutlineEditor() {
     setLocking(true);
     await supabase.from("outlines").update({ locked_at: new Date().toISOString() }).eq("project_id", project.id);
     await supabase.from("projects").update({ current_stage: 3, status: "drafting" }).eq("id", project.id);
+    emit("outline.locked", "project", project.id, { sections: outline.sections.length }, project.brand_id ?? null);
     setLocking(false);
     toast.success("Outline locked. Starting draft.");
     nav(`/project/${project.id}/draft`);

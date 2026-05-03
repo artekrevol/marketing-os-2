@@ -10,7 +10,6 @@ import { BrandProvider, useActiveBrand } from "@/lib/brands";
 
 export default function AppShell() {
   usePageTracker();
-  const [projects, setProjects] = useState<Project[]>([]);
   const [authState, setAuthState] = useState<"loading" | "in" | "out" | "blocked">("loading");
   const [email, setEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -50,7 +49,7 @@ export default function AppShell() {
         try {
           const [{ data: roles }, { data: profile }] = await Promise.all([
             supabase.from("user_roles").select("role").eq("user_id", session.user.id),
-            (supabase as any)
+            supabase
               .from("user_profiles")
               .select("brand_access,role")
               .eq("user_id", session.user.id)
@@ -58,10 +57,10 @@ export default function AppShell() {
           ]);
           if (cancelled) return;
           const admin =
-            !!(roles || []).find((r: any) => r.role === "admin") ||
-            (profile as any)?.role === "admin";
+            !!(roles || []).find((r) => r.role === "admin") ||
+            profile?.role === "admin";
           setIsAdmin(admin);
-          const access: string[] = (profile as any)?.brand_access || [];
+          const access: string[] = profile?.brand_access || [];
           if (!isTek) {
             // Allow if admin OR has any brand_access entry.
             setAuthState(admin || access.length > 0 ? "in" : "blocked");
@@ -93,24 +92,6 @@ export default function AppShell() {
   useEffect(() => {
     if (authState === "out" && loc.pathname !== "/auth") nav("/auth", { replace: true });
   }, [authState, loc.pathname, nav]);
-
-  useEffect(() => {
-    if (authState !== "in") return;
-    let mounted = true;
-    const load = async () => {
-      const { data } = await supabase.from("projects").select("*").order("updated_at", { ascending: false }).limit(50);
-      if (mounted) setProjects((data as any) || []);
-    };
-    load();
-    const ch = supabase
-      .channel("proj-list")
-      .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, load)
-      .subscribe();
-    return () => {
-      mounted = false;
-      supabase.removeChannel(ch);
-    };
-  }, [authState]);
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -228,29 +209,8 @@ export default function AppShell() {
             )}
           </div>
 
-          <div className="px-5 pt-4 pb-2 text-[10px] uppercase tracking-widest text-ink-muted">Projects</div>
-          <nav className="flex-1 overflow-y-auto px-2 pb-6 space-y-px">
-            {projects.length === 0 && (
-              <p className="px-3 py-2 text-xs text-ink-muted italic">No projects yet.</p>
-            )}
-            {projects.map((p) => (
-              <NavLink
-                key={p.id}
-                to={`/project/${p.id}/${p.current_stage === 0 ? "brief" : p.current_stage === 1 ? "research" : p.current_stage === 2 ? "outline" : p.current_stage === 3 ? "draft" : "review"}`}
-                className={({ isActive }) =>
-                  `block px-3 py-2 rounded-sm text-sm transition-colors ${
-                    isActive ? "bg-secondary" : "hover:bg-secondary/60"
-                  }`
-                }
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate">{p.topic}</span>
-                  <span className="text-[10px] font-mono text-ink-muted">S{p.current_stage}</span>
-                </div>
-                <div className="text-[10px] uppercase tracking-wider text-ink-muted mt-0.5">{p.status.replace(/_/g, " ")}</div>
-              </NavLink>
-            ))}
-          </nav>
+          <ProjectList />
+
           <div className="px-3 py-3 border-t border-rule">
             <div className="px-2 pb-2 text-[10px] text-ink-muted truncate">
               {email}{isAdmin && <span className="ml-1 text-accent">· admin</span>}
@@ -269,6 +229,80 @@ export default function AppShell() {
         </main>
       </div>
     </BrandProvider>
+  );
+}
+
+// Project list scoped to the active brand. Lives inside BrandProvider
+// so the switcher and the list stay in sync. Re-queries when the user
+// switches brand. Realtime channel is filtered server-side by brand_id
+// so cross-brand changes don't trigger refetches.
+function ProjectList() {
+  const { activeBrand, loading: brandLoading } = useActiveBrand();
+  const [projects, setProjects] = useState<Project[]>([]);
+
+  useEffect(() => {
+    if (brandLoading || !activeBrand) {
+      setProjects([]);
+      return;
+    }
+    let mounted = true;
+    const load = async () => {
+      const { data } = await supabase
+        .from("projects")
+        .select("*")
+        .eq("brand_id" as never, activeBrand.id as never)
+        .order("updated_at", { ascending: false })
+        .limit(50);
+      if (mounted) setProjects(((data as unknown) as Project[]) || []);
+    };
+    load();
+    const ch = supabase
+      .channel(`proj-list-${activeBrand.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "projects",
+          filter: `brand_id=eq.${activeBrand.id}`,
+        },
+        load,
+      )
+      .subscribe();
+    return () => {
+      mounted = false;
+      supabase.removeChannel(ch);
+    };
+  }, [activeBrand, brandLoading]);
+
+  return (
+    <>
+      <div className="px-5 pt-4 pb-2 text-[10px] uppercase tracking-widest text-ink-muted">Projects</div>
+      <nav className="flex-1 overflow-y-auto px-2 pb-6 space-y-px">
+        {projects.length === 0 && (
+          <p className="px-3 py-2 text-xs text-ink-muted italic">
+            {brandLoading ? "Loading…" : activeBrand ? `No projects in ${activeBrand.name} yet.` : "Select a brand to view projects."}
+          </p>
+        )}
+        {projects.map((p) => (
+          <NavLink
+            key={p.id}
+            to={`/project/${p.id}/${p.current_stage === 0 ? "brief" : p.current_stage === 1 ? "research" : p.current_stage === 2 ? "outline" : p.current_stage === 3 ? "draft" : "review"}`}
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-sm text-sm transition-colors ${
+                isActive ? "bg-secondary" : "hover:bg-secondary/60"
+              }`
+            }
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">{p.topic}</span>
+              <span className="text-[10px] font-mono text-ink-muted">S{p.current_stage}</span>
+            </div>
+            <div className="text-[10px] uppercase tracking-wider text-ink-muted mt-0.5">{p.status.replace(/_/g, " ")}</div>
+          </NavLink>
+        ))}
+      </nav>
+    </>
   );
 }
 

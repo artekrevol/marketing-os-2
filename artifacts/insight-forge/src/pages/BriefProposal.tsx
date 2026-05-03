@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { Project, BriefProposal, KeywordEntry, Funnel, ContentType, Mode } from "@/lib/types";
 import { DiscardProjectDialog } from "@/components/DiscardProjectDialog";
+import { emit } from "@/lib/events";
 
 const ICP_CATALOG = [
   { id: 1, label: "Founder / CEO" },
@@ -226,6 +227,14 @@ export default function BriefProposalPage() {
       setConfirming(false);
       return;
     }
+
+    emit(
+      "brief.confirmed",
+      "project",
+      project.id,
+      { keyword: primary.keyword, content_type: contentType, mode },
+      project.brand_id ?? null,
+    );
 
     // Kick off deep research
     supabase.functions.invoke("research-generate", { body: { project_id: project.id } });

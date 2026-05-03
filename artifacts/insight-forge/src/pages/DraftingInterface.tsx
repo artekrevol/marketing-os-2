@@ -8,6 +8,7 @@ import type { Project, OutlineSection } from "@/lib/types";
 import { buildWhitelistHosts, citationStatus } from "@/lib/citationWhitelist";
 import WritingMetrics from "@/components/WritingMetrics";
 import SelectionToolbar, { type SelectionAction } from "@/components/SelectionToolbar";
+import { emit } from "@/lib/events";
 
 // Render markdown-ish inline citations [text](url) as hover-able pills.
 // URLs whose host isn't on the project's verified whitelist render with the
@@ -177,6 +178,7 @@ export default function DraftingInterface() {
       return;
     }
     await supabase.from("drafts").update({ approved: true }).eq("project_id", project.id).eq("section_id", sid);
+    emit("draft.approved", "draft", `${project.id}:${sid}`, { section_id: sid }, project.brand_id ?? null);
     // Optimistically reflect approval locally so `allDone` flips immediately
     // even before the realtime channel re-fetches.
     setDrafts((prev) => prev.map((x) => (x.section_id === sid ? { ...x, approved: true } : x)));
@@ -340,6 +342,13 @@ export default function DraftingInterface() {
       setSavingInline(false);
       return false;
     }
+    emit(
+      "draft.saved",
+      "draft",
+      activeDraft.id,
+      { section_id: activeDraft.section_id, citation_count: citationCount, source: "inline_edit" },
+      project.brand_id ?? null,
+    );
     // Capture for the voice library so Stage-3 drafts can learn the
     // writer's voice over time. Non-fatal if it fails.
     supabase

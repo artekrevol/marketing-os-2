@@ -22,7 +22,7 @@ export default function AdminBrands() {
 
   const load = async () => {
     setLoading(true);
-    const { data } = await (supabase as any).from("brands").select("*").order("name");
+    const { data } = await supabase.from("brands").select("*").order("name");
     setBrands((data as Brand[]) || []);
     setLoading(false);
   };
@@ -71,12 +71,12 @@ export default function AdminBrands() {
       return;
     }
     setSaving(b.id);
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("brands")
       .update({
         primary_domain: draft.domain || null,
-        voice_profile: voice,
-        thresholds,
+        voice_profile: voice as never,
+        thresholds: thresholds as never,
         updated_at: new Date().toISOString(),
       })
       .eq("id", b.id);

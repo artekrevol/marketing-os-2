@@ -37,12 +37,12 @@ export default function AdminUsers() {
   const load = async () => {
     setLoading(true);
     const [{ data: u, error }, { data: bs }] = await Promise.all([
-      (supabase as any).rpc("list_app_users_v2"),
-      (supabase as any).from("brands").select("*").order("name"),
+      supabase.rpc("list_app_users_v2"),
+      supabase.from("brands").select("*").order("name"),
     ]);
     if (error) {
       // Fall back to legacy v1 if v2 isn't applied yet (e.g. preview not migrated).
-      const { data: legacy, error: e2 } = await (supabase as any).rpc("list_app_users");
+      const { data: legacy, error: e2 } = await supabase.rpc("list_app_users");
       if (e2) {
         setAuthorized(false);
       } else {
@@ -92,7 +92,7 @@ export default function AdminUsers() {
     }
     setBusyId(u.user_id);
     try {
-      const { error } = await (supabase as any)
+      const { error } = await supabase
         .from("user_profiles")
         .upsert(
           {
