@@ -279,7 +279,9 @@ export async function scoreVoiceWithOpenAI(
           { httpStatus: res.status, attempt: attempt + 1, maxRetries: MAX_RETRIES },
           "brand-voice: retriable openai error",
         );
-        await sleep(jitter(retryBaseMs * 2 ** attempt));
+        if (attempt < MAX_RETRIES - 1) {
+          await sleep(jitter(retryBaseMs * 2 ** attempt));
+        }
         continue;
       }
       if (!res.ok) {
@@ -320,7 +322,10 @@ export async function scoreVoiceWithOpenAI(
           { attempt: attempt + 1, maxRetries: MAX_RETRIES },
           "brand-voice: openai call timed out",
         );
-        await sleep(jitter(retryBaseMs * 2 ** attempt));
+        // Skip backoff after the final attempt — we're about to throw.
+        if (attempt < MAX_RETRIES - 1) {
+          await sleep(jitter(retryBaseMs * 2 ** attempt));
+        }
         continue;
       }
       if (err instanceof OpenAINonRetriableError) throw err;
@@ -330,7 +335,9 @@ export async function scoreVoiceWithOpenAI(
         { err: err.message, attempt: attempt + 1, maxRetries: MAX_RETRIES },
         "brand-voice: openai network error",
       );
-      await sleep(jitter(retryBaseMs * 2 ** attempt));
+      if (attempt < MAX_RETRIES - 1) {
+        await sleep(jitter(retryBaseMs * 2 ** attempt));
+      }
     } finally {
       clearTimeout(timer);
     }
