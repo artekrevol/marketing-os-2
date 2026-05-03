@@ -15,12 +15,12 @@ emitted for every brand:
 
 ## Computed values (placeholder until first run)
 
-| Brand | Effective Date | Daily Clicks | Daily Sessions | Avg Position | Top 10 | Top 3 | Keywords | Notes |
-|---|---|---|---|---|---|---|---|---|
-| TekRevol | 2025-09-30 | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | Initial lock — pre-content-overhaul baseline |
-| Reverto | 2025-09-30 | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | Initial lock |
-| ClaimShield | 2025-09-30 (or earliest available) | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | Initial lock — limited pre-launch data |
-| CensusFlow | 2025-09-30 (or earliest available) | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | Initial lock — limited pre-launch data |
+| Brand | Date | Daily Clicks | Daily Sessions | Avg Position | Top 10 | Top 3 | Locked By |
+|---|---|---|---|---|---|---|---|
+| TekRevol | 2025-09-30 | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| Reverto | 2025-09-30 | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| ClaimShield | 2025-09-30 (or earliest available) | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| CensusFlow | 2025-09-30 (or earliest available) | NULL (pending GSC) | NULL (pending GA4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
 
 ## How to lock
 

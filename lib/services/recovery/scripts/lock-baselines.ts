@@ -286,23 +286,21 @@ function renderDryRunDoc(
   lines.push("## Computed values (NOT YET WRITTEN)");
   lines.push("");
   lines.push(
-    "| Brand | Effective Date | Daily Clicks | Daily Sessions | Avg Position | Top 10 | Top 3 | Keywords | Notes |",
+    "| Brand | Date | Daily Clicks | Daily Sessions | Avg Position | Top 10 | Top 3 | Locked By |",
   );
-  lines.push(
-    "|---|---|---|---|---|---|---|---|---|",
-  );
+  lines.push("|---|---|---|---|---|---|---|---|");
   for (const { plan, resolved, outcome } of rows) {
     const brandLabel =
       "missing" in resolved ? `${plan.key} (NOT FOUND)` : resolved.brandName;
     if (outcome.kind === "brand_missing") {
       lines.push(
-        `| ${brandLabel} | — | — | — | — | — | — | — | brand missing from \`brands\` table; skipped |`,
+        `| ${brandLabel} | — | — | — | — | — | — | ${args.lockedBy} _(brand missing — will skip on --confirm)_ |`,
       );
       continue;
     }
     if (outcome.kind === "no_data") {
       lines.push(
-        `| ${brandLabel} | ${outcome.attemptedDate} | NULL (pending GSC) | NULL (pending GA4) | — | — | — | 0 | no rank_snapshots — script will skip on \`--confirm\` |`,
+        `| ${brandLabel} | ${outcome.attemptedDate} | NULL (pending GSC) | NULL (pending GA4) | — | — | — | ${args.lockedBy} _(no rank_snapshots — will skip on --confirm)_ |`,
       );
       continue;
     }
@@ -310,8 +308,28 @@ function renderDryRunDoc(
       ? ` (fell back from ${plan.baselineDate})`
       : "";
     lines.push(
-      `| ${brandLabel} | ${outcome.effectiveBaselineDate}${fellBack} | NULL (pending GSC) | NULL (pending GA4) | ${fmtNum(outcome.avgPosition, 2)} | ${outcome.keywordsInTop10} | ${outcome.keywordsInTop3} | ${outcome.keywordCount} | ${plan.notes} |`,
+      `| ${brandLabel} | ${outcome.effectiveBaselineDate}${fellBack} | NULL (pending GSC) | NULL (pending GA4) | ${fmtNum(outcome.avgPosition, 2)} | ${outcome.keywordsInTop10} | ${outcome.keywordsInTop3} | ${args.lockedBy} |`,
     );
+  }
+  lines.push("");
+  lines.push("### Per-brand context");
+  lines.push("");
+  for (const { plan, resolved, outcome } of rows) {
+    const brandLabel =
+      "missing" in resolved ? `${plan.key} (NOT FOUND)` : resolved.brandName;
+    if (outcome.kind === "ok") {
+      lines.push(
+        `- **${brandLabel}** — keywords=${outcome.keywordCount}; notes: ${plan.notes}`,
+      );
+    } else if (outcome.kind === "no_data") {
+      lines.push(
+        `- **${brandLabel}** — no rank_snapshots in window; will be skipped on \`--confirm\``,
+      );
+    } else {
+      lines.push(
+        `- **${brandLabel}** — brand row not found in \`public.brands\`; will be skipped on \`--confirm\``,
+      );
+    }
   }
   lines.push("");
   lines.push("## How to lock");
