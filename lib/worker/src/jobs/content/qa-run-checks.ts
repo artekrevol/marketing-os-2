@@ -54,16 +54,16 @@ const RUNNERS: Record<CheckName, CheckRunner> = {
  *   1. Idempotency guard (qa_run.id is the key).
  *   2. Mark qa_runs.status='running'.
  *   3. Load content_object + per-brand check definitions.
- *   4. Execute every enabled runner serially, persisting one
- *      qa_check_results row per check (even on individual error).
- *   5. Hard-fail check failures → qa_run.status='failed'.
- *      Otherwise (including warns) → qa_run.status='passed'.
- *      Handler crash → qa_run.status='error', re-thrown for retry.
- *   6. finalizeQaRun() transitions content_object.status atomically.
- *
- * Runs serially so a single Originality.ai API failure can short-
- * circuit the rest. The state machine accepts failures gracefully:
- * the bouncing back to 'drafting' lets the writer iterate.
+ *   4. Execute every enabled runner in PARALLEL via Promise.allSettled
+ *      so a slow Originality.ai call cannot block the warns. Each
+ *      result is persisted regardless of outcome (errors recorded
+ *      with outcome='error').
+ *   5. Per failed check, emit a `qa.check_failed` event so the UI
+ *      can react in realtime. Hard-fail check failures => qa_run.status='failed'.
+ *      Otherwise (including warns) => qa_run.status='passed'.
+ *      Handler crash => qa_run.status='error', re-thrown for retry.
+ *   6. finalizeQaRun() emits the terminal `qa.run_completed` event
+ *      and atomically transitions content_object.status.
  */
 export async function handleQaRunChecks(
   payload: JobData<"content.qa-run-checks">,
@@ -99,62 +99,114 @@ export async function handleQaRunChecks(
   }
 
   const defs = await getCheckDefinitions(payload.brandId);
-  let hardFailed = false;
-  let warnFailed = 0;
-  let executed = 0;
-  let crashCount = 0;
+
+  type Slot = {
+    checkName: CheckName;
+    severity: CheckSeverity;
+    threshold: number | null;
+    config: Record<string, unknown>;
+    startedAt: number;
+  };
+  const slots: Slot[] = [];
+  const promises: Promise<CheckRunResult>[] = [];
 
   for (const [checkName, runner] of Object.entries(RUNNERS) as [CheckName, CheckRunner][]) {
     const def = defs.get(checkName);
     if (!def) {
-      log.warn({ checkName, brandId: payload.brandId }, "qa-run-checks: no definition for check, skipping");
+      log.warn(
+        { checkName, brandId: payload.brandId },
+        "qa-run-checks: no definition for check, skipping",
+      );
       continue;
     }
-
-    const checkStart = Date.now();
-    let result: CheckRunResult;
-    try {
-      result = await runner(
+    const threshold = def.threshold ? Number(def.threshold) : null;
+    slots.push({
+      checkName,
+      severity: def.severity as CheckSeverity,
+      threshold,
+      config: (def.config as Record<string, unknown>) ?? {},
+      startedAt: Date.now(),
+    });
+    promises.push(
+      runner(
         {
           brandId: payload.brandId,
           contentObjectId: payload.contentObjectId,
           bodyMd: obj.bodyMd,
           wordCount: obj.wordCount,
-          threshold: def.threshold ? Number(def.threshold) : null,
+          threshold,
           config: (def.config as Record<string, unknown>) ?? {},
         },
         log.child({ checkName }),
-      );
-    } catch (err) {
-      log.error({ err, checkName }, "qa-run-checks: runner threw");
+      ),
+    );
+  }
+
+  const settled = await Promise.allSettled(promises);
+
+  let hardFailed = false;
+  let warnFailed = 0;
+  let executed = 0;
+  let crashCount = 0;
+
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i]!;
+    const settledResult = settled[i]!;
+    let result: CheckRunResult;
+    if (settledResult.status === "fulfilled") {
+      result = settledResult.value;
+    } else {
+      const err = settledResult.reason as Error;
+      log.error({ err, checkName: slot.checkName }, "qa-run-checks: runner threw");
       result = {
         outcome: "error",
         score: null,
-        threshold: def.threshold ? Number(def.threshold) : null,
-        summary: (err as Error).message ?? "runner crashed",
-        details: { error: (err as Error).message ?? "unknown" },
+        threshold: slot.threshold,
+        summary: err?.message ?? "runner crashed",
+        details: { error: err?.message ?? "unknown" },
       };
       crashCount += 1;
     }
 
     executed += 1;
 
-    await withBrandScope(payload.brandId, async ({ scoped }) => {
+    await withBrandScope(payload.brandId, async ({ scoped, db }) => {
       await scoped.insert(qaCheckResultsTable, {
         qaRunId: payload.qaRunId,
-        checkName,
-        severity: def.severity as CheckSeverity,
+        checkName: slot.checkName,
+        severity: slot.severity,
         outcome: result.outcome,
         score: result.score === null ? null : result.score.toString(),
         threshold: result.threshold === null ? null : result.threshold.toString(),
         summary: result.summary,
         details: result.details,
-        durationMs: Date.now() - checkStart,
+        durationMs: Date.now() - slot.startedAt,
       });
+
+      // Realtime fan-out: surface every fail/error as a discrete
+      // event so the seo-os queue can flag the run before the
+      // terminal `qa.run_completed` lands.
+      if (result.outcome !== "pass") {
+        await db.insert(eventsTable).values({
+          brandId: payload.brandId,
+          eventType: "qa.check_failed",
+          subjectType: "qa_run",
+          subjectId: payload.qaRunId,
+          payload: {
+            contentObjectId: payload.contentObjectId,
+            checkName: slot.checkName,
+            severity: slot.severity,
+            outcome: result.outcome,
+            score: result.score,
+            threshold: result.threshold,
+            summary: result.summary,
+          },
+        });
+      }
     });
 
     if (result.outcome === "fail") {
-      if (def.severity === "hard") hardFailed = true;
+      if (slot.severity === "hard") hardFailed = true;
       else warnFailed += 1;
     }
   }

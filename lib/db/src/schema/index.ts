@@ -11,6 +11,7 @@
 
 export * from "./brands";
 export * from "./events";
+export * from "./audit-log";
 export * from "./dead-jobs";
 export * from "./integration-call-log";
 export * from "./projects";

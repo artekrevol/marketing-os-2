@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import {
   submitForReview,
   decide,
+  startFromDraft,
   getReviewDetail,
   listReviewerQueue,
   callerHasBrandAccess,
@@ -12,6 +13,27 @@ import {
   MissingCommentError,
 } from "@workspace/quality-gate";
 import { requireAuth } from "../middlewares/auth";
+
+/**
+ * Reviewer-or-admin gate for state-mutating decisions. Brand access
+ * alone is not enough — only members with `role IN ('admin','reviewer')`
+ * on `public.user_profiles` may approve/reject content.
+ */
+async function callerCanReview(userId: string, isAdmin: boolean): Promise<boolean> {
+  if (isAdmin) return true;
+  try {
+    const result = (await db.execute(
+      sql`select 1 from public.user_profiles
+          where user_id = ${userId}::uuid
+            and role in ('admin','reviewer')
+          limit 1`,
+    )) as unknown as { rows?: unknown[] } | unknown[];
+    const rows = Array.isArray(result) ? result : (result.rows ?? []);
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -111,6 +133,12 @@ router.post("/decide", async (req, res) => {
   }
   if (decision !== "approved" && decision !== "rejected") {
     res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
+    return;
+  }
+  const isAdmin = req.auth?.isAdmin === true;
+  const canReview = await callerCanReview(guard.userId, isAdmin);
+  if (!canReview) {
+    res.status(403).json({ error: "reviewer or admin role required" });
     return;
   }
   try {
@@ -279,48 +307,14 @@ router.post("/start-from-draft", async (req, res) => {
     return;
   }
   try {
-    const result = (await db.execute(
-      sql`with latest as (
-            select id, body_md, word_count
-              from public.drafts
-             where project_id = ${projectId}::uuid
-               and brand_id   = ${guard.brandId}::uuid
-             order by updated_at desc nulls last, created_at desc
-             limit 1
-          ),
-          existing as (
-            select id from public.content_objects
-             where project_id = ${projectId}::uuid
-               and brand_id   = ${guard.brandId}::uuid
-               and status     = 'drafting'
-             order by created_at desc
-             limit 1
-          ),
-          inserted as (
-            insert into public.content_objects (brand_id, project_id, draft_id, title, body_md, word_count)
-            select ${guard.brandId}::uuid,
-                   ${projectId}::uuid,
-                   l.id,
-                   coalesce((select topic from public.projects where id = ${projectId}::uuid), ''),
-                   coalesce(l.body_md, ''),
-                   coalesce(l.word_count, 0)
-              from latest l
-             where not exists (select 1 from existing)
-            returning id
-          )
-          select id, 'created'::text as source from inserted
-          union all
-          select id, 'reused'::text  as source from existing`,
-    )) as unknown as { rows?: Array<{ id: string; source: string }> };
-    const rows = (result.rows ?? []) as Array<{ id: string; source: string }>;
-    const row = rows[0];
-    if (!row) {
-      res.status(404).json({ error: "no_draft", message: "Project has no draft yet" });
-      return;
-    }
+    const result = await startFromDraft({
+      brandId: guard.brandId,
+      projectId,
+      actorId: guard.userId,
+    });
     res
-      .status(row.source === "created" ? 201 : 200)
-      .json({ contentObjectId: row.id, source: row.source });
+      .status(result.source === "created" ? 201 : 200)
+      .json({ contentObjectId: result.contentObjectId, source: result.source });
   } catch (err) {
     req.log.error({ err }, "quality-gate: start-from-draft failed");
     res.status(500).json({ error: "internal_error", message: (err as Error).message });
