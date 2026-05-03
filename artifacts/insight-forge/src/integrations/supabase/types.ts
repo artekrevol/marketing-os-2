@@ -155,7 +155,7 @@ export type Database = {
       }
       fetched_pages: {
         Row: {
-          brand_id: string | null
+          brand_id: string
           byte_size: number | null
           content: string
           fetched_at: string
@@ -279,7 +279,7 @@ export type Database = {
       }
       page_events: {
         Row: {
-          brand_id: string | null
+          brand_id: string
           created_at: string
           duration_ms: number | null
           entered_at: string
@@ -321,7 +321,7 @@ export type Database = {
       }
       playbook: {
         Row: {
-          brand_id: string | null
+          brand_id: string
           content_markdown: string
           created_at: string
           id: string
@@ -355,7 +355,7 @@ export type Database = {
       playbook_sections: {
         Row: {
           always_include: boolean
-          brand_id: string | null
+          brand_id: string
           created_at: string
           id: string
           section_content: string
@@ -604,7 +604,7 @@ export type Database = {
       }
       usage_logs: {
         Row: {
-          brand_id: string | null
+          brand_id: string
           cache_creation_input_tokens: number | null
           cache_read_input_tokens: number | null
           created_at: string
@@ -814,7 +814,7 @@ export type Database = {
       }
       voice_library: {
         Row: {
-          brand_id: string | null
+          brand_id: string
           captured_at: string
           edit_type: string | null
           edited_human_text: string

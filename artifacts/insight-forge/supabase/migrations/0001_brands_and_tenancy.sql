@@ -134,19 +134,19 @@ create index if not exists audit_log_actor_idx   on public.audit_log (actor_id, 
 ----------------------------------------------------------------------
 -- 5. brand_id columns on brand-scoped tables.
 --
--- Strategy:
---   a) "tenant_root" tables (projects) — brand_id NOT NULL, set by client.
---   b) "tenant_child" tables (drafts, draft_scores, outlines, research_briefs,
---      proof_points, interview_answers) — brand_id NOT NULL but auto-filled
---      from the parent projects row via a BEFORE INSERT trigger, so existing
---      client write paths don't break. These tables have project_id NOT NULL,
---      so the trigger can always resolve a brand.
---   c) "tenant_optional" tables (voice_library, usage_logs, page_events,
---      playbook, playbook_sections, fetched_pages) — brand_id NULLABLE.
---      These either pre-date the tenancy model, are global resources, or
---      have nullable project_id (voice_library, usage_logs) so the
---      inheritance trigger cannot guarantee a brand. They get an index +
---      best-effort trigger fill, but no NOT NULL constraint.
+-- Strategy: every brand-scoped table gets brand_id NOT NULL post-backfill
+-- (Sprint 1 requirement: strict tenant isolation, no NULL escape hatch).
+--   a) "tenant_root" (projects) — set by client.
+--   b) "tenant_child" (everything else) — auto-filled by tenant_brand_inherit()
+--      BEFORE INSERT trigger which:
+--        1. returns NEW.brand_id if the caller already supplied it;
+--        2. else inherits from the parent projects row via project_id;
+--        3. else falls back to the caller's first brand_access entry from
+--           user_profiles (lets writes that have no project_id — telemetry,
+--           voice library captures, fetched pages — still land in the
+--           writer's primary brand);
+--        4. else raises so the row is never created without tenancy.
+--   Backfill assigns existing rows to TekRevol so the NOT NULL flip is safe.
 ----------------------------------------------------------------------
 do $$
 declare
@@ -155,12 +155,11 @@ declare
   tenant_root text[]     := array['projects'];
   tenant_child text[]    := array[
     'drafts','draft_scores','outlines','research_briefs',
-    'proof_points','interview_answers'
-  ];
-  tenant_optional text[] := array[
+    'proof_points','interview_answers',
     'voice_library','usage_logs',
     'playbook','playbook_sections','fetched_pages','page_events'
   ];
+  tenant_optional text[] := array[]::text[];
   all_tables text[];
 begin
   select id into tek from public.brands where slug = 'tekrevol';
@@ -189,35 +188,79 @@ begin
   end loop;
 end $$;
 
--- Trigger: child rows inherit brand_id from their parent project when
--- the client doesn't supply it. Keeps existing insert call sites working
--- post-migration without forcing every component to thread brand_id.
-create or replace function public.tenant_child_brand_inherit()
-returns trigger language plpgsql as $$
+-- Trigger: BEFORE INSERT on every brand-scoped child table. Resolution
+-- order: (1) honour client-supplied brand_id; (2) inherit from parent
+-- projects via project_id when present; (3) fall back to the caller's
+-- first brand_access entry from user_profiles; (4) raise so no row
+-- escapes without a brand. This makes brand_id NOT NULL safe to enforce
+-- on tables whose existing insert paths don't yet thread brand_id
+-- (voice_library, usage_logs, page_events, playbook, etc.).
+create or replace function public.tenant_brand_inherit()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  parent_brand uuid;
+  fallback_brand uuid;
+  has_pid boolean;
+  pid uuid;
 begin
-  if new.brand_id is null and new.project_id is not null then
-    select brand_id into new.brand_id from public.projects where id = new.project_id;
+  if new.brand_id is not null then
+    return new;
   end if;
-  return new;
+
+  -- Does this table have a project_id column?
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name   = tg_table_name
+      and column_name  = 'project_id'
+  ) into has_pid;
+
+  if has_pid then
+    execute format('select ($1).%I', 'project_id') into pid using new;
+    if pid is not null then
+      select brand_id into parent_brand from public.projects where id = pid;
+      if parent_brand is not null then
+        new.brand_id := parent_brand;
+        return new;
+      end if;
+    end if;
+  end if;
+
+  -- Fall back to the caller's first brand_access entry. Skips if there
+  -- is no auth.uid() (service-role inserts are expected to set brand_id
+  -- explicitly).
+  if auth.uid() is not null then
+    select case when array_length(brand_access,1) > 0 then brand_access[1] else null end
+      into fallback_brand
+      from public.user_profiles
+      where user_id = auth.uid();
+    if fallback_brand is not null then
+      new.brand_id := fallback_brand;
+      return new;
+    end if;
+  end if;
+
+  raise exception 'brand_id required on %.% — no parent project, no caller brand_access',
+    tg_table_schema, tg_table_name;
 end;
 $$;
 
 do $$
 declare
   t text;
-  -- Trigger is installed on every brand-scoped table that has a project_id
-  -- column, including the optional ones, so that when a project_id IS
-  -- supplied the brand_id gets best-effort filled.
+  -- Every brand-scoped child table gets the trigger; the function
+  -- handles project_id presence/absence dynamically.
   child_tables text[] := array[
     'drafts','draft_scores','outlines','research_briefs',
     'proof_points','interview_answers',
-    'voice_library','usage_logs'
+    'voice_library','usage_logs',
+    'playbook','playbook_sections','fetched_pages','page_events'
   ];
 begin
   foreach t in array child_tables loop
     execute format('drop trigger if exists %I on public.%I', t || '_brand_inherit_trg', t);
     execute format(
-      'create trigger %I before insert on public.%I for each row execute function public.tenant_child_brand_inherit()',
+      'create trigger %I before insert on public.%I for each row execute function public.tenant_brand_inherit()',
       t || '_brand_inherit_trg', t
     );
   end loop;

@@ -1,10 +1,10 @@
 -- Sprint 1 — Multi-brand foundation, migration 2 of 3.
 --
 -- Enable RLS and write per-table policies on every brand-scoped table.
--- Policy shape: admin bypass OR brand_id ∈ caller's brand_access[].
--- Children that lack a direct brand_id (none after 0001 — every table got
--- one) would join through projects; we skip that since 0001 added brand_id
--- everywhere.
+-- Single strict policy shape: admin bypass OR brand_id ∈ caller's
+-- brand_access[]. brand_id is NOT NULL on every brand-scoped table
+-- (enforced in 0001 + tenant_brand_inherit() trigger), so there is no
+-- NULL escape hatch.
 --
 -- The brands / events / audit_log / user_profiles tables get their own
 -- policies tuned to their access shape.
@@ -12,24 +12,15 @@
 begin;
 
 ----------------------------------------------------------------------
--- Brand-scoped tables
+-- Brand-scoped tables — uniformly strict.
 ----------------------------------------------------------------------
--- Strict-tenancy tables: brand_id NOT NULL, RLS denies cross-brand.
--- Optional-tenancy tables (playbook, playbook_sections, fetched_pages,
--- page_events): brand_id may be NULL (global resource / generic
--- telemetry); the policy treats NULL as "visible to all signed-in
--- users" so legacy single-tenant rows and anonymous page_events keep
--- flowing.
 do $$
 declare
   t text;
   strict_tables text[] := array[
-    'projects','drafts','draft_scores','outlines','research_briefs',
-    'proof_points','interview_answers'
-  ];
-  -- voice_library and usage_logs are loose because their parent project_id
-  -- is nullable, so the inheritance trigger cannot guarantee a brand_id.
-  loose_tables text[] := array[
+    'projects',
+    'drafts','draft_scores','outlines','research_briefs',
+    'proof_points','interview_answers',
     'voice_library','usage_logs',
     'playbook','playbook_sections','fetched_pages','page_events'
   ];
@@ -44,26 +35,6 @@ begin
     execute format('drop policy if exists %I on public.%I', t || '_delete', t);
 
     pred := 'public.is_admin() or brand_id = any(public.current_user_brand_access())';
-
-    execute format('create policy %I on public.%I for select using (%s)',
-      t || '_select', t, pred);
-    execute format('create policy %I on public.%I for insert with check (%s)',
-      t || '_insert', t, pred);
-    execute format('create policy %I on public.%I for update using (%s) with check (%s)',
-      t || '_update', t, pred, pred);
-    execute format('create policy %I on public.%I for delete using (%s)',
-      t || '_delete', t, pred);
-  end loop;
-
-  foreach t in array loose_tables loop
-    execute format('alter table public.%I enable row level security', t);
-
-    execute format('drop policy if exists %I on public.%I', t || '_select', t);
-    execute format('drop policy if exists %I on public.%I', t || '_insert', t);
-    execute format('drop policy if exists %I on public.%I', t || '_update', t);
-    execute format('drop policy if exists %I on public.%I', t || '_delete', t);
-
-    pred := '(auth.uid() is not null and (brand_id is null or public.is_admin() or brand_id = any(public.current_user_brand_access())))';
 
     execute format('create policy %I on public.%I for select using (%s)',
       t || '_select', t, pred);
