@@ -11,6 +11,7 @@ import { logger } from "./logger";
 import { initSentry, captureJobError } from "./sentry";
 import { dispatch } from "./jobs";
 import { recordDeadJob } from "./jobs/dead-letter";
+import { recordTerminalIntegrationFailure } from "./jobs/terminal-failure";
 import { startHealthServer } from "./health";
 
 const startedAt = Date.now();
@@ -48,7 +49,12 @@ async function main(): Promise<void> {
         brandId: ((job?.data as { brandId?: string } | undefined)?.brandId) ?? null,
       });
       if (job && attempts >= max) {
+        // Terminal failure: persist to dead_jobs AND emit a single
+        // `integration.error` event (for integration jobs only). This
+        // is the ONLY place that writes integration.error — handlers
+        // never do it per-attempt, so retries don't pollute the feed.
         await recordDeadJob(name, job, err ?? new Error("unknown"), logger);
+        await recordTerminalIntegrationFailure(job, err ?? new Error("unknown"), logger);
       }
     });
 

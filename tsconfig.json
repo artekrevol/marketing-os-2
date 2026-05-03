@@ -8,6 +8,7 @@
     { "path": "./lib/api-zod" },
     { "path": "./lib/jobs" },
     { "path": "./lib/integrations/dataforseo" },
-    { "path": "./lib/integrations/originality-ai" }
+    { "path": "./lib/integrations/originality-ai" },
+    { "path": "./lib/worker" }
   ]
 }

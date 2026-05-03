@@ -1,9 +1,10 @@
-import { sql } from "drizzle-orm";
 import { db, eventsTable } from "@workspace/db";
 import type { JobData } from "@workspace/jobs";
 import type { Logger } from "pino";
+import { assertNotDuplicate } from "./idempotency";
 
 const SLEEP_MS = 100;
+const SUCCESS_EVENT = "system.heartbeat";
 
 export async function handleHeartbeat(
   payload: JobData<"maintenance.heartbeat-noop">,
@@ -11,35 +12,24 @@ export async function handleHeartbeat(
 ): Promise<{ inserted: boolean; eventId?: string }> {
   await new Promise((r) => setTimeout(r, SLEEP_MS));
 
-  const idem = payload.idempotencyKey;
-
-  // Idempotency: short-circuit if an event with this key already exists.
-  const existing = await db
-    .select({ id: eventsTable.id })
-    .from(eventsTable)
-    .where(sql`event_type = 'system.heartbeat' and payload->>'idempotencyKey' = ${idem}`)
-    .limit(1);
-
-  if (existing.length > 0) {
-    log.info({ idempotencyKey: idem, eventId: existing[0].id }, "heartbeat: duplicate, short-circuit");
-    return { inserted: false, eventId: existing[0].id };
-  }
+  const dup = await assertNotDuplicate(SUCCESS_EVENT, payload.idempotencyKey, log);
+  if (dup.duplicate) return { inserted: false, eventId: dup.eventId };
 
   const [row] = await db
     .insert(eventsTable)
     .values({
-      eventType: "system.heartbeat",
+      eventType: SUCCESS_EVENT,
       brandId: payload.brandId ?? null,
       subjectType: "system",
       subjectId: "worker",
       payload: {
-        idempotencyKey: idem,
+        idempotencyKey: payload.idempotencyKey,
         message: payload.message,
         receivedAt: new Date().toISOString(),
       },
     })
     .returning({ id: eventsTable.id });
 
-  log.info({ idempotencyKey: idem, eventId: row?.id }, "heartbeat: event written");
+  log.info({ idempotencyKey: payload.idempotencyKey, eventId: row?.id }, "heartbeat: event written");
   return { inserted: true, eventId: row?.id };
 }
