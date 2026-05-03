@@ -22,7 +22,15 @@ import {
   ScopedDb,
   stampBrandId,
 } from "../src/middleware";
-import { projectsTable, brandsTable, eventsTable } from "../src/schema";
+import {
+  projectsTable,
+  brandsTable,
+  eventsTable,
+  recoveryBaselinesTable,
+  recoveryInitiativesTable,
+  recoverySnapshotsTable,
+} from "../src/schema";
+import { BRAND_SCOPED_TABLES } from "../src/brand-scope";
 
 // Live-DB tests require a Postgres reachable via DATABASE_URL with the
 // Sprint 1 schema applied (brands + projects). When DATABASE_URL is
@@ -46,6 +54,44 @@ describe("guardedDb (root export — protects worker tier)", () => {
   it("allows select().from() on system tables (events) without scope", async () => {
     const { guardedDb } = await import("../src/index");
     expect(() => guardedDb.select().from(eventsTable)).not.toThrow();
+  });
+
+  // Recovery War Room — Prompt 1 regression: every recovery_* table is
+  // brand-scoped, so direct worker-tier reads/writes outside withBrandScope
+  // must fail loud.
+  it("registers recovery_baselines / recovery_initiatives / recovery_snapshots as brand-scoped", () => {
+    expect(BRAND_SCOPED_TABLES.has("recovery_baselines")).toBe(true);
+    expect(BRAND_SCOPED_TABLES.has("recovery_initiatives")).toBe(true);
+    expect(BRAND_SCOPED_TABLES.has("recovery_snapshots")).toBe(true);
+  });
+
+  it("throws when worker code calls insert() on recovery_initiatives outside withBrandScope", async () => {
+    const { guardedDb } = await import("../src/index");
+    expect(() =>
+      guardedDb
+        .insert(recoveryInitiativesTable)
+        .values({
+          brandId: "b1",
+          name: "x",
+          type: "content_refresh",
+          startedAt: new Date(),
+          createdBy: "u1",
+        } as never),
+    ).toThrow(BrandScopeViolationError);
+  });
+
+  it("throws when worker code calls select().from(recovery_baselines) outside withBrandScope", async () => {
+    const { guardedDb } = await import("../src/index");
+    expect(() => guardedDb.select().from(recoveryBaselinesTable)).toThrow(
+      BrandScopeViolationError,
+    );
+  });
+
+  it("throws when worker code calls select().from(recovery_snapshots) outside withBrandScope", async () => {
+    const { guardedDb } = await import("../src/index");
+    expect(() => guardedDb.select().from(recoverySnapshotsTable)).toThrow(
+      BrandScopeViolationError,
+    );
   });
 });
 

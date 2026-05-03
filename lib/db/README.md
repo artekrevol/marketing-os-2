@@ -38,6 +38,23 @@ await withBrandScope(brandId, async ({ db, brandId }) => {
 4. Always pair `brandIdFilter(scope)` with `eq(table.brandId, scope.brandId)`
    on raw SQL queries; never hand-build the predicate from request input.
 
+### Brand-scoped tables
+
+The full list lives in `BRAND_SCOPED_TABLES` (`src/brand-scope.ts`).
+Currently scoped:
+
+- Sprint 1: `projects`, `drafts`, `outlines`, `research_findings`,
+  `voice_library`, `fetched_pages`, `ai_calls`, `page_visits`,
+  `topic_briefs`, `brand_personas`, `competitor_pages`,
+  `keyword_lists`, `rank_snapshots`.
+- Sprint 3 — Quality Gate: `content_objects`, `qa_runs`,
+  `qa_check_results`, `qa_signoffs`, `qa_overrides`,
+  `qa_check_definitions`.
+- Recovery War Room (Pattern A, all three): `recovery_baselines`
+  (UNIQUE per brand, admin-write-only via RLS), `recovery_initiatives`,
+  `recovery_snapshots` (admin-write-only via RLS; worker writes via
+  service_role).
+
 ### Adding a new brand-scoped table
 
 1. Author the `pgTable(...)` in `src/schema/<name>.ts`.

@@ -35,6 +35,10 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "qa_signoffs",
   "qa_overrides",
   "qa_check_definitions",
+  // Recovery War Room — parallel sprint
+  "recovery_baselines",
+  "recovery_initiatives",
+  "recovery_snapshots",
 ]);
 
 /** Brand context attached to a scoped transaction. */
