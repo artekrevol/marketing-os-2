@@ -13,24 +13,28 @@ a Supabase preview branch first; do not push to prod blind.
 
 1. `0001_brands_and_tenancy.sql` — creates `brands`, `user_profiles`,
    `events`, `audit_log`; seeds the four brands; adds `brand_id` to every
-   brand-scoped table; backfills existing rows to TekRevol. Three
-   tenancy classes:
+   brand-scoped table; backfills existing rows to TekRevol. Two tenancy
+   classes — **every brand-scoped table is `brand_id NOT NULL`**, no
+   NULL escape hatch:
    - **Root** (`projects`) — `brand_id NOT NULL`, set by the client.
-   - **Child** (`drafts`, `draft_scores`, `outlines`, `research_briefs`,
-     `voice_library`, `proof_points`, `interview_answers`, `usage_logs`)
-     — `brand_id NOT NULL` but a `BEFORE INSERT` trigger
-     (`tenant_child_brand_inherit`) auto-fills it from the parent
-     project, so existing client inserts keep working unmodified.
-   - **Optional** (`playbook`, `playbook_sections`, `fetched_pages`,
-     `page_events`) — `brand_id NULLABLE`. These are global resources
-     or generic telemetry; RLS treats `NULL` as "visible to all signed-in
-     users".
+   - **Child** (everything else: `drafts`, `draft_scores`, `outlines`,
+     `research_briefs`, `proof_points`, `interview_answers`,
+     `voice_library`, `usage_logs`, `playbook`, `playbook_sections`,
+     `fetched_pages`, `page_events`) — `brand_id NOT NULL`, auto-filled
+     by the `tenant_brand_inherit()` `BEFORE INSERT` trigger which
+     resolves brand in this order: (1) caller-supplied `brand_id`;
+     (2) parent `projects.brand_id` via `project_id` when present;
+     (3) caller's first `user_profiles.brand_access` entry; else raises.
+     This keeps existing insert paths working without threading
+     `brand_id` while guaranteeing tenancy on every row.
 
    Also adds the `current_user_brand_access()` and `is_admin()` helper
    functions and the `on_auth_user_created` trigger.
-2. `0002_rls_policies.sql` — enables RLS on every brand-scoped table and
-   on the new tables. Policy shape:
+2. `0002_rls_policies.sql` — enables RLS on every brand-scoped table
+   with a single strict predicate:
    `is_admin() OR brand_id = ANY(current_user_brand_access())`.
+   No `brand_id IS NULL` clause — strict isolation across all 13
+   brand-scoped tables.
 3. `0003_pen_check.sql` — manual penetration test script. Read-only —
    commented out by default. Run it interactively in the SQL editor
    after a ClaimShield-only test user exists.
@@ -96,10 +100,10 @@ If a migration goes wrong on production:
 
 1. **Before NOT NULL**: drop the `brand_id` columns and re-run from
    scratch on the preview branch.
-2. **After NOT NULL**: keep the columns, set `brand_id` nullable again,
-   drop the FK, drop the indexes. `update <table> set brand_id = null`
-   is safe because the app falls back to `is_admin()` when a row's
-   `brand_id` is null and the user has admin role.
+2. **After NOT NULL**: every brand-scoped table is strictly
+   `brand_id NOT NULL` and RLS is strict, so nullifying values is not a
+   safe rollback. Instead, drop the per-table policies (admins still see
+   everything via service role / superuser), then drop the trigger and
+   the NOT NULL constraints in that order. Re-apply on the next attempt.
 3. **RLS lockout**: a superuser can `alter table <t> disable row level security;`
-   in the SQL editor to restore the prior single-tenant behavior while
-   you debug.
+   in the SQL editor to restore unrestricted access while you debug.
