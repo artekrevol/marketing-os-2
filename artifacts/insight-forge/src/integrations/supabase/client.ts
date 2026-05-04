@@ -15,12 +15,29 @@ if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
   );
 }
 
+// When the app is embedded inside the Replit preview iframe, direct
+// localStorage access throws a SecurityError. This adapter tries localStorage
+// first and silently falls back to an in-memory map so the app doesn't crash.
+function makeSafeStorage() {
+  try {
+    localStorage.getItem("__probe__");
+    return localStorage;
+  } catch {
+    const mem = new Map<string, string>();
+    return {
+      getItem: (key: string) => mem.get(key) ?? null,
+      setItem: (key: string, value: string) => { mem.set(key, value); },
+      removeItem: (key: string) => { mem.delete(key); },
+    };
+  }
+}
+
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
 export const supabase = createClient<Database>(SUPABASE_URL ?? "http://invalid.local", SUPABASE_PUBLISHABLE_KEY ?? "missing", {
   auth: {
-    storage: localStorage,
+    storage: makeSafeStorage(),
     persistSession: true,
     autoRefreshToken: true,
   }
