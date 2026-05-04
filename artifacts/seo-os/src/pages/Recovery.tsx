@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock,
+  Download,
   Lock,
   Plus,
   TrendingDown,
@@ -111,6 +112,17 @@ function RecoveryForBrand({ brandId }: { brandId: string }) {
     initiative: RecoveryInitiative | null;
   }>({ open: false, initiative: null });
 
+  const [exporting, setExporting] = useState(false);
+  const handleExportPdf = async () => {
+    setExporting(true);
+    try {
+      await recovery.exportPdf(brandId);
+    } catch {
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Realtime: refetch the recovery query family whenever ANY row in
   // recovery_initiatives for this brand changes. Insert/update/delete
   // are all surfaced through the single `*` event. Coarse invalidation
@@ -174,8 +186,20 @@ function RecoveryForBrand({ brandId }: { brandId: string }) {
     );
   }
 
+  const exportButton = isAdmin ? (
+    <button
+      type="button"
+      disabled={exporting}
+      onClick={handleExportPdf}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-rule rounded-sm hover:bg-ink/5 transition-colors disabled:opacity-50"
+    >
+      <Download className="h-3 w-3" />
+      {exporting ? "Exporting…" : "Export PDF"}
+    </button>
+  ) : null;
+
   return (
-    <Shell title="Recovery War Room" showBrandSelector>
+    <Shell title="Recovery War Room" showBrandSelector actions={exportButton}>
       <div className="grid gap-6 lg:grid-cols-3">
         <HeadlineCard overview={overview} />
         <ProjectionCard overview={overview} />
@@ -271,11 +295,13 @@ function Shell({
   title,
   subtitle,
   showBrandSelector = false,
+  actions,
   children,
 }: {
   title: string;
   subtitle?: string;
   showBrandSelector?: boolean;
+  actions?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
@@ -288,7 +314,10 @@ function Shell({
               <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>
             )}
           </div>
-          {showBrandSelector && <HeaderBrandSelector />}
+          <div className="flex items-center gap-3">
+            {actions}
+            {showBrandSelector && <HeaderBrandSelector />}
+          </div>
         </div>
       </header>
       <div className="px-8 py-6">{children}</div>

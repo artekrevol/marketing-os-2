@@ -1,3 +1,4 @@
+import React from "react";
 import { Router, type IRouter } from "express";
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
@@ -14,6 +15,10 @@ import {
 } from "@workspace/services-recovery";
 import { callerHasBrandAccess } from "@workspace/quality-gate";
 import { requireAuth } from "../middlewares/auth";
+import { renderToBuffer, type DocumentProps } from "@react-pdf/renderer";
+import type { ReactElement } from "react";
+import { RecoveryReport } from "../pdf/recovery-report";
+import { buildBrandReportData, listAllBrands } from "../pdf/build-report-data";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -400,6 +405,71 @@ router.post("/initiatives/:id/abandon", async (req, res) => {
     if (handleInitiativeError(res, err)) return;
     req.log.error({ err }, "recovery: abandon initiative failed");
     res.status(500).json({ error: "internal_error", message: (err as Error).message });
+  }
+});
+
+/** GET /api/recovery/export/all.pdf — admin-only multi-brand PDF. Must be registered BEFORE the :brandId param route. */
+router.get("/export/all.pdf", async (req, res) => {
+  if (req.auth?.isAdmin !== true) {
+    res.status(403).json({ error: "admin required" });
+    return;
+  }
+  try {
+    const brands = await listAllBrands();
+    const reportData = await Promise.all(
+      brands.map((b) => buildBrandReportData(b.id, b.name)),
+    );
+    const buf = await renderToBuffer(
+      React.createElement(RecoveryReport, { brands: reportData }) as unknown as ReactElement<DocumentProps>,
+    );
+    const date = new Date().toISOString().slice(0, 10);
+    res
+      .status(200)
+      .setHeader("Content-Type", "application/pdf")
+      .setHeader(
+        "Content-Disposition",
+        `attachment; filename="recovery-all-brands-${date}.pdf"`,
+      )
+      .end(Buffer.from(buf));
+  } catch (err) {
+    req.log.error({ err }, "recovery: all-brands PDF export failed");
+    res.status(500).json({ error: "pdf_generation_failed", message: (err as Error).message });
+  }
+});
+
+/** GET /api/recovery/export/:brandId.pdf — admin-only single-brand PDF. */
+router.get("/export/:brandId.pdf", async (req, res) => {
+  const rawId = req.params["brandId"];
+  if (!rawId || !UUID_RE.test(rawId)) {
+    res.status(400).json({ error: "brandId must be a UUID" });
+    return;
+  }
+  if (req.auth?.isAdmin !== true) {
+    res.status(403).json({ error: "admin required" });
+    return;
+  }
+  try {
+    const brands = await listAllBrands();
+    const brand = brands.find((b) => b.id === rawId);
+    if (!brand) {
+      res.status(404).json({ error: "brand not found" });
+      return;
+    }
+    const data = await buildBrandReportData(brand.id, brand.name);
+    const buf = await renderToBuffer(
+      React.createElement(RecoveryReport, { brands: [data] }) as unknown as ReactElement<DocumentProps>,
+    );
+    res
+      .status(200)
+      .setHeader("Content-Type", "application/pdf")
+      .setHeader(
+        "Content-Disposition",
+        `attachment; filename="recovery-${brand.name.toLowerCase().replace(/\s+/g, "-")}-${data.generatedDate}.pdf"`,
+      )
+      .end(Buffer.from(buf));
+  } catch (err) {
+    req.log.error({ err }, "recovery: PDF export failed");
+    res.status(500).json({ error: "pdf_generation_failed", message: (err as Error).message });
   }
 });
 

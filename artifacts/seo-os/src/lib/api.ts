@@ -441,4 +441,29 @@ export const recovery = {
     );
     return normaliseInitiative(raw.initiative);
   },
+
+  exportPdf: async (brandId: string): Promise<void> => {
+    const res = await authedFetch(
+      `/api/recovery/export/${encodeURIComponent(brandId)}.pdf`,
+    );
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = (await res.json()) as { error?: string; message?: string };
+        detail = body.message || body.error || detail;
+      } catch {}
+      throw new Error(`${res.status} ${detail}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const disp = res.headers.get("content-disposition");
+    const match = disp?.match(/filename="?([^"]+)"?/);
+    a.download = match?.[1] ?? `recovery-${brandId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

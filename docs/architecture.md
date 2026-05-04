@@ -101,3 +101,71 @@ nullable `brand_id` and are written outside `withBrandScope`.
 
 See `docs/sprint-2-deploy.md` for env-var inventory and smoke-test
 procedure.
+
+## Recovery War Room
+
+The Recovery War Room is a parallel-track executive dashboard that locks
+pre-October 2025 baselines and projects recovery timelines per brand.
+12–18 month lifespan; retire when recovery completes.
+
+### Data flow
+
+```
+rank_snapshots (existing)
+        │
+        ▼
+┌──────────────────────┐  nightly cron   ┌──────────────────────┐
+│  recovery_baselines  │ ◄───────────────│  scoring queue       │
+│  (1 row per brand,   │  backfill or    │  recovery-snapshot   │
+│   locked immutably)  │  0 3 * * * UTC  │  handler             │
+└──────────────────────┘                 └──────────┬───────────┘
+                                                    │ writes
+                                                    ▼
+                                         ┌──────────────────────┐
+                                         │  recovery_snapshots  │
+                                         │  (daily roll-up)     │
+                                         └──────────┬───────────┘
+                                                    │
+       ┌────────────────────────────────────────────┤
+       ▼                                            ▼
+┌──────────────────┐                   ┌──────────────────────┐
+│ /recovery UI     │                   │ /api/recovery/export │
+│ (seo-os artifact)│                   │ /:brandId.pdf        │
+│ burn-down chart  │                   │ /all.pdf (admin)     │
+│ + initiatives    │                   │ @react-pdf/renderer  │
+└──────────────────┘                   └──────────────────────┘
+```
+
+### Tables
+
+| Table | Scope | Key constraint |
+|---|---|---|
+| `recovery_baselines` | Pattern A, UNIQUE(brand_id) | Immutable after lock |
+| `recovery_initiatives` | Pattern A | Manual CRUD by admin/editor |
+| `recovery_snapshots` | Pattern A, UNIQUE(brand_id, snapshot_date) | Worker-written |
+
+### Headline metric
+
+Rankings-based (`gap_to_baseline_top10_pct`), not clicks-based. GSC/GA4
+fields exist in the schema as nullable placeholders for a future
+ingestion sprint. The burn-down projection uses linear regression on
+top-10 keyword gap over the last 30 snapshots.
+
+### PDF export
+
+Server-side via `@react-pdf/renderer` (pinned in workspace catalog).
+Routes `GET /api/recovery/export/:brandId.pdf` and
+`GET /api/recovery/export/all.pdf` are admin-only. One page per brand:
+TekRevol-branded header, four-metric row (avg position, top-10 delta,
+top-3 delta, GSC placeholder), embedded SVG trend chart, top 3 active
+initiatives, projected recovery date, page-numbered footer.
+
+### Key files
+
+- Service: `lib/services/recovery/`
+- API routes: `artifacts/api-server/src/routes/recovery.ts`
+- PDF components: `artifacts/api-server/src/pdf/`
+- UI: `artifacts/seo-os/src/pages/Recovery.tsx`
+- Migration: `artifacts/insight-forge/supabase/migrations/0009_recovery.sql`
+
+See `docs/recovery-runbook.md` for operational guidance.
