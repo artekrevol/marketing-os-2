@@ -29,6 +29,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { toast } from "sonner";
 import { useActiveBrand } from "@/lib/brands";
 import {
   recovery,
@@ -117,7 +118,10 @@ function RecoveryForBrand({ brandId }: { brandId: string }) {
     setExporting(true);
     try {
       await recovery.exportPdf(brandId);
-    } catch {
+    } catch (err) {
+      toast.error("PDF export failed", {
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
     } finally {
       setExporting(false);
     }
