@@ -72,6 +72,30 @@ export const RecoverySnapshotPayload = BasePayload.extend({
 // yesterday's date.
 export const RecoverySnapshotNightlyPayload = BasePayload.extend({});
 
+// AI edge-function background jobs (edge functions migration)
+const AI_STAGE_KEY = z.enum([
+  "search_intent",
+  "benchmark_teardown",
+  "competitor_teardown",
+  "synergy_map",
+  "angle_and_conversion",
+  "ai_citation_landscape",
+  "atomic_and_entities",
+]);
+
+export const AiProposeBriefPayload = BasePayload.extend({
+  project_id: z.string().uuid(),
+});
+
+export const AiResearchGeneratePayload = BasePayload.extend({
+  project_id: z.string().uuid(),
+});
+
+export const AiResearchRetryCardPayload = BasePayload.extend({
+  project_id: z.string().uuid(),
+  stage: AI_STAGE_KEY,
+});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -100,6 +124,18 @@ export const JOB_REGISTRY = {
   "scoring.recovery-snapshot-nightly": {
     queue: "scoring" as QueueName,
     schema: RecoverySnapshotNightlyPayload,
+  },
+  "ai.propose-brief": {
+    queue: "ai" as QueueName,
+    schema: AiProposeBriefPayload,
+  },
+  "ai.research-generate": {
+    queue: "ai" as QueueName,
+    schema: AiResearchGeneratePayload,
+  },
+  "ai.research-retry-card": {
+    queue: "ai" as QueueName,
+    schema: AiResearchRetryCardPayload,
   },
 } as const;
 

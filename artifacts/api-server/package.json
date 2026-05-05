@@ -12,6 +12,7 @@
   "dependencies": {
     "@react-pdf/renderer": "catalog:",
     "@workspace/api-zod": "workspace:*",
+    "@workspace/content-ai": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/jobs": "workspace:*",
     "@workspace/quality-gate": "workspace:*",
@@ -23,7 +24,9 @@
     "jsonwebtoken": "^9.0.2",
     "pino": "^9",
     "pino-http": "^10",
-    "react": "catalog:"
+    "mammoth": "^1.8.0",
+    "react": "catalog:",
+    "unpdf": "^0.12.1"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",

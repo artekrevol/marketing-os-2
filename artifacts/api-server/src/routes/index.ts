@@ -3,6 +3,7 @@ import healthRouter from "./health";
 import adminSystemRouter from "./admin-system";
 import qualityGateRouter from "./quality-gate";
 import recoveryRouter from "./recovery";
+import aiRouter from "./ai/index.js";
 
 const router: IRouter = Router();
 
@@ -10,5 +11,6 @@ router.use(healthRouter);
 router.use("/admin/system", adminSystemRouter);
 router.use("/quality-gate", qualityGateRouter);
 router.use("/recovery", recoveryRouter);
+router.use("/ai", aiRouter);
 
 export default router;

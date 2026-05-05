@@ -244,9 +244,6 @@ importers:
       '@hookform/resolvers':
         specifier: ^3.10.0
         version: 3.10.0(react-hook-form@7.71.2(react@18.3.1))
-      '@lovable.dev/cloud-auth-js':
-        specifier: ^1.1.2
-        version: 1.1.2
       '@radix-ui/react-accordion':
         specifier: ^1.2.11
         version: 1.2.12(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -828,6 +825,19 @@ importers:
         specifier: 'catalog:'
         version: 3.25.76
 
+  lib/content-ai:
+    dependencies:
+      '@supabase/supabase-js':
+        specifier: ^2.105.1
+        version: 2.105.1
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.3.5
+
   lib/db:
     dependencies:
       drizzle-orm:
@@ -953,6 +963,9 @@ importers:
       '@sentry/node':
         specifier: ^8.55.0
         version: 8.55.2
+      '@workspace/content-ai':
+        specifier: workspace:*
+        version: link:../content-ai
       '@workspace/db':
         specifier: workspace:*
         version: link:../db
@@ -1169,9 +1182,6 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
-
-  '@lovable.dev/cloud-auth-js@1.1.2':
-    resolution: {integrity: sha512-xz8ocewsgwkp8giau272/eWWU3XrchCg5uba4yQPPYtevHTXaVU3sD+fO1JjyPBHacVcOcwhmgUiU9TKHt63cg==}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.3':
     resolution: {integrity: sha512-QZHtlVgbAdy2zAqNA9Gu1UpIuI8Xvsd1v8ic6B2pZmeFnFcMWiPLfWXh7TVw4eGEZ/C9TH281KwhVoeQUKbyjw==}
@@ -4762,8 +4772,6 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
-
-  '@lovable.dev/cloud-auth-js@1.1.2': {}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.3':
     optional: true

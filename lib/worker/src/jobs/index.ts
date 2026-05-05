@@ -11,6 +11,9 @@ import {
   handleRecoverySnapshot,
   handleRecoverySnapshotNightly,
 } from "./scoring/recovery-snapshot";
+import { handleAiProposeBrief } from "./ai/propose-brief";
+import { handleAiResearchGenerate } from "./ai/research-generate";
+import { handleAiResearchRetryCard } from "./ai/research-retry-card";
 
 type Handler<N extends JobName> = (data: JobData<N>, log: ReturnType<typeof jobLogger>) => Promise<unknown>;
 
@@ -22,6 +25,9 @@ export const HANDLERS: { [N in JobName]: Handler<N> } = {
   "scoring.recovery-initiative-impact": handleRecoveryInitiativeImpact,
   "scoring.recovery-snapshot": handleRecoverySnapshot,
   "scoring.recovery-snapshot-nightly": handleRecoverySnapshotNightly,
+  "ai.propose-brief": handleAiProposeBrief,
+  "ai.research-generate": handleAiResearchGenerate,
+  "ai.research-retry-card": handleAiResearchRetryCard,
 };
 
 /**

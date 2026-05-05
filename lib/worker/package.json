@@ -17,6 +17,7 @@
     "@workspace/db": "workspace:*",
     "@workspace/integrations-dataforseo": "workspace:*",
     "@workspace/integrations-originality-ai": "workspace:*",
+    "@workspace/content-ai": "workspace:*",
     "@workspace/jobs": "workspace:*",
     "@workspace/quality-gate": "workspace:*",
     "@workspace/services-recovery": "workspace:*",
