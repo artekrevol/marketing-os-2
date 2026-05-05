@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 import { NotebookPen } from "lucide-react";
 import { toast } from "sonner";
 
@@ -21,21 +20,21 @@ export default function Auth() {
 
   const signInGoogle = async () => {
     setLoading(true);
-    // Sprint 1: hd hint removed so non-tekrevol users (e.g. ClaimShield
-    // writers) can sign in. Access is gated by user_profiles.brand_access
-    // server-side; AppShell shows "no brand access" rather than blocking
-    // by domain.
-    const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-      extraParams: { prompt: "select_account" },
+    // hd hint removed so non-tekrevol users (e.g. ClaimShield writers) can
+    // sign in. Access is gated by user_profiles.brand_access server-side.
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin,
+        queryParams: { prompt: "select_account" },
+        skipBrowserRedirect: false,
+      },
     });
-    if (result.error) {
-      toast.error(result.error.message || "Sign-in failed");
+    if (error) {
+      toast.error(error.message || "Sign-in failed");
       setLoading(false);
-      return;
     }
-    if (result.redirected) return;
-    nav("/", { replace: true });
+    // Supabase performs the redirect automatically — nothing more to do.
   };
 
   const submitPassword = async (e: React.FormEvent) => {
