@@ -41,6 +41,6 @@ channel = "stable-25_05"
 [userenv]
 
 [userenv.shared]
-VITE_SUPABASE_URL = "https://kftooefsbronkzkiqpag.supabase.co"
-VITE_SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmdG9vZWZzYnJvbmt6a2lxcGFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0OTUyMzAsImV4cCI6MjA5MzA3MTIzMH0.kf85k0pLGG8r4wTlDKJLXTOuObDXQkXcRMOguKC_Jgw"
-VITE_SUPABASE_PROJECT_ID = "kftooefsbronkzkiqpag"
+VITE_SUPABASE_URL = "https://duqpsdhrttzdzjlhnubj.supabase.co"
+VITE_SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1cXBzZGhydHR6ZHpqbGhudWJqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NjA5MjMsImV4cCI6MjA5MzUzNjkyM30.sY6G0KcLGjYqzXcqsD_e51YAtvRZMzpeaapWBCvfOvg"
+VITE_SUPABASE_PROJECT_ID = "duqpsdhrttzdzjlhnubj"
