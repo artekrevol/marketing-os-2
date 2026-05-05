@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { ShieldCheck, Building2, ChevronDown, LogOut } from "lucide-react";
+import { ShieldCheck, Building2, ChevronDown, LogOut, LayoutDashboard } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { BrandProvider, useActiveBrand } from "@/lib/brands";
@@ -164,7 +164,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </p>
           <div className="flex items-center justify-center gap-2">
             <a
-              href="/insight-forge"
+              href="/projects"
               className="bg-ink text-paper px-4 py-2 rounded-sm text-sm font-medium hover:bg-accent"
             >
               Open ContentForge
@@ -207,6 +207,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
               {email}
               {isAdmin && <span className="ml-1 text-accent">· admin</span>}
             </div>
+            <a
+              href="/"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-sm text-sm hover:bg-secondary transition-colors"
+            >
+              <LayoutDashboard className="h-4 w-4" /> All modules
+            </a>
             <button
               onClick={signOut}
               className="w-full flex items-center gap-2 px-3 py-2 rounded-sm text-sm hover:bg-secondary transition-colors"

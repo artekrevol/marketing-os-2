@@ -4,6 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import AppShell from "./components/AppShell";
+import Hub from "./pages/Hub.tsx";
 import Index from "./pages/Index.tsx";
 import NewProject from "./pages/NewProject.tsx";
 import ProjectLayout from "./pages/ProjectLayout.tsx";
@@ -30,9 +31,13 @@ const App = () => (
       <Sonner />
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
+          {/* Standalone pages — no sidebar chrome */}
+          <Route path="/" element={<Hub />} />
+          <Route path="/auth" element={<Auth />} />
+
+          {/* ContentForge app — sidebar chrome via AppShell */}
           <Route element={<AppShell />}>
-            <Route path="/auth" element={<Auth />} />
-            <Route path="/" element={<Index />} />
+            <Route path="/projects" element={<Index />} />
             <Route path="/new" element={<NewProject />} />
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/users" element={<AdminUsers />} />

@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Plus, NotebookPen, LayoutGrid, LogOut, Shield, Activity, DollarSign, Building2, ChevronDown, Server } from "lucide-react";
+import { Plus, NotebookPen, LayoutGrid, LogOut, Shield, Activity, DollarSign, Building2, ChevronDown, Server, LayoutDashboard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import type { Project } from "@/lib/types";
@@ -129,7 +129,7 @@ export default function AppShell() {
       <div className="min-h-screen flex w-full bg-paper text-ink">
         <aside className="w-72 shrink-0 border-r border-rule bg-background flex flex-col">
           <div className="px-5 py-5 border-b border-rule">
-            <Link to="/" className="flex items-center gap-2">
+            <Link to="/projects" className="flex items-center gap-2">
               <NotebookPen className="h-5 w-5 text-accent" strokeWidth={1.75} />
               <span className="font-serif text-xl tracking-tight">ContentForge</span>
             </Link>
@@ -227,6 +227,12 @@ export default function AppShell() {
             <div className="px-2 pb-2 text-[10px] text-ink-muted truncate">
               {email}{isAdmin && <span className="ml-1 text-accent">· admin</span>}
             </div>
+            <Link
+              to="/"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-sm text-sm hover:bg-secondary transition-colors"
+            >
+              <LayoutDashboard className="h-4 w-4" /> All modules
+            </Link>
             <button
               onClick={signOut}
               className="w-full flex items-center gap-2 px-3 py-2 rounded-sm text-sm hover:bg-secondary transition-colors"
