@@ -1,0 +1,23 @@
+I'll generate a complete handoff document. Given the size (12+ edge functions with full source, prompts, and frontend references), I'll write it to a file in /mnt/documents/ and deliver as an artifact rather than dumping it all inline.
+
+Let me gather everything in parallel.
+
+I'll generate a complete handoff document. Given the size (12+ edge functions with full source, prompts, and frontend references), I'll write it to a file in /mnt/documents/ and deliver as an artifact rather than dumping it all inline.
+
+Let me gather everything in parallel.
+18 tools used
+
+Compiling function handoff sections now
+No tasks tracked yet.
+
+Document is ready — 3,349 lines / ~143 KB covering all 9 edge functions plus the 5 shared modules, with full source, prompts, contracts, and a rebuild checklist.
+
+A few highlights so you know what's inside before you hand it to Replit:
+
+    9 functions documented: propose-brief, research-generate, research-retry-card, outline-generate, draft-section, interview-step, final-stitch, playbook-upload, playbook-reparse.
+    5 shared modules embedded in full: cors.ts, playbook.ts, anthropicMeta.ts, usage.ts, researchStages.ts — these are where the routed-playbook caching, per-stage tool schemas, and per-stage Anthropic prompts actually live (most of research-generate's real logic is in researchStages.ts).
+    Per-function: request/response shape, frontend call sites with line numbers, env vars, full Anthropic model + prompts + tool schemas, DB reads/writes, auth posture, and gotchas.
+    Top-level "global notes" capture things that apply everywhere (no streaming, all background work uses EdgeRuntime.waitUntil, all functions trust the caller because RLS protected the data layer, etc.) so they're not repeated for every function.
+    Closing rebuild checklist + flagged design issues (race condition in mergeSubStatus, brittle regex parsing in interview-step, missing retries on most functions, the ORIGINALITY_API_KEY secret is actually a GoWinston key).
+
+One thing worth flagging since you'll be on Express: do not just setImmediate-and-return when porting the background-work pattern — propose-brief, research-generate, and research-retry-card all rely on work continuing after the HTTP response. Use BullMQ or pg-boss; the doc says the same in the rebuild section.
