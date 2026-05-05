@@ -8,6 +8,7 @@ import { DiscardProjectDialog } from "@/components/DiscardProjectDialog";
 import { recordAudit } from "@/lib/audit";
 import { emit } from "@/lib/events";
 import { useActiveBrand } from "@/lib/brands";
+import { aiClient } from "@/lib/ai-client";
 
 type StageKey =
   | "search_intent"
@@ -122,7 +123,7 @@ export default function ResearchDashboard() {
 
   const rerun = async () => {
     toast.info("Re-running research…");
-    await supabase.functions.invoke("research-generate", { body: { project_id: project.id } });
+    await aiClient.researchGenerate(project.id);
   };
 
   const star = async (pp: ProofPoint) => {
@@ -136,7 +137,7 @@ export default function ResearchDashboard() {
   const approve = async () => {
     setAdvancing(true);
     await supabase.from("research_briefs").update({ approved_at: new Date().toISOString() }).eq("project_id", project.id);
-    const { error } = await supabase.functions.invoke("outline-generate", { body: { project_id: project.id } });
+    const { error } = await aiClient.outlineGenerate(project.id);
     setAdvancing(false);
     if (error) {
       toast.error("Outline generation failed: " + error.message);
@@ -194,7 +195,7 @@ export default function ResearchDashboard() {
 
   const retryCard = async (stage: StageKey) => {
     toast.info(`Retrying ${STAGE_LABELS[stage]}…`);
-    await supabase.functions.invoke("research-retry-card", { body: { project_id: project.id, stage } });
+    await aiClient.researchRetryCard(project.id, stage);
   };
 
   if (!anyDataYet) {

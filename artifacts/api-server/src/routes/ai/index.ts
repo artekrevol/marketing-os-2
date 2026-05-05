@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth } from "../../middlewares/auth.js";
+import { requireAuth, requireAdmin } from "../../middlewares/auth.js";
 import { getQueue } from "@workspace/jobs";
 import {
   getSupabaseAdmin,
@@ -8,6 +8,8 @@ import {
   logUsage,
   buildAnthropicUserId,
   STAGE_KEYS,
+  parsePlaybookSections,
+  ALWAYS_INCLUDE,
   type StageKey,
 } from "@workspace/content-ai";
 
@@ -740,8 +742,6 @@ router.post("/final-stitch", requireAuth, async (req, res) => {
  * Body: { filename, mime_type, content_base64, uploaded_by? }
  * Supports .md / .txt / .pdf / .docx
  * ───────────────────────────────────────────────────────────── */
-import { parsePlaybookSections, ALWAYS_INCLUDE } from "@workspace/content-ai";
-
 router.post("/playbook-upload", requireAdmin, async (req, res) => {
   try {
     const { filename, mime_type, content_base64, uploaded_by } = req.body as {
@@ -762,7 +762,8 @@ router.post("/playbook-upload", requireAdmin, async (req, res) => {
       markdown = Array.isArray(text) ? text.join("\n\n") : String(text);
     } else if (lower.endsWith(".docx") || mime_type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const mammoth = await import("mammoth");
-      const result = await mammoth.convertToMarkdown({ buffer: bytes });
+      const mod = (mammoth as any).default ?? mammoth;
+      const result = await mod.convertToMarkdown({ buffer: bytes });
       markdown = result.value || "";
     } else {
       res.status(400).json({ error: `Unsupported file type: ${filename}` });

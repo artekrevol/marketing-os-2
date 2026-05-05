@@ -11,6 +11,7 @@ import { buildWhitelistHosts, citationStatus } from "@/lib/citationWhitelist";
 import { toMarkdown, toHtml, toPlainText, buildHtmlDocument } from "@/lib/exportRenderers";
 import { buildExportSchemas, exportFilename, isoDate } from "@/lib/exportSchema";
 import { emit } from "@/lib/events";
+import { aiClient } from "@/lib/ai-client";
 
 /**
  * Stage 4 — Final review & export.
@@ -127,7 +128,7 @@ export default function DraftReview() {
   const runStitch = async (silent = false) => {
     setStitching(true);
     setAutoStitched(true);
-    const { error } = await supabase.functions.invoke("final-stitch", { body: { project_id: project.id } });
+    const { error } = await aiClient.finalStitch(project.id);
     setStitching(false);
     if (error) {
       toast.error(error.message);

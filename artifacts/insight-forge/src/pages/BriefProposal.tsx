@@ -17,6 +17,7 @@ import {
 import type { Project, BriefProposal, KeywordEntry, Funnel, ContentType, Mode } from "@/lib/types";
 import { DiscardProjectDialog } from "@/components/DiscardProjectDialog";
 import { emit } from "@/lib/events";
+import { aiClient } from "@/lib/ai-client";
 
 const ICP_CATALOG = [
   { id: 1, label: "Founder / CEO" },
@@ -100,9 +101,7 @@ export default function BriefProposalPage() {
       .from("projects")
       .update({ status: "brief_proposing", brief_error: null } as any)
       .eq("id", project.id);
-    const { error } = await supabase.functions.invoke("propose-brief", {
-      body: { project_id: project.id },
-    });
+    const { error } = await aiClient.proposeBrief(project.id);
     if (error) {
       setBriefError(error.message || "Failed to start proposer");
       setLoading(false);
@@ -158,7 +157,7 @@ export default function BriefProposalPage() {
     setProposal(null);
     setLoading(true);
     toast.info("Re-proposing brief…");
-    await supabase.functions.invoke("propose-brief", { body: { project_id: project.id } });
+    await aiClient.proposeBrief(project.id);
   };
 
   const abort = () => setDiscardOpen(true);
@@ -237,7 +236,7 @@ export default function BriefProposalPage() {
     );
 
     // Kick off deep research
-    supabase.functions.invoke("research-generate", { body: { project_id: project.id } });
+    void aiClient.researchGenerate(project.id);
     toast.success("Brief locked. Starting deep research…");
     nav(`/project/${project.id}/research`);
   };

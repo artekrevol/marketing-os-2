@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Download, ArrowRight, Upload, BookOpen, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { aiClient } from "@/lib/ai-client";
 
 export default function AdminDashboard() {
   const [rows, setRows] = useState<any[]>([]);
@@ -81,9 +82,7 @@ export default function AdminDashboard() {
       // but email is what the admin card surfaces and what writers will recognise).
       const { data: userData } = await supabase.auth.getUser();
       const uploaded_by = userData?.user?.email || null;
-      const { data, error } = await supabase.functions.invoke("playbook-upload", {
-        body: { filename: file.name, mime_type: file.type, content_base64, uploaded_by },
-      });
+      const { data, error } = await aiClient.playbookUpload(file.name, file.type, content_base64, uploaded_by);
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
       const version = (data as any).playbook.version;
@@ -112,7 +111,7 @@ export default function AdminDashboard() {
   const onReparse = async () => {
     setReparsing(true);
     try {
-      const { data, error } = await supabase.functions.invoke("playbook-reparse", { body: {} });
+      const { data, error } = await aiClient.playbookReparse();
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
       const count = (data as any).sections_count ?? 0;

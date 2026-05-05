@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { z } from "zod";
 import { emit } from "@/lib/events";
 import { useActiveBrand } from "@/lib/brands";
+import { aiClient } from "@/lib/ai-client";
 
 const TOPIC_MAX = 200;
 const NOTES_MAX = 4000;
@@ -94,7 +95,7 @@ export default function NewProject() {
       emit("project.created", "project", project.id, { topic: cleanTopic }, activeBrandId);
 
       // fire brief proposer (don't await — let user see Step 2 page with loading)
-      supabase.functions.invoke("propose-brief", { body: { project_id: project.id } });
+      void aiClient.proposeBrief(project.id);
 
       toast.success("Project created. Drafting your brief proposal…");
       nav(`/project/${project.id}/brief`);

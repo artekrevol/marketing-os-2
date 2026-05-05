@@ -9,6 +9,7 @@ import { buildWhitelistHosts, citationStatus } from "@/lib/citationWhitelist";
 import WritingMetrics from "@/components/WritingMetrics";
 import SelectionToolbar, { type SelectionAction } from "@/components/SelectionToolbar";
 import { emit } from "@/lib/events";
+import { aiClient } from "@/lib/ai-client";
 
 // Render markdown-ish inline citations [text](url) as hover-able pills.
 // URLs whose host isn't on the project's verified whitelist render with the
@@ -153,9 +154,7 @@ export default function DraftingInterface() {
 
   const generate = async (sectionId: string, instruction?: string) => {
     setGenerating(sectionId);
-    const { data, error } = await supabase.functions.invoke("draft-section", {
-      body: { project_id: project.id, section_id: sectionId, revision_instruction: instruction },
-    });
+    const { data, error } = await aiClient.draftSection(project.id, sectionId, instruction);
     setGenerating(null);
     if (error) {
       toast.error(error.message);
@@ -450,7 +449,7 @@ export default function DraftingInterface() {
 
   const stitch = async () => {
     setStitching(true);
-    const { error } = await supabase.functions.invoke("final-stitch", { body: { project_id: project.id } });
+    const { error } = await aiClient.finalStitch(project.id);
     setStitching(false);
     if (error) {
       toast.error(error.message);
@@ -502,9 +501,7 @@ export default function DraftingInterface() {
         return next;
       });
       try {
-        const { data, error } = await supabase.functions.invoke("draft-section", {
-          body: { project_id: project.id, section_id: s.id },
-        });
+        const { data, error } = await aiClient.draftSection(project.id, s.id);
         if (error || (data as any)?.error) {
           failures++;
           console.error("[draft-all]", s.heading, error || (data as any)?.error);
@@ -1121,7 +1118,7 @@ function InterviewMode({ project, sections }: { project: Project; sections: Outl
     setLoading(true);
     await supabase.from("interview_answers").insert({ project_id: project.id, section_id: active.id, question, answer: a });
     setHistory((h) => [...h, { question, answer: a }]);
-    const { data } = await supabase.functions.invoke("interview-step", { body: { project_id: project.id, section_id: active.id, last_answer: a } });
+    const { data } = await aiClient.interviewStep(project.id, active.id, a);
     setReaction((data as any)?.reaction || "");
     setQuestion((data as any)?.next_question || "Anything else?");
     setLoading(false);

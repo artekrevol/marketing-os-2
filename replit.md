@@ -71,6 +71,48 @@ Strict RLS + NOT NULL `brand_id` on all 13 brand-scoped tables (post-backfill). 
 - **Recovery initiative CRUD (Prompt 6)**: four mutation endpoints — `POST /api/recovery/initiatives`, `PUT /api/recovery/initiatives/:id`, `POST /api/recovery/initiatives/:id/complete`, `POST /api/recovery/initiatives/:id/abandon`. Server-side role gating: helper `callerCanWriteInitiative(userId, brandId, isAdmin)` admits admins or callers carrying `editor` role with brand_access (mirrors the RLS `is_admin_or_editor_for_brand` predicate in 0009_recovery.sql); abandon requires `req.auth.isAdmin === true`. New service action `abandonInitiative` (admin-only at the API surface) emits a `recovery.initiative_abandoned` event with the mandatory reason on its payload. `completeInitiative` accepts an optional `completionNotes` (≤2000) plumbed onto the `recovery.initiative_completed` event payload. UI under `artifacts/seo-os/src/components/recovery/`: `LogInitiativeModal` (dual-mode create/edit, validates name 5–100, expectedImpactPct 0–200), `InitiativeDetailModal` (status-aware Edit/Complete/Abandon buttons; abandon hidden for non-admins), `CompletionModal` (optional notes), `AbandonModal` (reason required). Recovery page wires a "Log initiative" ribbon button + clickable cards + a Supabase realtime subscription on `public.recovery_initiatives` filtered by `brand_id` that invalidates the `["recovery"]` query family on any change. New OpenAPI components: `RecoveryInitiativeResponse`, `CreateRecoveryInitiativeRequest`, `UpdateRecoveryInitiativeRequest`, `CompleteRecoveryInitiativeRequest`, `AbandonRecoveryInitiativeRequest`, `RecoveryInitiativeTypeEnum`. Client mutations live as `recovery.{createInitiative,updateInitiative,completeInitiative,abandonInitiative}` in `artifacts/seo-os/src/lib/api.ts` and reuse the existing `normaliseInitiative` so callers always receive snake_case rows.
 - **PDF export + sprint wrap (Prompt 7)**: server-side PDF via `@react-pdf/renderer` (v4.5.1, pinned in workspace catalog, externalized from esbuild bundle). Two admin-only routes: `GET /api/recovery/export/:brandId.pdf` (single-brand) and `GET /api/recovery/export/all.pdf` (multi-brand, one page per brand). Per-page layout: TekRevol-branded header with brand name + generated/baseline dates, four-metric row (avg position 30d with baseline delta, top-10 delta, top-3 delta, GSC clicks placeholder `"— (pending GSC ingestion)"`), embedded SVG 90-day trend chart (`gap_to_baseline_top10_pct` with baseline reference, initiative markers, projection dashed line), top 3 active initiatives table, projected recovery date box, page-numbered footer. PDF components at `artifacts/api-server/src/pdf/{recovery-report.tsx, chart-svg.tsx, build-report-data.ts}`. `tsconfig.json` for api-server adds `"jsx": "react-jsx"`. Recovery page header gains an admin-only "Export PDF" button that triggers a blob download via `recovery.exportPdf(brandId)` in `artifacts/seo-os/src/lib/api.ts`. Documentation: `docs/architecture.md` Recovery War Room section (data flow diagram, tables, headline metric, PDF export, key files), `docs/recovery-runbook.md` (dashboard interpretation, baseline management, initiative tracking, PDF export usage, nightly snapshots, when to mark complete, troubleshooting).
 
+## ContentForge — AI Edge Functions Migration (Express routes, Sprint 5)
+
+All 9 Supabase edge functions ported to Express routes under `POST /api/ai/*`. No streaming; all Anthropic calls remain non-streaming. Background work uses BullMQ (not setImmediate). Auth: every route behind `requireAuth`; `playbook-upload` and `playbook-reparse` additionally require `requireAdmin`.
+
+**Shared lib — `@workspace/content-ai` (`lib/content-ai/`)**
+- `supabase-admin.ts` — singleton Supabase service-role client (`getSupabaseAdmin()`)
+- `anthropic-meta.ts` — `buildAnthropicUserId()`, `buildAnthropicMetadata()`
+- `usage.ts` — `logUsage()`, `estimateCost()` (Sonnet 4.5 / Haiku 4.5 pricing table)
+- `playbook.ts` — `parsePlaybookSections()`, `buildRoutedSystem()`, `buildRoutedSystemWithProject()`, `ALWAYS_INCLUDE`, `NEVER_INCLUDE`, `ROUTING_MAP`
+- `research-stages.ts` — `runStage()`, `prefetchPages()`, `getCachedPage()`, all 7 per-stage tool schemas + prompts, `STAGE_KEYS`, `STAGE_LABELS`, `StageKey`
+- `index.ts` — barrel re-export
+
+**BullMQ job types (`@workspace/jobs`)** — `"ai"` queue + 3 new job types:
+- `ai.propose-brief` — `{ project_id }`
+- `ai.research-generate` — `{ project_id }`
+- `ai.research-retry-card` — `{ project_id, stage: StageKey }`
+
+**Worker handlers (`@workspace/worker`, `lib/worker/src/jobs/ai/`)**
+- `propose-brief.ts` — full PROPOSE_TOOL schema, 3-retry Anthropic call with 290s timeout, writes `projects.ai_proposed_brief` + status `brief_proposed`
+- `research-generate.ts` — parallel `Promise.allSettled` over 7 stages; writes `projects.status = research_ready | research_partial`
+- `research-retry-card.ts` — single-stage retry
+
+**Express routes (`artifacts/api-server/src/routes/ai/index.ts`, mounted at `/api/ai`)**
+- `POST /propose-brief` → 202, enqueues `ai.propose-brief`
+- `POST /research-generate` → 200, enqueues `ai.research-generate`
+- `POST /research-retry-card` → 200, enqueues `ai.research-retry-card`
+- `POST /outline-generate` → 200 sync, writes `outlines` + `projects.current_stage=2`
+- `POST /draft-section` → 200 sync, Sonnet draft + Haiku review pass, citation whitelist enforcement, writes `drafts` + optional `voice_library`
+- `POST /interview-step` → 200 sync, plain-text REACTION:/NEXT_QUESTION: parsing
+- `POST /final-stitch` → 200 sync, aggregates approved drafts, GoWinston AI-detection (key: `WINSTON_API_KEY`), writes `draft_scores` + `projects.current_stage=4`
+- `POST /playbook-upload` → 200 sync, admin-only, supports .md/.txt/.pdf/.docx (unpdf + mammoth), writes `playbook` + `playbook_sections`
+- `POST /playbook-reparse` → 200 sync, admin-only, re-parses latest version
+
+**Frontend migration (`artifacts/insight-forge/src/lib/ai-client.ts`)**
+- `aiClient` helper: reads Supabase session JWT, POSTs to `/api/ai/*`, returns `{ data, error }` (drop-in for `supabase.functions.invoke`)
+- 14 call sites migrated across 6 files: `AdminDashboard.tsx`, `BriefProposal.tsx`, `DraftingInterface.tsx`, `NewProject.tsx`, `ResearchDashboard.tsx`, `DraftReview.tsx`
+- Zero `supabase.functions.invoke` calls remain in application code
+
+**New dependencies**: `unpdf@^0.12.1`, `mammoth@^1.8.0` (api-server); `@workspace/content-ai` (api-server + worker).
+
+**Env vars required** (api-server): `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`, `SUPABASE_JWT_SECRET`, `WINSTON_API_KEY` (optional — GoWinston AI detection in final-stitch). Prompt caching: system blocks must remain byte-identical between calls; `buildRoutedSystem` / `buildRoutedSystemWithProject` guarantee this.
+
 ## Artifacts
 
 - **insight-forge** (`artifacts/insight-forge`, slug `insight-forge`, previewPath `/`) — ContentForge: research-led drafting tool. React 18 + Vite, Tailwind v3, Supabase auth (own project `duqpsdhrttzdzjlhnubj`). Pinned to React 18 (catalog is React 19; react-day-picker@8 needs 18). **Sprint 1 (multi-brand foundation)** — now four brand tenants (TekRevol, ClaimShield, Reverto, CensusFlow). New tables: `brands`, `user_profiles` (role/pod/brand_access), `events`, `audit_log`. `brand_id` added to every brand-scoped table with RLS policies (`is_admin() OR brand_id = ANY(current_user_brand_access())`). Auth gate is no longer domain-pinned — any user with brand_access (or admin) is allowed in. SQL lives in `artifacts/insight-forge/supabase/migrations/` (0000 bootstrap base schema, 0001 brands+tenancy, 0002 RLS, 0003 pen-check docs-only, 0004–0009 later sprints). Apply `0000` first on any fresh Supabase project, then 0001–0009 in order. See `artifacts/insight-forge/docs/sprint-1-foundation.md`.
