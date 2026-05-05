@@ -262,7 +262,7 @@ export async function scoreVoiceWithOpenAI(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${loadEnv().OPENAI_API_KEY}`,
+          Authorization: `Bearer ${loadEnv().OPENAI_API_KEY || (() => { throw new Error("OPENAI_API_KEY is not set — brand-voice check cannot run"); })()}`,
         },
         body,
         signal: ac.signal,

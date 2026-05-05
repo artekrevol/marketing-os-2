@@ -10,12 +10,16 @@ const Schema = z.object({
     .refine((n) => Number.isFinite(n) && n > 0, "PORT must be a positive number"),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().min(1),
-  DATAFORSEO_LOGIN: z.string().min(1),
-  DATAFORSEO_PASSWORD: z.string().min(1),
-  ORIGINALITY_AI_KEY: z.string().min(1),
-  OPENAI_API_KEY: z.string().min(1),
-  SENTRY_DSN: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+  // Integration secrets — optional so the worker boots on Replit without
+  // DataForSEO / Originality AI / OpenAI credentials. Jobs that actually
+  // need them will throw at run-time if the value is empty.
+  DATAFORSEO_LOGIN: z.string().default(""),
+  DATAFORSEO_PASSWORD: z.string().default(""),
+  ORIGINALITY_AI_KEY: z.string().default(""),
+  OPENAI_API_KEY: z.string().default(""),
+  // Sentry is optional — empty DSN means Sentry.init is a no-op.
+  SENTRY_DSN: z.string().default(""),
 });
 
 export type WorkerEnv = z.infer<typeof Schema>;
