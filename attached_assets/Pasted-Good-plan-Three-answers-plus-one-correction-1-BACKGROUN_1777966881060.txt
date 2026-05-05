@@ -1,0 +1,35 @@
+Good plan. Three answers plus one correction:
+
+1. BACKGROUND EXECUTION
+Option B (BullMQ). Add the 3 job types to @workspace/jobs and 3 handlers to @workspace/worker. Set REDIS_URL on the api-server. We already use BullMQ for the worker tier on Railway — keep one pattern, not two. Don't add fire-and-forget Promises in api-server.
+
+2. FRONTEND MIGRATION
+Yes, migrate the 14 call sites — but first create a helper at artifacts/insight-forge/src/lib/ai-client.ts called callAi(name, body) that handles auth + JSON serialization in one place. Then migrate the 14 call sites to use callAi('draft-section', body) instead of writing inline fetch calls each time.
+
+3. ENV VARS
+I'm setting these in Replit Secrets now:
+- SUPABASE_URL
+- ANTHROPIC_API_KEY
+- WINSTON_API_KEY (see correction below)
+
+Already set from the previous migration step: SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET, DATABASE_URL.
+
+4. CORRECTION ON THE WINSTON KEY
+The handoff doc references ORIGINALITY_API_KEY but flags that it's actually a GoWinston / Winston AI (gowinston.ai) key. Don't carry that misnaming into the rebuild. Name the env var WINSTON_API_KEY in all rebuilt code (final-stitch route and any shared modules that read it). The original misnaming was a legacy artifact of the Lovable project — fix it now while it's free to fix.
+
+BUILD ORDER + CHECKPOINTS
+Work in this order, and give me a one-line status after each step before moving to the next:
+
+a. Shared modules in artifacts/api-server/src/lib/ai/ (5 files)
+b. BullMQ job types in @workspace/jobs (3 new types)
+c. BullMQ handlers in @workspace/worker (3 new handlers)
+d. Routes batch 1: propose-brief, research-generate, research-retry-card, outline-generate (the 4 that involve research/brief flow)
+e. Routes batch 2: draft-section, interview-step, final-stitch, playbook-upload, playbook-reparse
+f. callAi helper at artifacts/insight-forge/src/lib/ai-client.ts
+g. Migrate the 14 frontend call sites to use callAi
+h. Typecheck both api-server and insight-forge — report any errors
+i. Final summary listing every new file created and every file modified
+
+Do not batch all 9 routes into one response — split into batches d and e so the diffs stay reviewable. Do not skip steps. Do not assume any of this exists already — none of it does. The handoff document is the only source of truth.
+
+If you hit an ambiguity in the handoff doc, ask before guessing.
