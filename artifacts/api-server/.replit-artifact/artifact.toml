@@ -15,14 +15,16 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
+# Build both the API server and the BullMQ worker for production.
+args = ["sh", "-c", "pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/worker run build"]
 
 [services.production.build.env]
 NODE_ENV = "production"
 
 [services.production.run]
-# we don't run through pnpm to make startup faster in production
-args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+# Shell wrapper starts the worker in the background and the API server
+# in the foreground, forwarding signals to both so they shut down cleanly.
+args = ["sh", "artifacts/api-server/start-production.sh"]
 
 [services.production.run.env]
 PORT = "8080"
