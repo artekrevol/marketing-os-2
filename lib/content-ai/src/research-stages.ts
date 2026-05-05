@@ -102,6 +102,9 @@ async function callAnthropic(args: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
+        ...(args.webSearchMaxUses && args.webSearchMaxUses > 0
+          ? { "anthropic-beta": "web-search-2025-03-05" }
+          : {}),
       },
       body: JSON.stringify({
         model: args.model,

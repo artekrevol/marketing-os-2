@@ -263,6 +263,7 @@ Then call submit_brief_proposal with the complete structured output including ai
           headers: {
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
+            "anthropic-beta": "web-search-2025-03-05",
             "content-type": "application/json",
           },
           body: requestBody,
