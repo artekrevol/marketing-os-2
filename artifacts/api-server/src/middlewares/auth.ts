@@ -54,16 +54,27 @@ export const requireAuth: RequestHandler = async (
     return;
   }
 
+  // Decode header first (no verification) so we can log the actual algorithm
+  // when verification fails — makes production debugging much faster.
+  const tokenHeader = jwt.decode(match[1], { complete: true })?.header;
+  const tokenAlg = tokenHeader?.alg ?? "unknown";
+
   let claims: jwt.JwtPayload;
   try {
-    const decoded = jwt.verify(match[1], secret, { algorithms: ["HS256"] });
+    // Accept all symmetric HS variants. Supabase projects default to HS256
+    // but some configurations use HS384 or HS512. The security guarantee
+    // comes from the shared secret — restricting to only HS256 broke
+    // production when a Supabase project used a different HS variant.
+    const decoded = jwt.verify(match[1], secret, {
+      algorithms: ["HS256", "HS384", "HS512"],
+    });
     if (typeof decoded === "string" || !decoded.sub) {
       res.status(401).json({ error: "invalid token" });
       return;
     }
     claims = decoded;
   } catch (err) {
-    req.log?.warn({ err }, "auth: jwt verify failed");
+    req.log?.warn({ err, tokenAlg }, "auth: jwt verify failed");
     res.status(401).json({ error: "invalid or expired token" });
     return;
   }
