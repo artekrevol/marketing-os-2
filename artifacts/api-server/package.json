@@ -12,6 +12,7 @@
   "dependencies": {
     "@react-pdf/renderer": "catalog:",
     "@workspace/api-zod": "workspace:*",
+    "@workspace/worker": "workspace:*",
     "@workspace/content-ai": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/jobs": "workspace:*",

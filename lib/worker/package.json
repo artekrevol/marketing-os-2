@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./embedded": {
+      "types": "./dist/embedded.d.ts",
+      "default": "./dist/embedded.mjs"
+    }
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "node ./build.mjs",

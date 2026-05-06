@@ -15,16 +15,17 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-# Build both the API server and the BullMQ worker for production.
-args = ["sh", "-c", "pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/worker run build"]
+# Build the worker first (api-server bundles its embedded entry point),
+# then build the api-server which inlines the embedded worker.
+args = ["sh", "-c", "pnpm --filter @workspace/worker run build && pnpm --filter @workspace/api-server run build"]
 
 [services.production.build.env]
 NODE_ENV = "production"
 
 [services.production.run]
-# Shell wrapper starts the worker in the background and the API server
-# in the foreground, forwarding signals to both so they shut down cleanly.
-args = ["sh", "artifacts/api-server/start-production.sh"]
+# Single process, single port. The embedded BullMQ workers start inside
+# this Node process — no separate worker process or extra port needed.
+args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 
 [services.production.run.env]
 PORT = "8080"

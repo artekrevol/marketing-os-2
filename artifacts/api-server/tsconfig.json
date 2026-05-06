@@ -22,6 +22,9 @@
     },
     {
       "path": "../../lib/services/recovery"
+    },
+    {
+      "path": "../../lib/worker"
     }
   ]
 }

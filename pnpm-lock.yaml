@@ -186,6 +186,9 @@ importers:
       '@workspace/services-recovery':
         specifier: workspace:*
         version: link:../../lib/services/recovery
+      '@workspace/worker':
+        specifier: workspace:*
+        version: link:../../lib/worker
       cookie-parser:
         specifier: ^1.4.7
         version: 1.4.7

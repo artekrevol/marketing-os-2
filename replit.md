@@ -54,6 +54,7 @@ A unified platform with a single login hub at `/` that routes users into two mod
 
 - **Tenant Isolation**: Strict Row-Level Security (RLS) with `brand_id` on all brand-scoped tables, complemented by a `tenant_brand_inherit()` trigger for automatic `brand_id` resolution on insert. Workers bypass RLS using the service role and enforce brand isolation programmatically via `withBrandScope()`.
 - **AI Feature Migration**: Supabase Edge Functions for AI were migrated to Express routes (`POST /api/ai/*`) in the API server, with asynchronous background processing handled by BullMQ jobs. This centralizes AI logic within the application's backend.
+- **Embedded Worker (Production)**: In production the BullMQ workers run inside the API server process (`NODE_ENV=production` gates the `startEmbeddedWorkers()` call in `src/index.ts`). This satisfies Replit autoscale's single-port constraint — no second process, no second port. In development the standalone `lib/worker: BullMQ Worker` workflow runs separately. `@workspace/worker` exports `./embedded` with types resolved from `dist/embedded.d.ts` (emitted by `tsc --build --force` after esbuild in `build.mjs`).
 - **Idempotent Operations**: Key operations (e.g., submitting for review, recovery snapshot jobs) are designed to be idempotent using unique `jobId`s or database unique constraints to prevent duplicate processing.
 - **Realtime Updates**: SEO OS frontend uses Supabase Realtime channels, filtered by `brand_id`, to provide live updates for queues and review surfaces without constant refetching.
 - **Monorepo Structure**: A pnpm monorepo is used to manage shared libraries, API server, worker, and multiple frontend applications, promoting code reuse and consistent tooling.
@@ -77,6 +78,7 @@ A unified platform with a single login hub at `/` that routes users into two mod
 - **DB Migration Order**: Always apply `0000` (bootstrap) first on a fresh Supabase project, then `0001` through `0009` sequentially.
 - **OpenAPI Codegen**: After modifying `lib/api-spec/openapi.yaml`, run `pnpm --filter @workspace/api-spec run codegen` to regenerate API client hooks and Zod schemas.
 - **Worker Environment Variables**: Worker requires specific environment variables (`DATABASE_URL`, `REDIS_URL`, `DATAFORSEO_LOGIN`, etc.) which are validated at boot. Ensure these are set for deployment.
+- **Worker Build Order**: Always build worker before api-server (`pnpm --filter @workspace/worker run build && pnpm --filter @workspace/api-server run build`). The worker build emits `dist/embedded.d.ts` via `tsc --build --force`; the api-server bundles from `dist/embedded.mjs` at build time.
 - **Prompt Caching**: For consistent AI model behavior, ensure system blocks used in `buildRoutedSystem` / `buildRoutedSystemWithProject` remain byte-identical between calls.
 - **Recovery Baseline Seeding**: The `lock-baselines` script requires `--confirm` to perform live inserts and should be run against the migrated Supabase preview by an operator.
 - **PDF Export Dependencies**: `artifacts/api-server`'s `tsconfig.json` needs `"jsx": "react-jsx"` for `@react-pdf/renderer` components.
