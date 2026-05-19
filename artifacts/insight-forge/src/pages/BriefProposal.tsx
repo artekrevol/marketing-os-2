@@ -52,7 +52,7 @@ export default function BriefProposalPage() {
   const [contentType, setContentType] = useState<ContentType>("blog");
   const [mode, setMode] = useState<Mode>("composition");
 
-  // Subscribe to project for proposal arrival
+  // Subscribe to project for proposal arrival via Supabase Realtime
   useEffect(() => {
     const ch = supabase
       .channel(`brief-${project.id}`)
@@ -77,6 +77,30 @@ export default function BriefProposalPage() {
       supabase.removeChannel(ch);
     };
   }, [project.id, proposal]);
+
+  // Polling fallback — fires every 5 s while loading.
+  // Covers environments where Supabase Realtime is not enabled for the
+  // projects table, so the UI never gets stuck indefinitely at 94%.
+  useEffect(() => {
+    if (!loading || proposal || briefError) return;
+    const id = setInterval(async () => {
+      const { data } = await supabase
+        .from("projects")
+        .select("status, ai_proposed_brief, brief_error")
+        .eq("id", project.id)
+        .single();
+      if (!data) return;
+      if ((data as any).ai_proposed_brief) {
+        setProposal((data as any).ai_proposed_brief as BriefProposal);
+        setLoading(false);
+        setBriefError(null);
+      } else if ((data as any).status === "brief_failed") {
+        setBriefError((data as any).brief_error || "Brief generation failed. Please retry.");
+        setLoading(false);
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [loading, proposal, briefError, project.id]);
 
   // Safety net: if we've been "loading" for more than 6 minutes with no proposal
   // and no surfaced error, show a soft error so the user isn't stuck forever.

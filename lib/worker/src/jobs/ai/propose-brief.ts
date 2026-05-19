@@ -326,7 +326,7 @@ Then call submit_brief_proposal with the complete structured output including ai
   const benchmarkTop = (proposal.benchmark_candidates || []).sort((a: any, b: any) => a.rank - b.rank)[0];
   const competitorTop = (proposal.competitor_candidates || []).sort((a: any, b: any) => a.rank - b.rank)[0];
 
-  await supabase.from("projects").update({
+  const { error: saveErr } = await supabase.from("projects").update({
     ai_proposed_brief: proposal,
     keyword_cluster: proposal.keyword_cluster || [],
     keyword: primary?.keyword || (project as any).keyword,
@@ -340,6 +340,11 @@ Then call submit_brief_proposal with the complete structured output including ai
     playbook_version: playbookVersion,
     status: "brief_proposed",
   } as any).eq("id", project_id);
+
+  if (saveErr) {
+    log.error({ err: saveErr, project_id }, "propose-brief: failed to save result to Supabase");
+    throw new Error(`Failed to persist brief proposal: ${saveErr.message}`);
+  }
 
   log.info({ project_id, playbookVersion }, "propose-brief: complete");
 }
