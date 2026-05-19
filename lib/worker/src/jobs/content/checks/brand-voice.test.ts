@@ -79,7 +79,6 @@ beforeAll(() => {
   process.env.DATAFORSEO_PASSWORD ??= "test";
   process.env.ORIGINALITY_AI_KEY ??= "test";
   process.env.SENTRY_DSN ??= "https://example@sentry.example/0";
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test";
   process.env.NODE_ENV = "test";
 });
 

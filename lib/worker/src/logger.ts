@@ -12,7 +12,7 @@ const level = process.env["LOG_LEVEL"] ?? defaultLevel;
 export const logger: Logger = pino({
   level,
   base: { service: "seo-os-worker" },
-  redact: ["env.DATABASE_URL", "env.REDIS_URL", "env.SUPABASE_SERVICE_ROLE_KEY", "headers.authorization"],
+  redact: ["env.DATABASE_URL", "env.REDIS_URL", "headers.authorization"],
   ...(isProduction
     ? {}
     : {

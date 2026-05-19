@@ -10,7 +10,6 @@ const Schema = z.object({
     .refine((n) => Number.isFinite(n) && n > 0, "PORT must be a positive number"),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().min(1),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   // Integration secrets — optional so the worker boots on Replit without
   // DataForSEO / Originality AI / OpenAI credentials. Jobs that actually
   // need them will throw at run-time if the value is empty.
