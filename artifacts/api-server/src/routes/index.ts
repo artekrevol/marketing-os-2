@@ -11,6 +11,7 @@ import eventsRouter from "./events.js";
 import auditRouter from "./audit.js";
 import adminRouter from "./admin.js";
 import voiceLibraryRouter from "./voice-library.js";
+import pageEventsRouter from "./page-events.js";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use("/brands", brandsRouter);
 router.use("/events", eventsRouter);
 router.use("/audit", auditRouter);
 router.use("/voice-library", voiceLibraryRouter);
+router.use("/page-events", pageEventsRouter);
 
 export default router;
