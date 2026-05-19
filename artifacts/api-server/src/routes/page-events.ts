@@ -11,6 +11,7 @@ const router = Router();
  */
 router.post("/", requireAuth, async (req, res, next) => {
   try {
+    if (!req.body) { res.json({ ok: true }); return; }
     const {
       path,
       project_id,

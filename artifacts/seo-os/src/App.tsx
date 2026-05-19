@@ -1,4 +1,5 @@
 import { ClerkProvider } from "@clerk/react";
+import { publishableKeyFromHost } from "@clerk/react/internal";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { Toaster } from "@/components/ui/sonner";
@@ -10,6 +11,12 @@ import Recovery from "@/pages/Recovery";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
+
+const clerkPubKey = publishableKeyFromHost(
+  window.location.hostname,
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+);
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 
 function Routed() {
   return (
@@ -30,7 +37,8 @@ function ClerkWithWouter({ children }: { children: React.ReactNode }) {
   const [, navigate] = useLocation();
   return (
     <ClerkProvider
-      publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
+      publishableKey={clerkPubKey}
+      proxyUrl={clerkProxyUrl}
       routerPush={(to) => navigate(to)}
       routerReplace={(to) => navigate(to)}
     >
