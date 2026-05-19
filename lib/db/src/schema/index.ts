@@ -1,14 +1,3 @@
-// Drizzle table declarations. This is a partial mirror of the Supabase
-// schema, projecting only what the worker / api-server / quality-gate
-// service need to read or write. The canonical schema is owned by
-// `artifacts/insight-forge/supabase/migrations/*.sql`.
-//
-// Adding a new brand-scoped table:
-//   1. Author its `pgTable(...)` here.
-//   2. Re-export from this file.
-//   3. Add to BRAND_SCOPED_TABLES in `../brand-scope.ts`.
-//   4. Reference it from worker code only inside `withBrandScope(...)`.
-
 export * from "./brands";
 export * from "./user-profiles";
 export * from "./events";
@@ -26,3 +15,13 @@ export * from "./qa-overrides";
 export * from "./qa-check-definitions";
 // Recovery War Room — parallel sprint
 export * from "./recovery";
+// AI / content pipeline
+export * from "./research-briefs";
+export * from "./proof-points";
+export * from "./usage-logs";
+export * from "./playbook";
+export * from "./fetched-pages";
+export * from "./outlines";
+export * from "./draft-scores";
+export * from "./voice-library";
+export * from "./interview-answers";

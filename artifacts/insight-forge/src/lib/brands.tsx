@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { supabase } from "@/integrations/supabase/client";
 
 export type Brand = {
   id: string;
@@ -8,6 +7,21 @@ export type Brand = {
   primary_domain: string | null;
   voice_profile: Record<string, unknown>;
   thresholds: Record<string, unknown>;
+};
+
+type MeResponse = {
+  userId: string;
+  email: string | null;
+  isAdmin: boolean;
+  role: string;
+  brands: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    primaryDomain: string | null;
+    voiceProfile: Record<string, unknown> | null;
+    thresholds: Record<string, unknown> | null;
+  }>;
 };
 
 type Ctx = {
@@ -42,69 +56,60 @@ export function BrandProvider({
   isAdmin: boolean;
 }) {
   const [brands, setBrands] = useState<Brand[]>([]);
-  const [accessibleIds, setAccessibleIds] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!userId) {
       setBrands([]);
-      setAccessibleIds([]);
       setActiveId(null);
       setLoading(false);
       return;
     }
     setLoading(true);
-    const [{ data: bs }, { data: prof }] = await Promise.all([
-      supabase.from("brands").select("*").order("name"),
-      supabase.from("user_profiles").select("brand_access").eq("user_id", userId).maybeSingle(),
-    ]);
-    const allBrands: Brand[] = (bs || []).map((b) => ({
-      id: b.id,
-      slug: b.slug,
-      name: b.name,
-      primary_domain: b.primary_domain,
-      voice_profile: (b.voice_profile as Record<string, unknown>) || {},
-      thresholds: (b.thresholds as Record<string, unknown>) || {},
-    }));
-    setBrands(allBrands);
-    const access: string[] = prof?.brand_access || [];
-    // Admins see every brand.
-    const visibleIds = isAdmin ? allBrands.map((b) => b.id) : access;
-    setAccessibleIds(visibleIds);
-
-    // Pick active brand:
-    //   1) last-used slug from localStorage (per-device sticky);
-    //   2) TekRevol — preserves the legacy single-tenant default so
-    //      existing TekRevol admins/writers keep landing in their home
-    //      brand on first load post-migration;
-    //   3) first accessible brand by load order — only as a true
-    //      fallback for non-TekRevol users.
-    let nextActive: string | null = null;
     try {
-      const slug = localStorage.getItem(STORAGE_KEY);
-      if (slug) {
-        const match = allBrands.find((b) => b.slug === slug && visibleIds.includes(b.id));
-        if (match) nextActive = match.id;
+      const r = await fetch("/api/me", { credentials: "include" });
+      if (!r.ok) throw new Error(`/api/me ${r.status}`);
+      const data = (await r.json()) as MeResponse;
+      const allBrands: Brand[] = data.brands.map((b) => ({
+        id: b.id,
+        slug: b.slug,
+        name: b.name,
+        primary_domain: b.primaryDomain ?? null,
+        voice_profile: b.voiceProfile || {},
+        thresholds: b.thresholds || {},
+      }));
+      setBrands(allBrands);
+
+      // Pick active brand:
+      //   1) last-used slug from localStorage (per-device sticky);
+      //   2) TekRevol — preserves the legacy single-tenant default;
+      //   3) first accessible brand by load order.
+      let nextActive: string | null = null;
+      try {
+        const slug = localStorage.getItem(STORAGE_KEY);
+        if (slug) {
+          const match = allBrands.find((b) => b.slug === slug);
+          if (match) nextActive = match.id;
+        }
+      } catch {}
+      if (!nextActive) {
+        const tek = allBrands.find((b) => b.slug === "tekrevol");
+        if (tek) nextActive = tek.id;
       }
-    } catch {}
-    if (!nextActive) {
-      const tek = allBrands.find((b) => b.slug === "tekrevol" && visibleIds.includes(b.id));
-      if (tek) nextActive = tek.id;
+      if (!nextActive && allBrands.length > 0) nextActive = allBrands[0]!.id;
+      setActiveId(nextActive);
+    } catch (e) {
+      console.warn("[brands] load failed:", e);
+    } finally {
+      setLoading(false);
     }
-    if (!nextActive && visibleIds.length > 0) nextActive = visibleIds[0];
-    setActiveId(nextActive);
-    setLoading(false);
   }, [userId, isAdmin]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const accessible = useMemo(
-    () => brands.filter((b) => accessibleIds.includes(b.id)),
-    [brands, accessibleIds],
-  );
   const activeBrand = useMemo(
     () => brands.find((b) => b.id === activeId) || null,
     [brands, activeId],
@@ -118,8 +123,8 @@ export function BrandProvider({
   }, []);
 
   const value = useMemo<Ctx>(
-    () => ({ loading, brands, accessible, activeBrand, setActiveBrand, isAdmin, refresh: load }),
-    [loading, brands, accessible, activeBrand, setActiveBrand, isAdmin, load],
+    () => ({ loading, brands, accessible: brands, activeBrand, setActiveBrand, isAdmin, refresh: load }),
+    [loading, brands, activeBrand, setActiveBrand, isAdmin, load],
   );
 
   return <BrandCtx.Provider value={value}>{children}</BrandCtx.Provider>;

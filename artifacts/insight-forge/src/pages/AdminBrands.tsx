@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
-import type { Json } from "@/integrations/supabase/types";
 import { Loader2, Building2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { recordAudit } from "@/lib/audit";
@@ -22,8 +20,8 @@ export default function AdminBrands() {
 
   const load = async () => {
     setLoading(true);
-    const { data } = await supabase.from("brands").select("*").order("name");
-    setBrands((data as Brand[]) || []);
+    const resp = await fetch("/api/brands", { credentials: "include" });
+    setBrands(resp.ok ? await resp.json() : []);
     setLoading(false);
   };
 
@@ -85,17 +83,15 @@ export default function AdminBrands() {
       setSaving(null);
       return;
     }
-    const { error } = await supabase
-      .from("brands")
-      .update({
-        primary_domain: draft.domain || null,
-        voice_profile: voice as Json,
-        thresholds: thresholds as Json,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", b.id);
-    if (error) {
-      toast.error(error.message);
+    const resp = await fetch(`/api/brands/${b.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ primary_domain: draft.domain || null, voice_profile: voice, thresholds }),
+    });
+    if (!resp.ok) {
+      const j = (await resp.json().catch(() => ({}))) as { error?: string };
+      toast.error(j.error || `HTTP ${resp.status}`);
       setSaving(null);
       return;
     }

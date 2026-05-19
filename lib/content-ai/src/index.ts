@@ -1,4 +1,3 @@
-export { getSupabaseAdmin } from "./supabase-admin.js";
 export { buildAnthropicUserId, buildAnthropicMetadata } from "./anthropic-meta.js";
 export { estimateCost, logUsage } from "./usage.js";
 export {

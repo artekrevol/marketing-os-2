@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Sparkles, AlertTriangle, ChevronRight, ChevronLeft, MessageCircle, Zap, Database, FileCode, Keyboard, X, Wand2, StopCircle, Copy, EyeOff, Eye, Pencil, Check, Focus, Minimize2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
@@ -109,26 +108,26 @@ export default function DraftingInterface() {
   useEffect(() => {
     let mounted = true;
     const load = async () => {
-      const [o, d, p, b] = await Promise.all([
-        supabase.from("outlines").select("*").eq("project_id", project.id).maybeSingle(),
-        supabase.from("drafts").select("*").eq("project_id", project.id),
-        supabase.from("proof_points").select("source_url").eq("project_id", project.id),
-        supabase.from("research_briefs").select("ai_citation_landscape").eq("project_id", project.id).maybeSingle(),
+      const [oResp, dResp, pResp, bResp] = await Promise.all([
+        fetch(`/api/projects/${project.id}/outlines`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/drafts`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/proof-points`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/research`, { credentials: "include" }),
       ]);
       if (!mounted) return;
-      setOutline(o.data);
-      setDrafts((d.data as any) || []);
-      setProofs((p.data as any) || []);
-      setBriefLandscape((b.data as any)?.ai_citation_landscape || null);
+      setOutline(oResp.ok ? await oResp.json() : null);
+      const draftsData = dResp.ok ? await dResp.json() : [];
+      setDrafts(Array.isArray(draftsData) ? draftsData : []);
+      const proofsData = pResp.ok ? await pResp.json() : [];
+      setProofs(Array.isArray(proofsData) ? proofsData : []);
+      const briefData = bResp.ok ? await bResp.json() : null;
+      setBriefLandscape(briefData?.ai_citation_landscape || null);
     };
-    load();
-    const ch = supabase
-      .channel(`d-${project.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "drafts", filter: `project_id=eq.${project.id}` }, load)
-      .subscribe();
+    void load();
+    const timer = setInterval(() => { if (mounted) void load(); }, 10000);
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      clearInterval(timer);
     };
   }, [project.id]);
 
@@ -176,7 +175,12 @@ export default function DraftingInterface() {
       toast.error("Draft this section before approving.");
       return;
     }
-    await supabase.from("drafts").update({ approved: true }).eq("project_id", project.id).eq("section_id", sid);
+    await fetch(`/api/projects/${project.id}/drafts/${sid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ approved: true }),
+    });
     emit("draft.approved", "draft", `${project.id}:${sid}`, { section_id: sid }, project.brand_id ?? null);
     // Optimistically reflect approval locally so `allDone` flips immediately
     // even before the realtime channel re-fetches.
@@ -248,11 +252,13 @@ export default function DraftingInterface() {
     setDrafts((prev) =>
       prev.map((d) => (d.id === activeDraft.id ? { ...d, dismissed_voice_flags: next } : d)),
     );
-    const { error } = await supabase
-      .from("drafts")
-      .update({ dismissed_voice_flags: next })
-      .eq("id", activeDraft.id);
-    if (error) toast.error("Couldn't save dismissal.");
+    const resp = await fetch(`/api/projects/${project.id}/drafts/${activeDraft.section_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ dismissed_voice_flags: next }),
+    });
+    if (!resp.ok) toast.error("Couldn't save dismissal.");
   };
 
   const dismissFlag = (phrase: string) => {
@@ -328,15 +334,13 @@ export default function DraftingInterface() {
           : d,
       ),
     );
-    const { error } = await supabase
-      .from("drafts")
-      .update({
-        content: next,
-        citation_count: citationCount,
-        last_edited_by: "human",
-      })
-      .eq("id", activeDraft.id);
-    if (error) {
+    const saveResp = await fetch(`/api/projects/${project.id}/drafts/${activeDraft.section_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ content: next }),
+    });
+    if (!saveResp.ok) {
       toast.error("Couldn't save edit — local copy preserved.");
       setSavingInline(false);
       return false;
@@ -350,18 +354,18 @@ export default function DraftingInterface() {
     );
     // Capture for the voice library so Stage-3 drafts can learn the
     // writer's voice over time. Non-fatal if it fails.
-    supabase
-      .from("voice_library")
-      .insert({
+    fetch("/api/voice-library", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
         project_id: project.id,
         original_ai_text: prev,
         edited_human_text: next,
         edit_type: "inline",
         writer_id: (project as any).writer_id || null,
-      })
-      .then(({ error: ve }) => {
-        if (ve) console.error("voice_library insert failed", ve);
-      });
+      }),
+    }).catch(() => {});
     setSavingInline(false);
     setEditingSectionId(null);
     setInlineDraft("");
@@ -1096,18 +1100,18 @@ function InterviewMode({ project, sections }: { project: Project; sections: Outl
   useEffect(() => {
     if (!active) return;
     setLoading(true);
-    supabase.functions
-      .invoke("interview-step", { body: { project_id: project.id, section_id: active.id, last_answer: null } })
-      .then(({ data, error }) => {
-        if (error) toast.error(error.message);
-        else {
-          setReaction("");
-          setQuestion((data as any)?.next_question || "Tell me about this section.");
-        }
-        setLoading(false);
-      });
-    supabase.from("interview_answers").select("*").eq("project_id", project.id).eq("section_id", active.id).order("created_at").then(({ data }) => {
-      setHistory((data as any) || []);
+    aiClient.interviewStep(project.id, active.id, null as unknown as string).then(({ data, error }) => {
+      if (error) toast.error((error as Error).message);
+      else {
+        setReaction("");
+        setQuestion((data as any)?.next_question || "Tell me about this section.");
+      }
+      setLoading(false);
+    });
+    fetch(`/api/projects/${project.id}/interview-answers?section_id=${encodeURIComponent(active.id)}`, {
+      credentials: "include",
+    }).then(async (r) => {
+      setHistory(r.ok ? await r.json() : []);
     });
   }, [activeIdx, active?.id, project.id]);
 
@@ -1116,7 +1120,12 @@ function InterviewMode({ project, sections }: { project: Project; sections: Outl
     const a = answer;
     setAnswer("");
     setLoading(true);
-    await supabase.from("interview_answers").insert({ project_id: project.id, section_id: active.id, question, answer: a });
+    await fetch(`/api/projects/${project.id}/interview-answers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ section_id: active.id, question, answer: a }),
+    });
     setHistory((h) => [...h, { question, answer: a }]);
     const { data } = await aiClient.interviewStep(project.id, active.id, a);
     setReaction((data as any)?.reaction || "");

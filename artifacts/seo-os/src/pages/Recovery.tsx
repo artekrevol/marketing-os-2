@@ -14,7 +14,6 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { LogInitiativeModal } from "@/components/recovery/LogInitiativeModal";
 import { InitiativeDetailModal } from "@/components/recovery/InitiativeDetailModal";
 import { CompletionModal } from "@/components/recovery/CompletionModal";
@@ -133,24 +132,10 @@ function RecoveryForBrand({ brandId }: { brandId: string }) {
   // is fine — the queries are cheap and the active brand only emits a
   // handful of rows per day at peak.
   useEffect(() => {
-    const channel = supabase
-      .channel(`recovery-initiatives-${brandId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "recovery_initiatives",
-          filter: `brand_id=eq.${brandId}`,
-        },
-        () => {
-          void qc.invalidateQueries({ queryKey: ["recovery"] });
-        },
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    const timer = setInterval(() => {
+      void qc.invalidateQueries({ queryKey: ["recovery"] });
+    }, 30000);
+    return () => clearInterval(timer);
   }, [brandId, qc]);
 
   if (overviewQ.isLoading) {

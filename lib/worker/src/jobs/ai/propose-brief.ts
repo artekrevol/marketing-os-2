@@ -1,10 +1,11 @@
 import type { JobData } from "@workspace/jobs";
 import {
-  getSupabaseAdmin,
   buildRoutedSystem,
   logUsage,
   buildAnthropicUserId,
 } from "@workspace/content-ai";
+import { db, projectsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
@@ -170,32 +171,32 @@ export async function handleAiProposeBrief(
   log: Logger,
 ): Promise<void> {
   const { project_id } = data;
-  const supabase = getSupabaseAdmin();
   const apiKey = process.env["ANTHROPIC_API_KEY"];
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
-  const { data: project, error: pErr } = await supabase
-    .from("projects")
-    .select("*")
-    .eq("id", project_id)
-    .single();
-  if (pErr || !project) throw new Error(`project not found: ${project_id}`);
+  const projectRows = await db
+    .select()
+    .from(projectsTable)
+    .where(eq(projectsTable.id, project_id))
+    .limit(1);
+  const project = projectRows[0];
+  if (!project) throw new Error(`project not found: ${project_id}`);
 
-  const topicTrimmed = String((project as any).topic || "").trim();
+  const topicTrimmed = String(project.topic || "").trim();
   if (topicTrimmed.length === 0) {
-    await supabase.from("projects").update({ status: "brief_failed", brief_error: "Project topic is empty." } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ status: "brief_failed", briefError: "Project topic is empty." }).where(eq(projectsTable.id, project_id));
     throw new Error("Project topic is empty.");
   }
   if (topicTrimmed.length > TOPIC_MAX) {
     const errMsg = `Project topic exceeds ${TOPIC_MAX} characters (got ${topicTrimmed.length}).`;
-    await supabase.from("projects").update({ status: "brief_failed", brief_error: errMsg } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ status: "brief_failed", briefError: errMsg }).where(eq(projectsTable.id, project_id));
     throw new Error(errMsg);
   }
 
-  const stageInstructions = `You are the intake research assistant for ${(project as any).company_domain}'s content pipeline. Read the company playbook above fully before responding.
+  const stageInstructions = `You are the intake research assistant for ${project.companyDomain}'s content pipeline. Read the company playbook above fully before responding.
 
-Topic the user wants to write about: ${(project as any).topic}
-User notes: ${(project as any).user_notes || "(none)"}
+Topic the user wants to write about: ${project.topic}
+User notes: ${project.userNotes || "(none)"}
 
 Use web search to:
 1. Identify the keyword cluster around this topic — 5-10 related keywords with estimated monthly search volume and competition level. Suggest one primary keyword (set is_primary=true) based on intent match and ranking opportunity.
@@ -212,7 +213,7 @@ Also run web searches to map the AI citation landscape for this topic. Identify 
 - Where the company's domain is already cited (or absent)
 - Which competitor domains appear most often
 - Which authority sources (Statista, Pew, Gartner, BLS, peer-reviewed, etc.) dominate the topic
-- Where ${(project as any).company_domain} could insert itself with proprietary data, named clients, or original analysis
+- Where ${project.companyDomain} could insert itself with proprietary data, named clients, or original analysis
 
 Then map the atomic questions this article must answer in liftable, citation-ready chunks. Atomic = a single paragraph that completely answers one question and reads correctly out of context. Aim for 8-15 atomic questions.
 
@@ -226,10 +227,10 @@ Then call submit_brief_proposal with the complete structured output including ai
   log.info({ sections: included }, "routed playbook sections");
 
   const metadataUserId = buildAnthropicUserId({
-    pod: (project as any).pod,
+    pod: project.pod,
     stage: "stage0",
     substage: "propose_brief",
-    writer_id: (project as any).writer_id,
+    writer_id: project.writerId,
   });
 
   const requestBody = JSON.stringify({
@@ -291,13 +292,13 @@ Then call submit_brief_proposal with the complete structured output including ai
 
   if (!resp) {
     const msg = `Anthropic request failed after retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`;
-    await supabase.from("projects").update({ status: "brief_failed", brief_error: msg } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ status: "brief_failed", briefError: msg }).where(eq(projectsTable.id, project_id));
     throw new Error(msg);
   }
   if (!resp.ok) {
     const txt = await resp.text();
     const msg = `Anthropic ${resp.status}: ${txt.slice(0, 500)}`;
-    await supabase.from("projects").update({ status: "brief_failed", brief_error: msg } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ status: "brief_failed", briefError: msg }).where(eq(projectsTable.id, project_id));
     throw new Error(msg);
   }
 
@@ -317,7 +318,7 @@ Then call submit_brief_proposal with the complete structured output including ai
   if (!toolUse) {
     const text = (responseData.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
     const msg = `No proposal returned. Raw: ${text.slice(0, 500)}`;
-    await supabase.from("projects").update({ status: "brief_failed", brief_error: msg } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ status: "brief_failed", briefError: msg }).where(eq(projectsTable.id, project_id));
     throw new Error(msg);
   }
 
@@ -326,25 +327,20 @@ Then call submit_brief_proposal with the complete structured output including ai
   const benchmarkTop = (proposal.benchmark_candidates || []).sort((a: any, b: any) => a.rank - b.rank)[0];
   const competitorTop = (proposal.competitor_candidates || []).sort((a: any, b: any) => a.rank - b.rank)[0];
 
-  const { error: saveErr } = await supabase.from("projects").update({
-    ai_proposed_brief: proposal,
-    keyword_cluster: proposal.keyword_cluster || [],
-    keyword: primary?.keyword || (project as any).keyword,
-    funnel_stage: proposal.funnel_stage,
+  await db.update(projectsTable).set({
+    aiProposedBrief: proposal,
+    keywordCluster: proposal.keyword_cluster || [],
+    keyword: primary?.keyword || project.keyword,
+    funnelStage: proposal.funnel_stage,
     icps: (proposal.icps || []).map((i: any) => i.id),
-    pod: proposal.pod || (project as any).pod,
-    benchmark_url: benchmarkTop?.url || (project as any).benchmark_url,
-    competitor_url: competitorTop?.url || (project as any).competitor_url,
-    content_type: proposal.content_type || (project as any).content_type,
-    mode: proposal.mode || (project as any).mode,
-    playbook_version: playbookVersion,
+    pod: proposal.pod || project.pod,
+    benchmarkUrl: benchmarkTop?.url || project.benchmarkUrl,
+    competitorUrl: competitorTop?.url || project.competitorUrl,
+    contentType: proposal.content_type || project.contentType,
+    mode: proposal.mode || project.mode,
+    playbookVersion,
     status: "brief_proposed",
-  } as any).eq("id", project_id);
-
-  if (saveErr) {
-    log.error({ err: saveErr, project_id }, "propose-brief: failed to save result to Supabase");
-    throw new Error(`Failed to persist brief proposal: ${saveErr.message}`);
-  }
+  }).where(eq(projectsTable.id, project_id));
 
   log.info({ project_id, playbookVersion }, "propose-brief: complete");
 }

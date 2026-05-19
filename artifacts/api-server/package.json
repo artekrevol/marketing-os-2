@@ -10,6 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@clerk/express": "^2.1.19",
+    "@clerk/shared": "^4.12.2",
     "@react-pdf/renderer": "catalog:",
     "@workspace/api-zod": "workspace:*",
     "@workspace/content-ai": "workspace:*",
@@ -22,6 +24,7 @@
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
+    "http-proxy-middleware": "^4.0.0",
     "jose": "^6.2.3",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.8.0",

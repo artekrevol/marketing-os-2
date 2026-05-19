@@ -41,7 +41,6 @@
     "@replit/vite-plugin-cartographer": "catalog:",
     "@replit/vite-plugin-dev-banner": "catalog:",
     "@replit/vite-plugin-runtime-error-modal": "catalog:",
-    "@supabase/supabase-js": "^2.105.1",
     "@tailwindcss/typography": "^0.5.16",
     "@tanstack/react-query": "catalog:",
     "@types/node": "catalog:",
@@ -72,5 +71,9 @@
     "vaul": "^0.9.9",
     "vite": "catalog:",
     "zod": "catalog:"
+  },
+  "dependencies": {
+    "@clerk/react": "^6.6.6",
+    "@clerk/themes": "^2.4.57"
   }
 }

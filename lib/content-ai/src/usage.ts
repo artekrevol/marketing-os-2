@@ -1,4 +1,4 @@
-import { getSupabaseAdmin } from "./supabase-admin.js";
+import { db, usageLogsTable } from "@workspace/db";
 
 /**
  * Per-million-token pricing in USD. Update when Anthropic prices change.
@@ -51,18 +51,18 @@ export async function logUsage(args: {
   try {
     const u = args.usage ?? {};
     const cost = estimateCost(args.model, u);
-    await getSupabaseAdmin().from("usage_logs").insert({
-      project_id: args.project_id ?? null,
+    await db.insert(usageLogsTable).values({
+      projectId: args.project_id ?? null,
       stage: args.stage ?? null,
-      sub_stage: args.sub_stage ?? null,
+      subStage: args.sub_stage ?? null,
       model: args.model,
-      metadata_user_id: args.metadata_user_id ?? null,
-      input_tokens: u.input_tokens ?? 0,
-      output_tokens: u.output_tokens ?? 0,
-      cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
-      cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
-      estimated_cost_usd: cost,
-      duration_ms: args.duration_ms ?? null,
+      metadataUserId: args.metadata_user_id ?? null,
+      inputTokens: u.input_tokens ?? 0,
+      outputTokens: u.output_tokens ?? 0,
+      cacheCreationInputTokens: u.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: u.cache_read_input_tokens ?? 0,
+      estimatedCostUsd: String(cost),
+      durationMs: args.duration_ms ?? null,
       ok: args.ok !== false,
       error: args.error ?? null,
     });

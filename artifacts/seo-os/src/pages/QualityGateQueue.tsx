@@ -3,7 +3,6 @@ import { Link } from "wouter";
 import { Loader2, RefreshCw, Clock, AlertCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { useActiveBrand } from "@/lib/brands";
-import { supabase } from "@/lib/supabase";
 import { qualityGate, type QueueItem } from "@/lib/api";
 
 /**
@@ -43,33 +42,11 @@ export default function QualityGateQueue() {
 
     refresh();
 
-    const ch = supabase
-      .channel(`qg-queue-${activeBrand.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "content_objects",
-          filter: `brand_id=eq.${activeBrand.id}`,
-        },
-        () => refresh(),
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "qa_runs",
-          filter: `brand_id=eq.${activeBrand.id}`,
-        },
-        () => refresh(),
-      )
-      .subscribe();
+    const timer = setInterval(refresh, 15000);
 
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      clearInterval(timer);
     };
   }, [activeBrand, brandLoading]);
 

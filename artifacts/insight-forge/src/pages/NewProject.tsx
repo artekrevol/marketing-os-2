@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { z } from "zod";
@@ -54,18 +53,6 @@ export default function NewProject() {
     setSubmitting(true);
     try {
       const finalSlug = (cleanSlug && cleanSlug.length > 0 ? cleanSlug : slugify(cleanTopic));
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        toast.error("You must be signed in.");
-        setSubmitting(false);
-        return;
-      }
-      // Sprint 1: new projects are written to whatever brand the user
-      // has currently selected in the brand switcher. BrandProvider is
-      // the single source of truth — it already enforces that admins can
-      // see all brands and writers are restricted to their access list,
-      // so we just trust activeBrand here. RLS provides the second
-      // line of defense at the DB level.
       if (!activeBrand) {
         throw new Error(
           isAdmin
@@ -73,26 +60,24 @@ export default function NewProject() {
             : "No brand selected. Ask an admin to grant brand access.",
         );
       }
-      const activeBrandId = activeBrand.id;
-      const { data: project, error } = await supabase
-        .from("projects")
-        .insert({
+      const resp = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
           topic: cleanTopic,
           url: finalSlug ? `/blog/${finalSlug}` : null,
           user_notes: cleanNotes && cleanNotes.length > 0 ? cleanNotes : null,
-          content_type: "blog",
-          mode: "composition",
-          status: "proposing_brief",
-          current_stage: 0,
-          created_by: user.id,
-          brand_id: activeBrandId,
-        })
-        .select()
-        .single();
-      if (error) throw error;
+          brand_id: activeBrand.id,
+        }),
+      });
+      const json = (await resp.json()) as Record<string, unknown>;
+      if (!resp.ok) throw new Error(String(json["error"] ?? `HTTP ${resp.status}`));
+      const project = json["project"] as { id: string } | undefined;
+      if (!project?.id) throw new Error("Project created but no ID returned");
 
       // Sprint 1: emit project.created to the events log.
-      emit("project.created", "project", project.id, { topic: cleanTopic }, activeBrandId);
+      emit("project.created", "project", project.id, { topic: cleanTopic }, activeBrand.id);
 
       // fire brief proposer (don't await — let user see Step 2 page with loading)
       void aiClient.proposeBrief(project.id);

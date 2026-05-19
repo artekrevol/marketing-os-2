@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Navigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { useUser } from "@clerk/react";
 import { Activity, Server, AlertTriangle, RefreshCw, Loader2, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
 
@@ -45,15 +45,10 @@ type Freshness = {
 const POLL_MS = 5_000;
 
 async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
   const res = await fetch(`/api${path}`, {
     ...opts,
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers ?? {}),
-    },
+    credentials: "include",
+    headers: { "content-type": "application/json", ...(opts.headers ?? {}) },
   });
   if (!res.ok) {
     let body: { error?: string; message?: string } = {};
@@ -64,6 +59,7 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 }
 
 export default function AdminSystem() {
+  const { user, isLoaded } = useUser();
   const [authState, setAuthState] = useState<"loading" | "ok" | "denied">("loading");
   const [freshness, setFreshness] = useState<Freshness | null>(null);
   const [queues, setQueues] = useState<QueueCount[]>([]);
@@ -73,46 +69,17 @@ export default function AdminSystem() {
   const [busy, setBusy] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Auth-lock pattern (preserved from AppShell). Never await Supabase
-  // inside onAuthStateChange — defer with setTimeout.
+  // Resolve admin status by calling /api/me once Clerk has loaded.
   useEffect(() => {
-    let cancelled = false;
-    const handle = (session: Awaited<ReturnType<typeof supabase.auth.getSession>>["data"]["session"]) => {
-      if (cancelled) return;
-      if (!session) {
-        setAuthState("denied");
-        return;
-      }
-      const userId = session.user.id;
-      setTimeout(async () => {
-        if (cancelled) return;
-        try {
-          // Use allSettled so a missing/inaccessible `user_roles` table
-          // (some environments provision only `user_profiles`) does NOT
-          // false-deny an admin who has `user_profiles.role='admin'`.
-          // Mirrors the API middleware fallback (requireAuth in
-          // artifacts/api-server/src/middlewares/auth.ts).
-          const [rolesRes, profileRes] = await Promise.allSettled([
-            supabase.from("user_roles").select("role").eq("user_id", userId),
-            supabase.from("user_profiles").select("role").eq("user_id", userId).maybeSingle(),
-          ]);
-          if (cancelled) return;
-          const rolesAdmin =
-            rolesRes.status === "fulfilled" &&
-            !!(rolesRes.value.data || []).find((r) => r.role === "admin");
-          const profileAdmin =
-            profileRes.status === "fulfilled" &&
-            profileRes.value.data?.role === "admin";
-          setAuthState(rolesAdmin || profileAdmin ? "ok" : "denied");
-        } catch {
-          if (!cancelled) setAuthState("denied");
-        }
-      }, 0);
-    };
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => handle(s));
-    supabase.auth.getSession().then(({ data }) => handle(data.session));
-    return () => { cancelled = true; sub.subscription.unsubscribe(); };
-  }, []);
+    if (!isLoaded) return;
+    if (!user) { setAuthState("denied"); return; }
+    fetch("/api/me", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data: any) => {
+        setAuthState(data?.role === "admin" ? "ok" : "denied");
+      })
+      .catch(() => setAuthState("denied"));
+  }, [isLoaded, user]);
 
   const refresh = useCallback(async () => {
     if (authState !== "ok") return;

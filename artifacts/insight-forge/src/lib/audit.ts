@@ -1,10 +1,5 @@
-import { supabase } from "@/integrations/supabase/client";
-import type { Json } from "@/integrations/supabase/types";
-
 /**
- * Admin-sensitive audit log. Justification is mandatory at the DB level
- * — the trim()>0 check constraint will reject empty strings. Caller is
- * expected to surface a "Why?" prompt before invoking this.
+ * Admin-sensitive audit log. Justification is mandatory.
  */
 export async function recordAudit(
   action: string,
@@ -18,18 +13,16 @@ export async function recordAudit(
     return { ok: false, error: "Justification is required." };
   }
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return { ok: false, error: "Not signed in." };
-    const { error } = await supabase.from("audit_log").insert({
-      action,
-      target_type: targetType,
-      target_id: targetId,
-      justification: justification.trim(),
-      metadata: metadata as Json,
-      brand_id: brandId,
-      actor_id: user.id,
+    const resp = await fetch("/api/audit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ action, targetType, targetId, justification: justification.trim(), metadata, brandId }),
     });
-    if (error) return { ok: false, error: error.message };
+    if (!resp.ok) {
+      const j = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+      return { ok: false, error: String(j["error"] ?? `HTTP ${resp.status}`) };
+    }
     return { ok: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "audit insert failed";

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Activity, RefreshCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -60,19 +59,16 @@ export default function AdminActivity() {
   const load = async () => {
     setLoading(true);
     const since = new Date(Date.now() - rangeHours * 3600_000).toISOString();
-    const [{ data: agg, error: aggErr }, { data: events, error: evErr }] = await Promise.all([
-      supabase.rpc("admin_user_activity", { _since: since }),
-      supabase
-        .from("page_events")
-        .select("id, user_email, path, duration_ms, entered_at, project_id")
-        .gte("entered_at", since)
-        .order("entered_at", { ascending: false })
-        .limit(100),
-    ]);
-    if (aggErr) toast.error(aggErr.message);
-    if (evErr) toast.error(evErr.message);
-    setRows((agg as any) || []);
-    setRecent((events as any) || []);
+    const resp = await fetch(`/api/admin/activity?since=${encodeURIComponent(since)}`, {
+      credentials: "include",
+    });
+    if (resp.ok) {
+      const body = await resp.json();
+      setRows(body.aggregate || []);
+      setRecent(body.recent || []);
+    } else {
+      toast.error("Failed to load activity");
+    }
     setLoading(false);
   };
 

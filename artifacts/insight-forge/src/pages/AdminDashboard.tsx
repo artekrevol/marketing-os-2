@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { useUser } from "@clerk/react";
 import { Download, ArrowRight, Upload, BookOpen, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { aiClient } from "@/lib/ai-client";
 
 export default function AdminDashboard() {
+  const { user } = useUser();
   const [rows, setRows] = useState<any[]>([]);
   const [voice, setVoice] = useState<any[]>([]);
   const [playbook, setPlaybook] = useState<any>(null);
@@ -17,47 +18,23 @@ export default function AdminDashboard() {
   const [filter, setFilter] = useState({ pod: "", stage: "", status: "" });
 
   const loadPlaybook = async () => {
-    const { data } = await supabase
-      .from("playbook")
-      .select("*")
-      .order("version", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const resp = await fetch("/api/admin/playbook", { credentials: "include" });
+    const data = resp.ok ? await resp.json() : null;
     setPlaybook(data);
-    if (data) {
-      const { data: secs } = await supabase
-        .from("playbook_sections")
-        .select("section_number, section_title, section_token_estimate, always_include")
-        .eq("version", (data as any).version)
-        .order("section_number");
-      setSections((secs as any[]) || []);
-    } else {
-      setSections([]);
-    }
+    setSections(data?.sections || []);
   };
 
   useEffect(() => {
     const load = async () => {
-      const { data: projects } = await supabase.from("projects").select("*").order("updated_at", { ascending: false });
-      const ids = (projects || []).map((p: any) => p.id);
-      const [scores, drafts, proofs, vl] = await Promise.all([
-        supabase.from("draft_scores").select("*").in("project_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
-        supabase.from("drafts").select("project_id, voice_match_score, citation_count").in("project_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
-        supabase.from("proof_points").select("project_id").in("project_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
-        supabase.from("voice_library").select("*").order("captured_at", { ascending: false }).limit(20),
-      ]);
-      const enriched = (projects || []).map((p: any) => {
-        const sc = (scores.data as any[])?.find((s) => s.project_id === p.id);
-        const dCount = (drafts.data as any[])?.filter((d) => d.project_id === p.id).reduce((n, d) => n + (d.citation_count || 0), 0) || 0;
-        const pCount = (proofs.data as any[])?.filter((pp) => pp.project_id === p.id).length || 0;
-        const minutes = Math.round((Date.now() - new Date(p.created_at).getTime()) / 60000);
-        return { ...p, scores: sc, citations: dCount, proofs: pCount, minutes };
-      });
-      setRows(enriched);
-      setVoice((vl.data as any) || []);
+      const resp = await fetch("/api/admin/dashboard", { credentials: "include" });
+      if (resp.ok) {
+        const body = await resp.json();
+        setRows(body.rows || []);
+        setVoice(body.voice || []);
+      }
     };
-    load();
-    loadPlaybook();
+    void load();
+    void loadPlaybook();
   }, []);
 
   const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -80,8 +57,7 @@ export default function AdminDashboard() {
       const content_base64 = btoa(binary);
       // Capture who uploaded (email — durable identifier; auth.user().id would also work
       // but email is what the admin card surfaces and what writers will recognise).
-      const { data: userData } = await supabase.auth.getUser();
-      const uploaded_by = userData?.user?.email || null;
+      const uploaded_by = user?.primaryEmailAddress?.emailAddress || null;
       const { data, error } = await aiClient.playbookUpload(file.name, file.type, content_base64, uploaded_by);
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);

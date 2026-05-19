@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useActiveBrand } from "@/lib/brands";
-import { supabase } from "@/lib/supabase";
 import { qualityGate, type ReviewDetail, type CheckResult } from "@/lib/api";
 
 /**
@@ -56,55 +55,12 @@ export default function QualityGateReview({ id }: { id: string }) {
 
     refresh();
 
-    const ch = supabase
-      .channel(`qg-review-${activeBrand.id}-${id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "content_objects",
-          filter: `id=eq.${id}`,
-        },
-        () => refresh(),
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "qa_runs",
-          filter: `brand_id=eq.${activeBrand.id}`,
-        },
-        (payload) => {
-          const row = payload.new as { content_object_id?: string } | null;
-          if (row?.content_object_id === id) refresh();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "qa_check_results",
-          filter: `brand_id=eq.${activeBrand.id}`,
-        },
-        (payload) => {
-          const row = payload.new as { qa_run_id?: string } | null;
-          if (row?.qa_run_id && row.qa_run_id === detail?.qaRun?.id) refresh();
-        },
-      )
-      .subscribe();
+    const timer = setInterval(refresh, 15000);
 
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      clearInterval(timer);
     };
-    // detail.qaRun.id is captured by the closure; re-subscribing on every
-    // detail change would tear/rebuild the channel unnecessarily, so we
-    // intentionally exclude it from the dependency list and accept that
-    // newly-created runs only flow in once the next refresh() completes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBrand, brandLoading, id]);
 
   const decide = async (decision: "approved" | "rejected") => {

@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useUser, useClerk } from "@clerk/react";
 import { Plus, NotebookPen, LayoutGrid, LogOut, Shield, Activity, DollarSign, Building2, ChevronDown, Server, LayoutDashboard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -10,118 +10,45 @@ import { BrandProvider, useActiveBrand } from "@/lib/brands";
 
 export default function AppShell() {
   usePageTracker();
-  const [authState, setAuthState] = useState<"loading" | "in" | "out" | "blocked">("loading");
-  const [email, setEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const { user, isLoaded, isSignedIn } = useUser();
+  const { signOut: clerkSignOut } = useClerk();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [meLoaded, setMeLoaded] = useState(false);
   const loc = useLocation();
   const nav = useNavigate();
 
-  useEffect(() => {
-    let cancelled = false;
-
-    // Synchronous part — runs inside the auth callback. NEVER do async
-    // supabase calls here or the auth-token NavigatorLock will deadlock
-    // (LockAcquireTimeoutError: lock was released because another request stole it).
-    const handleSession = (session: any) => {
-      if (cancelled) return;
-      if (!session) {
-        setEmail(null);
-        setUserId(null);
-        setIsAdmin(false);
-        setAuthState("out");
-        return;
-      }
-      const e = (session.user?.email || "").toLowerCase();
-      setEmail(e);
-      setUserId(session.user.id);
-      const isTek = e.endsWith("@tekrevol.com");
-      // Optimistically allow tekrevol users in immediately so they're never
-      // blocked on the role/brand-access lookup. Non-tekrevol users wait
-      // for the lookup before we decide blocked vs in.
-      if (isTek) setAuthState("in");
-
-      // Defer the DB calls so they don't run inside the auth lock.
-      // Sprint 1: also fetch brand_access. Non-tekrevol users with at
-      // least one brand_access entry (or admin role) are allowed in.
-      setTimeout(async () => {
-        if (cancelled) return;
-        try {
-          const [{ data: roles }, { data: profile }] = await Promise.all([
-            supabase.from("user_roles").select("role").eq("user_id", session.user.id),
-            supabase
-              .from("user_profiles")
-              .select("brand_access,role")
-              .eq("user_id", session.user.id)
-              .maybeSingle(),
-          ]);
-          if (cancelled) return;
-          const admin =
-            !!(roles || []).find((r) => r.role === "admin") ||
-            profile?.role === "admin";
-          setIsAdmin(admin);
-          const access: string[] = profile?.brand_access || [];
-          if (!isTek) {
-            // Allow if admin OR has any brand_access entry.
-            setAuthState(admin || access.length > 0 ? "in" : "blocked");
-          }
-        } catch (err) {
-          console.warn("[AppShell] role/profile lookup failed:", err);
-          if (cancelled) return;
-          if (!isTek) setAuthState("blocked");
-        }
-      }, 0);
-    };
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => handleSession(session));
-    supabase.auth.getSession().then(({ data }) => handleSession(data.session));
-
-    // Hard safety net: never let the screen sit on "Loading…" forever.
-    const safety = setTimeout(() => {
-      if (cancelled) return;
-      setAuthState((s) => (s === "loading" ? "out" : s));
-    }, 8000);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(safety);
-      sub.subscription.unsubscribe();
-    };
-  }, []);
+  const userId = user?.id ?? null;
+  const email = user?.primaryEmailAddress?.emailAddress ?? null;
 
   useEffect(() => {
-    if (authState === "out" && loc.pathname !== "/auth") nav("/auth", { replace: true });
-  }, [authState, loc.pathname, nav]);
+    if (!isLoaded || !isSignedIn) return;
+    fetch("/api/me", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data: { isAdmin?: boolean }) => {
+        setIsAdmin(!!data.isAdmin);
+        setMeLoaded(true);
+      })
+      .catch(() => setMeLoaded(true));
+  }, [isLoaded, isSignedIn]);
+
+  useEffect(() => {
+    if (isLoaded && !isSignedIn && loc.pathname !== "/auth") {
+      nav("/auth", { replace: true });
+    }
+  }, [isLoaded, isSignedIn, loc.pathname, nav]);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await clerkSignOut();
     toast.success("Signed out");
     nav("/auth", { replace: true });
   };
 
-  if (authState === "loading") {
+  if (!isLoaded || (isSignedIn && !meLoaded)) {
     return <div className="min-h-screen flex items-center justify-center bg-paper text-ink-muted text-sm">Loading…</div>;
   }
-  if (authState === "out") {
+
+  if (!isSignedIn) {
     return <Outlet />;
-  }
-  if (authState === "blocked") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-paper text-ink px-6">
-        <div className="max-w-sm border border-rule rounded-sm bg-background p-8 text-center">
-          <h1 className="font-serif text-xl mb-2">Access denied</h1>
-          <p className="text-sm text-ink-muted mb-1">
-            <span className="font-mono">{email}</span> doesn't have access to any brand yet.
-          </p>
-          <p className="text-sm text-ink-muted mb-6">
-            Ask an admin to grant you brand access on the Users &amp; access page.
-          </p>
-          <button onClick={signOut} className="bg-ink text-paper px-4 py-2 rounded-sm text-sm font-medium hover:bg-accent">
-            Sign out
-          </button>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -250,10 +177,7 @@ export default function AppShell() {
   );
 }
 
-// Project list scoped to the active brand. Lives inside BrandProvider
-// so the switcher and the list stay in sync. Re-queries when the user
-// switches brand. Realtime channel is filtered server-side by brand_id
-// so cross-brand changes don't trigger refetches.
+// Project list scoped to the active brand. Polls every 30 s instead of Realtime.
 function ProjectList() {
   const { activeBrand, loading: brandLoading } = useActiveBrand();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -265,31 +189,18 @@ function ProjectList() {
     }
     let mounted = true;
     const load = async () => {
-      const { data } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("brand_id", activeBrand.id)
-        .order("updated_at", { ascending: false })
-        .limit(50);
-      if (mounted) setProjects((data as Project[] | null) || []);
+      try {
+        const r = await fetch(`/api/projects?brandId=${activeBrand.id}`, { credentials: "include" });
+        if (!r.ok) return;
+        const data = (await r.json()) as Project[];
+        if (mounted) setProjects(data);
+      } catch {}
     };
     load();
-    const ch = supabase
-      .channel(`proj-list-${activeBrand.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "projects",
-          filter: `brand_id=eq.${activeBrand.id}`,
-        },
-        load,
-      )
-      .subscribe();
+    const interval = setInterval(load, 30_000);
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      clearInterval(interval);
     };
   }, [activeBrand, brandLoading]);
 
@@ -332,12 +243,11 @@ function BrandSwitcher() {
     return null;
   }
 
-  // Single-brand user: static label, no dropdown.
   if (accessible.length === 1) {
     return (
       <div className="px-5 py-3 border-b border-rule flex items-center gap-2">
         <Building2 className="h-3.5 w-3.5 text-ink-muted" />
-        <span className="text-xs font-medium">{accessible[0].name}</span>
+        <span className="text-xs font-medium">{accessible[0]!.name}</span>
       </div>
     );
   }

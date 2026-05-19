@@ -1,15 +1,15 @@
-import { getSupabaseAdmin } from "./supabase-admin.js";
+import { db, playbookTable, playbookSectionsTable } from "@workspace/db";
+import { desc, eq } from "drizzle-orm";
 
 /** Fetch the latest playbook markdown. Returns empty string if none uploaded. */
 export async function getActivePlaybook(): Promise<{ content: string; version: number | null }> {
-  const { data } = await getSupabaseAdmin()
-    .from("playbook")
-    .select("content_markdown, version")
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!data) return { content: "", version: null };
-  return { content: (data as any).content_markdown || "", version: (data as any).version ?? null };
+  const rows = await db
+    .select({ contentMarkdown: playbookTable.contentMarkdown, version: playbookTable.version })
+    .from(playbookTable)
+    .orderBy(desc(playbookTable.version))
+    .limit(1);
+  if (!rows.length) return { content: "", version: null };
+  return { content: rows[0]!.contentMarkdown || "", version: rows[0]!.version ?? null };
 }
 
 /* ───────────────────────────────────────────────────────────────────
@@ -220,26 +220,31 @@ export function parsePlaybookSections(markdown: string): PlaybookSection[] {
 
 /** Fetch all sections for the latest playbook version. */
 export async function getPlaybookSections(): Promise<{ sections: PlaybookSection[]; version: number | null }> {
-  const { data: latest } = await getSupabaseAdmin()
-    .from("playbook")
-    .select("version")
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const version = (latest as any)?.version ?? null;
+  const latestRows = await db
+    .select({ version: playbookTable.version })
+    .from(playbookTable)
+    .orderBy(desc(playbookTable.version))
+    .limit(1);
+  const version = latestRows[0]?.version ?? null;
   if (version === null) return { sections: [], version: null };
 
-  const { data: rows } = await getSupabaseAdmin()
-    .from("playbook_sections")
-    .select("section_number, section_title, section_content, section_token_estimate, always_include")
-    .eq("version", version)
-    .order("section_number");
-  const sections = ((rows as any[]) ?? []).map((r) => ({
-    section_number: r.section_number,
-    section_title: r.section_title || "",
-    section_content: r.section_content || "",
-    section_token_estimate: r.section_token_estimate || 0,
-    always_include: !!r.always_include,
+  const rows = await db
+    .select({
+      sectionNumber: playbookSectionsTable.sectionNumber,
+      sectionTitle: playbookSectionsTable.sectionTitle,
+      sectionContent: playbookSectionsTable.sectionContent,
+      sectionTokenEstimate: playbookSectionsTable.sectionTokenEstimate,
+      alwaysInclude: playbookSectionsTable.alwaysInclude,
+    })
+    .from(playbookSectionsTable)
+    .where(eq(playbookSectionsTable.version, version))
+    .orderBy(playbookSectionsTable.sectionNumber);
+  const sections = rows.map((r) => ({
+    section_number: r.sectionNumber,
+    section_title: r.sectionTitle || "",
+    section_content: r.sectionContent || "",
+    section_token_estimate: r.sectionTokenEstimate || 0,
+    always_include: !!r.alwaysInclude,
   }));
   return { sections, version };
 }

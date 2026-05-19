@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { ChevronDown, Star, Loader2, RefreshCw, ExternalLink, CheckCircle2, AlertCircle, HelpCircle, X, Circle, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import type { Project, ProofPoint } from "@/lib/types";
@@ -57,24 +56,20 @@ export default function ResearchDashboard() {
   useEffect(() => {
     let mounted = true;
     const load = async () => {
-      const [b, p] = await Promise.all([
-        supabase.from("research_briefs").select("*").eq("project_id", project.id).maybeSingle(),
-        supabase.from("proof_points").select("*").eq("project_id", project.id).order("created_at"),
+      const [bResp, pResp] = await Promise.all([
+        fetch(`/api/projects/${project.id}/research`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/proof-points`, { credentials: "include" }),
       ]);
       if (!mounted) return;
-      setBrief(b.data);
-      setProofs((p.data as any) || []);
+      setBrief(bResp.ok ? await bResp.json() : null);
+      setProofs(pResp.ok ? await pResp.json() : []);
       setLoading(false);
     };
-    load();
-    const ch = supabase
-      .channel(`research-${project.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "research_briefs", filter: `project_id=eq.${project.id}` }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "proof_points", filter: `project_id=eq.${project.id}` }, load)
-      .subscribe();
+    void load();
+    const timer = setInterval(() => { if (mounted) void load(); }, 8000);
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      clearInterval(timer);
     };
   }, [project.id]);
 
@@ -104,12 +99,8 @@ export default function ResearchDashboard() {
         setAborting(false);
         return;
       }
-      await Promise.all([
-        supabase.from("proof_points").delete().eq("project_id", project.id),
-        supabase.from("research_briefs").delete().eq("project_id", project.id),
-      ]);
-      const { error: delErr } = await supabase.from("projects").delete().eq("id", project.id);
-      if (delErr) throw delErr;
+      const delResp = await fetch(`/api/projects/${project.id}`, { method: "DELETE", credentials: "include" });
+      if (!delResp.ok) throw new Error(`HTTP ${delResp.status}`);
       emit("project.deleted", "project", project.id, { topic: project.topic }, project.brand_id ?? null);
       toast.success("Research aborted. Project deleted.");
       setDiscardOpen(false);
@@ -127,16 +118,27 @@ export default function ResearchDashboard() {
   };
 
   const star = async (pp: ProofPoint) => {
-    await supabase.from("proof_points").update({ starred: !pp.starred }).eq("id", pp.id);
+    await fetch(`/api/projects/${project.id}/proof-points/${pp.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ starred: !pp.starred }),
+    });
+    setProofs((prev) => prev.map((p) => p.id === pp.id ? { ...p, starred: !pp.starred } : p));
   };
 
   const updateProof = async (id: string, patch: Partial<ProofPoint>) => {
-    await supabase.from("proof_points").update(patch).eq("id", id);
+    await fetch(`/api/projects/${project.id}/proof-points/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(patch),
+    });
   };
 
   const approve = async () => {
     setAdvancing(true);
-    await supabase.from("research_briefs").update({ approved_at: new Date().toISOString() }).eq("project_id", project.id);
+    await fetch(`/api/projects/${project.id}/research/approve`, { method: "PATCH", credentials: "include" });
     const { error } = await aiClient.outlineGenerate(project.id);
     setAdvancing(false);
     if (error) {

@@ -1,5 +1,6 @@
+import { ClerkProvider } from "@clerk/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
+import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { Toaster } from "@/components/ui/sonner";
 import AppShell from "@/components/AppShell";
 import Auth from "@/pages/Auth";
@@ -25,6 +26,19 @@ function Routed() {
   );
 }
 
+function ClerkWithWouter({ children }: { children: React.ReactNode }) {
+  const [, navigate] = useLocation();
+  return (
+    <ClerkProvider
+      publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
+      routerPush={(to) => navigate(to)}
+      routerReplace={(to) => navigate(to)}
+    >
+      {children}
+    </ClerkProvider>
+  );
+}
+
 function App() {
   // Wouter base path matches Vite's BASE_URL (without trailing slash) so
   // that <Link to="/quality-gate"> renders as /seo-os/quality-gate in
@@ -33,9 +47,11 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <WouterRouter base={base}>
-        <AppShell>
-          <Routed />
-        </AppShell>
+        <ClerkWithWouter>
+          <AppShell>
+            <Routed />
+          </AppShell>
+        </ClerkWithWouter>
         <Toaster richColors position="top-right" />
       </WouterRouter>
     </QueryClientProvider>

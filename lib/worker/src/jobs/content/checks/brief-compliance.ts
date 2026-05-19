@@ -122,7 +122,7 @@ async function loadDraftMeta(
     const draft = drafts[0];
     if (!draft) return null;
 
-    const md = (draft.metadata ?? {}) as Record<string, unknown>;
+    const md: Record<string, unknown> = {};
     const metaTitle =
       (md["metaTitle"] as string | undefined) ??
       (md["meta_title"] as string | undefined) ??

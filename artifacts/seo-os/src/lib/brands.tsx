@@ -7,13 +7,20 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { supabase } from "./supabase";
 
 export type Brand = {
   id: string;
   slug: string;
   name: string;
   primary_domain: string | null;
+};
+
+type MeResponse = {
+  userId: string;
+  email: string | null;
+  isAdmin: boolean;
+  role: string;
+  brands: Brand[];
 };
 
 type Ctx = {
@@ -44,7 +51,6 @@ export function BrandProvider({
   isAdmin: boolean;
 }) {
   const [brands, setBrands] = useState<Brand[]>([]);
-  const [accessibleIds, setAccessibleIds] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -52,58 +58,42 @@ export function BrandProvider({
     let cancelled = false;
     if (!userId) {
       setBrands([]);
-      setAccessibleIds([]);
       setActiveId(null);
       setLoading(false);
       return;
     }
     setLoading(true);
-    (async () => {
-      const [{ data: bs }, { data: prof }] = await Promise.all([
-        supabase.from("brands").select("id,slug,name,primary_domain").order("name"),
-        supabase
-          .from("user_profiles")
-          .select("brand_access")
-          .eq("user_id", userId)
-          .maybeSingle(),
-      ]);
-      if (cancelled) return;
-      const allBrands: Brand[] = ((bs ?? []) as Brand[]).map((b) => ({
-        id: b.id,
-        slug: b.slug,
-        name: b.name,
-        primary_domain: b.primary_domain ?? null,
-      }));
-      setBrands(allBrands);
-      const access: string[] = (prof?.brand_access as string[] | undefined) ?? [];
-      const visibleIds = isAdmin ? allBrands.map((b) => b.id) : access;
-      setAccessibleIds(visibleIds);
+    fetch("/api/me", { credentials: "include" })
+      .then((r) => r.json() as Promise<MeResponse>)
+      .then((data) => {
+        if (cancelled) return;
+        const allBrands = data.brands;
+        setBrands(allBrands);
 
-      let nextActive: string | null = null;
-      try {
-        const slug = localStorage.getItem(STORAGE_KEY);
-        if (slug) {
-          const m = allBrands.find((b) => b.slug === slug && visibleIds.includes(b.id));
-          if (m) nextActive = m.id;
+        let nextActive: string | null = null;
+        try {
+          const slug = localStorage.getItem(STORAGE_KEY);
+          if (slug) {
+            const m = allBrands.find((b) => b.slug === slug);
+            if (m) nextActive = m.id;
+          }
+        } catch {}
+        if (!nextActive) {
+          const tek = allBrands.find((b) => b.slug === "tekrevol");
+          if (tek) nextActive = tek.id;
         }
-      } catch {}
-      if (!nextActive) {
-        const tek = allBrands.find((b) => b.slug === "tekrevol" && visibleIds.includes(b.id));
-        if (tek) nextActive = tek.id;
-      }
-      if (!nextActive && visibleIds.length > 0) nextActive = visibleIds[0]!;
-      setActiveId(nextActive);
-      setLoading(false);
-    })();
+        if (!nextActive && allBrands.length > 0) nextActive = allBrands[0]!.id;
+        setActiveId(nextActive);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
   }, [userId, isAdmin]);
 
-  const accessible = useMemo(
-    () => brands.filter((b) => accessibleIds.includes(b.id)),
-    [brands, accessibleIds],
-  );
   const activeBrand = useMemo(
     () => brands.find((b) => b.id === activeId) ?? null,
     [brands, activeId],
@@ -117,8 +107,8 @@ export function BrandProvider({
   }, []);
 
   const value = useMemo<Ctx>(
-    () => ({ loading, accessible, activeBrand, setActiveBrand, isAdmin }),
-    [loading, accessible, activeBrand, setActiveBrand, isAdmin],
+    () => ({ loading, accessible: brands, activeBrand, setActiveBrand, isAdmin }),
+    [loading, brands, activeBrand, setActiveBrand, isAdmin],
   );
 
   return <BrandCtx.Provider value={value}>{children}</BrandCtx.Provider>;

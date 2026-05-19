@@ -1,21 +1,16 @@
-import { supabase } from "./supabase";
-
 /**
- * Thin fetch wrapper that attaches the Supabase access token and routes
+ * Thin fetch wrapper that uses Clerk's session cookie for auth and routes
  * to the api-server through the shared reverse proxy. The api-server
  * artifact already mounts at `/api` so we always hit `/api/...` —
  * regardless of which artifact (`/seo-os/`, `/insight-forge/`) is the
  * current page — because the proxy resolves paths most-specific-first.
  */
 async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
   const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(path, { ...init, headers });
+  return fetch(path, { ...init, headers, credentials: "include" });
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {

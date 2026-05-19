@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import {
   Download, Code2, Globe, RotateCcw, ExternalLink, Loader2, Copy, FileCode,
   CheckCircle2, Circle, AlertCircle, FileText, ShieldCheck,
@@ -48,48 +47,33 @@ export default function DraftReview() {
   useEffect(() => {
     let mounted = true;
     const load = async () => {
-      const [s, o, d, p, ap, b] = await Promise.all([
-        supabase.from("draft_scores").select("*").eq("project_id", project.id).maybeSingle(),
-        supabase.from("outlines").select("*").eq("project_id", project.id).maybeSingle(),
-        supabase.from("drafts").select("*").eq("project_id", project.id),
-        supabase.from("proof_points").select("*").eq("project_id", project.id).eq("starred", true),
-        supabase.from("proof_points").select("source_url").eq("project_id", project.id),
-        supabase
-          .from("research_briefs")
-          .select("ai_citation_landscape, atomic_question_map")
-          .eq("project_id", project.id)
-          .maybeSingle(),
+        const [sResp, oResp, dResp, pResp, apResp, bResp] = await Promise.all([
+        fetch(`/api/projects/${project.id}/draft-scores`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/outlines`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/drafts`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/proof-points?starred=true`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/proof-points`, { credentials: "include" }),
+        fetch(`/api/projects/${project.id}/research`, { credentials: "include" }),
       ]);
       if (!mounted) return;
-      setScores(s.data);
-      setOutline(o.data);
-      setDrafts((d.data as any) || []);
-      setProofs((p.data as any) || []);
-      setAllProofs((ap.data as any) || []);
-      setBriefLandscape((b.data as any)?.ai_citation_landscape || null);
-      setAtomicQuestions(((b.data as any)?.atomic_question_map as any[]) || []);
+      setScores(sResp.ok ? await sResp.json() : null);
+      setOutline(oResp.ok ? await oResp.json() : null);
+      const draftsData = dResp.ok ? await dResp.json() : [];
+      setDrafts(Array.isArray(draftsData) ? draftsData : []);
+      const starredProofs = pResp.ok ? await pResp.json() : [];
+      setProofs(Array.isArray(starredProofs) ? starredProofs.filter((p: any) => p.starred) : []);
+      const allProofsData = apResp.ok ? await apResp.json() : [];
+      setAllProofs(Array.isArray(allProofsData) ? allProofsData : []);
+      const briefData = bResp.ok ? await bResp.json() : null;
+      setBriefLandscape(briefData?.ai_citation_landscape || null);
+      setAtomicQuestions(briefData?.atomic_question_map || []);
       setLoading(false);
     };
-    load();
-    // Realtime: listen to BOTH draft_scores (for the stitched output) and
-    // drafts (for the approval ledger). The ledger needs to update live so
-    // a teammate approving a section in another tab unblocks the export.
-    const ch = supabase
-      .channel(`r-${project.id}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "draft_scores", filter: `project_id=eq.${project.id}` },
-        load,
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "drafts", filter: `project_id=eq.${project.id}` },
-        load,
-      )
-      .subscribe();
+    void load();
+    const timer = setInterval(() => { if (mounted) void load(); }, 8000);
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      clearInterval(timer);
     };
   }, [project.id]);
 
@@ -145,7 +129,12 @@ export default function DraftReview() {
   };
 
   const sendBack = async () => {
-    await supabase.from("projects").update({ current_stage: 3, status: "drafting" }).eq("id", project.id);
+    await fetch(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ current_stage: 3, status: "drafting" }),
+    });
     emit("review.sent_back", "project", project.id, {}, project.brand_id ?? null);
     toast.success("Sent back to drafting.");
   };
@@ -175,16 +164,10 @@ export default function DraftReview() {
     }
     setSubmittingQg(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) throw new Error("Not signed in");
-
       const startRes = await fetch("/api/quality-gate/start-from-draft", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ brandId: project.brand_id, projectId: project.id }),
       });
       if (!startRes.ok) {
@@ -195,10 +178,8 @@ export default function DraftReview() {
 
       const submitRes = await fetch("/api/quality-gate/submit", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ brandId: project.brand_id, contentObjectId }),
       });
       if (!submitRes.ok) {
@@ -574,13 +555,10 @@ function SubmittedForReview({
     let mounted = true;
     const refresh = async () => {
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) throw new Error("Not signed in");
         const url = `/api/quality-gate/review/${encodeURIComponent(
           contentObjectId,
         )}?brandId=${encodeURIComponent(brandId)}`;
-        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch(url, { credentials: "include" });
         if (!res.ok) {
           throw new Error(`review fetch failed (${res.status})`);
         }

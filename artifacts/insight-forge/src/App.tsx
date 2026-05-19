@@ -1,5 +1,6 @@
+import { ClerkProvider } from "@clerk/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -24,38 +25,53 @@ import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
 
+function ClerkWithRouter({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate();
+  return (
+    <ClerkProvider
+      publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
+      routerPush={(to) => navigate(to)}
+      routerReplace={(to) => navigate(to, { replace: true })}
+    >
+      {children}
+    </ClerkProvider>
+  );
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner />
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <Routes>
-          {/* Standalone pages — no sidebar chrome */}
-          <Route path="/" element={<Hub />} />
-          <Route path="/auth" element={<Auth />} />
+        <ClerkWithRouter>
+          <Routes>
+            {/* Standalone pages — no sidebar chrome */}
+            <Route path="/" element={<Hub />} />
+            <Route path="/auth" element={<Auth />} />
 
-          {/* ContentForge app — sidebar chrome via AppShell */}
-          <Route element={<AppShell />}>
-            <Route path="/projects" element={<Index />} />
-            <Route path="/new" element={<NewProject />} />
-            <Route path="/admin" element={<AdminDashboard />} />
-            <Route path="/admin/users" element={<AdminUsers />} />
-            <Route path="/admin/brands" element={<AdminBrands />} />
-            <Route path="/admin/activity" element={<AdminActivity />} />
-            <Route path="/admin/usage" element={<AdminUsage />} />
-            <Route path="/admin/system" element={<AdminSystem />} />
-            <Route path="/project/:id" element={<ProjectLayout />}>
-              <Route index element={<Navigate to="brief" replace />} />
-              <Route path="brief" element={<BriefProposal />} />
-              <Route path="research" element={<ResearchDashboard />} />
-              <Route path="outline" element={<OutlineEditor />} />
-              <Route path="draft" element={<DraftingInterface />} />
-              <Route path="review" element={<DraftReview />} />
+            {/* ContentForge app — sidebar chrome via AppShell */}
+            <Route element={<AppShell />}>
+              <Route path="/projects" element={<Index />} />
+              <Route path="/new" element={<NewProject />} />
+              <Route path="/admin" element={<AdminDashboard />} />
+              <Route path="/admin/users" element={<AdminUsers />} />
+              <Route path="/admin/brands" element={<AdminBrands />} />
+              <Route path="/admin/activity" element={<AdminActivity />} />
+              <Route path="/admin/usage" element={<AdminUsage />} />
+              <Route path="/admin/system" element={<AdminSystem />} />
+              <Route path="/project/:id" element={<ProjectLayout />}>
+                <Route index element={<Navigate to="brief" replace />} />
+                <Route path="brief" element={<BriefProposal />} />
+                <Route path="research" element={<ResearchDashboard />} />
+                <Route path="outline" element={<OutlineEditor />} />
+                <Route path="draft" element={<DraftingInterface />} />
+                <Route path="review" element={<DraftReview />} />
+              </Route>
+              <Route path="*" element={<NotFound />} />
             </Route>
-            <Route path="*" element={<NotFound />} />
-          </Route>
-        </Routes>
+          </Routes>
+        </ClerkWithRouter>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

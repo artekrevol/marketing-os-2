@@ -1,16 +1,7 @@
 /**
  * Typed client for the Express AI routes (`/api/ai/*`).
- *
- * Drop-in replacement for `supabase.functions.invoke(name, { body })`.
- * Returns `{ data, error }` so existing call-sites need only swap the
- * import — no other structural changes required.
- *
- * Auth: reads the active Supabase session and forwards the JWT as
- * `Authorization: Bearer <token>`. The Express `requireAuth` middleware
- * validates it via SUPABASE_JWT_SECRET.
+ * Uses cookie-based auth (Clerk session via credentials: "include").
  */
-
-import { supabase } from "@/integrations/supabase/client";
 
 type AiResult<T = unknown> = { data: T | null; error: { message: string } | null };
 
@@ -19,15 +10,10 @@ async function callAi<T = unknown>(
   body: Record<string, unknown>,
 ): Promise<AiResult<T>> {
   try {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData?.session?.access_token ?? "";
-
     const resp = await fetch(`/api/ai/${endpoint}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify(body),
     });
 

@@ -2,7 +2,6 @@ import { Router } from "express";
 import { requireAuth, requireAdmin } from "../../middlewares/auth.js";
 import { getQueue } from "@workspace/jobs";
 import {
-  getSupabaseAdmin,
   buildRoutedSystem,
   buildRoutedSystemWithProject,
   logUsage,
@@ -12,6 +11,20 @@ import {
   ALWAYS_INCLUDE,
   type StageKey,
 } from "@workspace/content-ai";
+import {
+  db,
+  projectsTable,
+  researchBriefsTable,
+  proofPointsTable,
+  outlinesTable,
+  draftsTable,
+  draftScoresTable,
+  voiceLibraryTable,
+  interviewAnswersTable,
+  playbookTable,
+  playbookSectionsTable,
+} from "@workspace/db";
+import { eq, and, desc } from "drizzle-orm";
 
 const router = Router();
 
@@ -42,26 +55,24 @@ async function callAnthropicRaw(body: Record<string, unknown>): Promise<any> {
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/propose-brief
  * Enqueues the brief proposal job and returns 202 immediately.
- * Frontend subscribes to projects.status via realtime.
  * ───────────────────────────────────────────────────────────── */
 router.post("/propose-brief", requireAuth, async (req, res) => {
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
-    const supabase = getSupabaseAdmin();
-    const { data: project, error } = await supabase.from("projects").select("id, topic").eq("id", project_id).single();
-    if (error || !project) { res.status(500).json({ error: "project not found" }); return; }
+    const rows = await db.select({ id: projectsTable.id, topic: projectsTable.topic }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
+    const project = rows[0];
+    if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
-    const topicTrimmed = String((project as any).topic || "").trim();
+    const topicTrimmed = String(project.topic || "").trim();
     if (topicTrimmed.length === 0) { res.status(400).json({ error: "Project topic is empty." }); return; }
     if (topicTrimmed.length > 200) {
       res.status(400).json({ error: `Project topic exceeds 200 characters (got ${topicTrimmed.length}).` });
       return;
     }
 
-    // Mark proposing synchronously so the UI shows progress immediately.
-    await supabase.from("projects").update({ status: "brief_proposing" } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ status: "brief_proposing" }).where(eq(projectsTable.id, project_id));
 
     await getQueue("ai").add("ai.propose-brief", {
       idempotencyKey: `propose-brief:${project_id}`,
@@ -78,7 +89,6 @@ router.post("/propose-brief", requireAuth, async (req, res) => {
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/research-generate
  * Enqueues the full 7-stage research run. Returns 200 immediately.
- * Frontend watches research_briefs.sub_status via realtime.
  * ───────────────────────────────────────────────────────────── */
 router.post("/research-generate", requireAuth, async (req, res) => {
   try {
@@ -125,8 +135,6 @@ router.post("/research-retry-card", requireAuth, async (req, res) => {
 
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/outline-generate
- * Synchronous — runs inline (outline generation is fast enough,
- * ~5s, so no background queue needed).
  * ───────────────────────────────────────────────────────────── */
 const OUTLINE_TOOL = {
   name: "submit_outline",
@@ -170,12 +178,14 @@ router.post("/outline-generate", requireAuth, async (req, res) => {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
-    const supabase = getSupabaseAdmin();
-    const [{ data: project }, { data: brief }, { data: proofs }] = await Promise.all([
-      supabase.from("projects").select("*").eq("id", project_id).single(),
-      supabase.from("research_briefs").select("*").eq("project_id", project_id).single(),
-      supabase.from("proof_points").select("*").eq("project_id", project_id).eq("starred", true),
+    const [projectRows, briefRows, proofRows] = await Promise.all([
+      db.select().from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
+      db.select().from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
+      db.select().from(proofPointsTable).where(and(eq(proofPointsTable.projectId, project_id), eq(proofPointsTable.starred, true))),
     ]);
+    const project = projectRows[0];
+    const brief = briefRows[0];
+    const proofs = proofRows;
     if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
     const outlineInstructions = `Honor the playbook for ICP language, banned phrases, and pillar alignment when shaping the outline.
@@ -186,10 +196,10 @@ You must also distribute the brief's atomic_question_map across sections — eve
     req.log.info({ sections: included }, "outline-generate: routed playbook sections");
 
     const metadataUserId = buildAnthropicUserId({
-      pod: (project as any).pod,
+      pod: project.pod,
       stage: "stage2",
       substage: "outline",
-      writer_id: (project as any).writer_id,
+      writer_id: project.writerId,
     });
 
     const t0 = Date.now();
@@ -203,13 +213,13 @@ You must also distribute the brief's atomic_question_map across sections — eve
       messages: [
         {
           role: "user",
-          content: `Build an outline for a ${(project as any).content_type} on "${(project as any).topic}" (${(project as any).funnel_stage}, keyword: ${(project as any).keyword}).
+          content: `Build an outline for a ${project.contentType} on "${project.topic}" (${project.funnelStage}, keyword: ${project.keyword}).
 
 Approved research:
 ${JSON.stringify(brief, null, 2).slice(0, 8000)}
 
 Starred proof points:
-${JSON.stringify(proofs || [], null, 2).slice(0, 4000)}
+${JSON.stringify(proofs, null, 2).slice(0, 4000)}
 
 Produce 6-9 sections. Each section gets:
 - unique id (e.g. "s1"), heading, level (H2/H3), one-sentence job, target word count
@@ -241,20 +251,32 @@ Cover EVERY atomic question with liftable_paragraph=true at least once. Distribu
     if (!toolUse) throw new Error("No outline returned");
     const out = toolUse.input;
 
-    await supabase.from("outlines").upsert(
-      {
-        project_id,
+    await db
+      .insert(outlinesTable)
+      .values({
+        projectId: project_id,
+        brandId: project.brandId,
         h1: out.h1,
-        meta_description: out.meta_description,
+        metaDescription: out.meta_description,
         sections: out.sections,
-        cta_placement: out.cta_placement,
-        internal_links: out.internal_links || [],
-        tone_reminder: out.tone_reminder,
-      },
-      { onConflict: "project_id" } as any,
-    );
+        ctaPlacement: out.cta_placement,
+        internalLinks: out.internal_links || [],
+        toneReminder: out.tone_reminder,
+      })
+      .onConflictDoUpdate({
+        target: outlinesTable.projectId,
+        set: {
+          h1: out.h1,
+          metaDescription: out.meta_description,
+          sections: out.sections,
+          ctaPlacement: out.cta_placement,
+          internalLinks: out.internal_links || [],
+          toneReminder: out.tone_reminder,
+          updatedAt: new Date(),
+        },
+      });
 
-    await supabase.from("projects").update({ current_stage: 2, status: "outlining" } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ currentStage: 2, status: "outlining" }).where(eq(projectsTable.id, project_id));
 
     res.json({ ok: true, outline: out });
   } catch (e) {
@@ -350,7 +372,7 @@ function normalizeUrl(u: string): { full: string; host: string } | null {
   } catch { return null; }
 }
 
-function buildCitationWhitelist(args: { proofs: any[] | null; brief: any; project: any }): { hosts: Set<string>; sources: Array<{ url: string; host: string; label: string }> } {
+function buildCitationWhitelist(args: { proofs: any[]; brief: any; project: any }): { hosts: Set<string>; sources: Array<{ url: string; host: string; label: string }> } {
   const hosts = new Set<string>();
   const sources: Array<{ url: string; host: string; label: string }> = [];
   const add = (raw: string | null | undefined, label: string) => {
@@ -360,11 +382,11 @@ function buildCitationWhitelist(args: { proofs: any[] | null; brief: any; projec
     hosts.add(n.host);
     sources.push({ url: n.full, host: n.host, label });
   };
-  for (const p of args.proofs || []) add(p?.source_url, p?.source_publication || "proof point");
-  const landscape = args.brief?.ai_citation_landscape as any;
+  for (const p of args.proofs) add(p?.sourceUrl, p?.sourcePublication || "proof point");
+  const landscape = (args.brief?.aiCitationLandscape || args.brief?.ai_citation_landscape) as any;
   for (const s of landscape?.top_cited_sources || []) add(s?.url, s?.publisher || "authority");
   for (const s of landscape?.suggested_authority_sources || []) add(s?.url_or_topic, s?.publisher || "authority");
-  if (args.project?.company_domain) add(`https://${args.project.company_domain}`, "self");
+  if (args.project?.companyDomain) add(`https://${args.project.companyDomain}`, "self");
   return { hosts, sources };
 }
 
@@ -387,52 +409,50 @@ router.post("/draft-section", requireAuth, async (req, res) => {
     };
     if (!project_id || !section_id) { res.status(400).json({ error: "project_id and section_id required" }); return; }
 
-    const supabase = getSupabaseAdmin();
-    const [
-      { data: project },
-      { data: outline },
-      { data: proofs },
-      { data: brief },
-      { data: existing },
-    ] = await Promise.all([
-      supabase.from("projects").select("*").eq("id", project_id).single(),
-      supabase.from("outlines").select("*").eq("project_id", project_id).single(),
-      supabase.from("proof_points").select("*").eq("project_id", project_id).eq("starred", true),
-      supabase.from("research_briefs").select("synergy_map, conversion_signals, ai_citation_landscape, atomic_question_map, entity_data_requirements, updated_at").eq("project_id", project_id).single(),
-      supabase.from("drafts").select("*").eq("project_id", project_id).eq("section_id", section_id).maybeSingle(),
+    const [projectRows, outlineRows, proofRows, briefRows, existingRows] = await Promise.all([
+      db.select().from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
+      db.select().from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
+      db.select().from(proofPointsTable).where(and(eq(proofPointsTable.projectId, project_id), eq(proofPointsTable.starred, true))),
+      db.select({ synergyMap: researchBriefsTable.synergyMap, conversionSignals: researchBriefsTable.conversionSignals, aiCitationLandscape: researchBriefsTable.aiCitationLandscape, atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, updatedAt: researchBriefsTable.updatedAt }).from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
+      db.select().from(draftsTable).where(and(eq(draftsTable.projectId, project_id), eq(draftsTable.sectionId, section_id))).limit(1),
     ]);
+    const project = projectRows[0];
+    const outline = outlineRows[0];
+    const proofs = proofRows;
+    const brief = briefRows[0];
+    const existing = existingRows[0];
     if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
-    const section = (outline?.sections as any[]).find((s: any) => s.id === section_id);
+    const section = (outline?.sections as any[])?.find((s: any) => s.id === section_id);
     if (!section) { res.status(400).json({ error: "section not in outline" }); return; }
 
-    const totalSections = (outline?.sections as any[]).length;
-    const sectionIndex = (outline?.sections as any[]).findIndex((s: any) => s.id === section_id) + 1;
+    const totalSections = (outline?.sections as any[])?.length ?? 0;
+    const sectionIndex = ((outline?.sections as any[])?.findIndex((s: any) => s.id === section_id) ?? -1) + 1;
     const atomicForSection: string[] = (section as any).atomic_questions || [];
     const requiredEntities: string[] = (section as any).required_entities || [];
     const requiredCitations: string[] = (section as any).required_citations || [];
     const sectionSchemas: string[] = (section as any).schema_markup_types || [];
-    const suggestedAuthorities = ((brief as any)?.ai_citation_landscape as any)?.suggested_authority_sources || [];
+    const suggestedAuthorities = ((brief?.aiCitationLandscape) as any)?.suggested_authority_sources || [];
     const whitelist = buildCitationWhitelist({ proofs, brief, project });
     const whitelistBlock = whitelist.sources.length
       ? whitelist.sources.slice(0, 25).map((s) => `- ${s.label}: ${s.url}`).join("\n")
       : "(no verified sources for this project — do not invent any citations)";
 
     const projectContext = `=== PROJECT CONTEXT (shared across all sections) ===
-Content type: ${(project as any).content_type}
-Title (H1): ${(outline as any)?.h1}
+Content type: ${project.contentType}
+Title (H1): ${outline?.h1}
 Total sections: ${totalSections}
-Company domain: ${(project as any).company_domain}
+Company domain: ${project.companyDomain}
 
-Synergy angle (${(project as any).company_domain}'s ownable POV):
-${((brief as any)?.synergy_map as any)?.ownable_angle || "n/a"}
+Synergy angle (${project.companyDomain}'s ownable POV):
+${((brief?.synergyMap) as any)?.ownable_angle || "n/a"}
 
-Tone reminder: ${(outline as any)?.tone_reminder}
-CTA guidance: ${(outline as any)?.cta_placement}
-Conversion belief required: ${((brief as any)?.conversion_signals as any)?.required_belief || ""}
+Tone reminder: ${outline?.toneReminder}
+CTA guidance: ${outline?.ctaPlacement}
+Conversion belief required: ${((brief?.conversionSignals) as any)?.required_belief || ""}
 
 Starred proof points (weave EVERY relevant one in with inline citation):
-${JSON.stringify(proofs || [], null, 2)}
+${JSON.stringify(proofs, null, 2)}
 
 Suggested authority publishers (use when relevant):
 ${suggestedAuthorities.slice(0, 8).map((s: any) => `- ${s.publisher} (${s.url_or_topic || ""})`).join("\n")}
@@ -448,7 +468,7 @@ CITATION RULES — non-negotiable:
 Banned phrases (do not use): "in today's fast-paced world", "in conclusion", "leverage", "synergy", "delve", "navigate the landscape", "game-changer", "unlock the power".
 === END PROJECT CONTEXT ===`;
 
-    const projectCacheTag = `project:${project_id}|outline:${(outline as any)?.updated_at || ""}|brief:${(brief as any)?.updated_at || ""}|proofs:${(proofs || []).length}`;
+    const projectCacheTag = `project:${project_id}|outline:${outline?.updatedAt || ""}|brief:${brief?.updatedAt || ""}|proofs:${proofs.length}`;
 
     const stageInstructions = revision_instruction
       ? `You are revising Section ${sectionIndex} of ${totalSections} ("${section.heading}").
@@ -460,7 +480,7 @@ ${revision_instruction}
 
 Current draft:
 """
-${(existing as any)?.content || ""}
+${existing?.content || ""}
 """
 
 REVISION RULES:
@@ -499,7 +519,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
 
     const userMessage = revision_instruction ? "Revise per the instruction above. Call submit_draft." : "Draft this section now. Call submit_draft.";
     const draftSubstage = revision_instruction ? `revise_section_${sectionIndex}` : `draft_section_${sectionIndex}`;
-    const metadataUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "stage3", substage: draftSubstage, writer_id: (project as any).writer_id });
+    const metadataUserId = buildAnthropicUserId({ pod: project.pod, stage: "stage3", substage: draftSubstage, writer_id: project.writerId });
 
     const { system, included } = await buildRoutedSystemWithProject("draft", projectContext, projectCacheTag, stageInstructions);
     req.log.info({ sections: included, cacheTag: projectCacheTag }, "draft-section: routed playbook sections");
@@ -525,8 +545,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
     out.content = enforced.text;
     const realCitationCount = countInlineCitations(out.content || "");
 
-    // Review pass (Haiku critic) — best-effort
-    const reviewMetaUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "stage3", substage: `review_section_${sectionIndex}`, writer_id: (project as any).writer_id });
+    const reviewMetaUserId = buildAnthropicUserId({ pod: project.pod, stage: "stage3", substage: `review_section_${sectionIndex}`, writer_id: project.writerId });
     const reviewSystem = `You are a strict editorial critic. Read the draft section and score it. Return:\n- review_questions: exactly 3 (one factual, one detail, one structural)\n- voice_flags: phrases that sound generic or off-brand, with alternatives\n- voice_match_score: 0-100\n- entity_density_score: 0-100 (% of required_entities actually present)\n- ai_citation_readiness_score: 0-100 composite\n- ai_citation_flags: gaps in entities, citations, atomic chunks, or schema`;
     const reviewUser = `Section: "${section.heading}"\n\nRequired entities (check inclusion):\n${requiredEntities.length ? requiredEntities.map((e) => `- ${e}`).join("\n") : "(none)"}\n\nRequired citations:\n${requiredCitations.length ? requiredCitations.map((c) => `- ${c}`).join("\n") : "(none)"}\n\nAtomic questions the section is supposed to answer:\n${atomicForSection.length ? atomicForSection.map((q, i) => `${i + 1}. ${q}`).join("\n") : "(none)"}\n\n=== DRAFT ===\n${out.content}\n=== END DRAFT ===\n\nCall submit_review.`;
 
@@ -541,31 +560,55 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
       req.log.warn({ err: e }, "draft-section: review pass failed (non-fatal)");
     }
 
-    await supabase.from("drafts").upsert(
-      {
-        project_id,
-        section_id,
-        section_heading: section.heading,
+    await db
+      .insert(draftsTable)
+      .values({
+        projectId: project_id,
+        brandId: project.brandId,
+        sectionId: section_id,
+        sectionHeading: section.heading,
         content: out.content,
-        review_questions: review?.review_questions || [],
-        voice_flags: review?.voice_flags || [],
-        voice_match_score: review?.voice_match_score ?? 75,
-        citation_count: realCitationCount,
-        atomic_chunks_count: out.atomic_chunks_count ?? 0,
-        entity_density_score: review?.entity_density_score ?? null,
-        ai_citation_readiness_score: review?.ai_citation_readiness_score ?? null,
-        schema_markup_recommendations: out.schema_markup_recommendations || [],
-        revision_count: existing ? ((existing as any).revision_count || 0) + 1 : 0,
-        approved: (existing as any)?.approved ?? false,
-      },
-      { onConflict: "project_id,section_id" } as any,
-    );
+        reviewQuestions: review?.review_questions || [],
+        voiceFlags: review?.voice_flags || [],
+        voiceMatchScore: String(review?.voice_match_score ?? 75),
+        citationCount: realCitationCount,
+        atomicChunksCount: out.atomic_chunks_count ?? 0,
+        entityDensityScore: review?.entity_density_score != null ? String(review.entity_density_score) : null,
+        aiCitationReadinessScore: review?.ai_citation_readiness_score != null ? String(review.ai_citation_readiness_score) : null,
+        schemaMarkupRecommendations: out.schema_markup_recommendations || [],
+        revisionCount: existing ? (existing.revisionCount || 0) + 1 : 0,
+        approved: existing?.approved ?? false,
+      })
+      .onConflictDoUpdate({
+        target: [draftsTable.projectId, draftsTable.sectionId],
+        set: {
+          sectionHeading: section.heading,
+          content: out.content,
+          reviewQuestions: review?.review_questions || [],
+          voiceFlags: review?.voice_flags || [],
+          voiceMatchScore: String(review?.voice_match_score ?? 75),
+          citationCount: realCitationCount,
+          atomicChunksCount: out.atomic_chunks_count ?? 0,
+          entityDensityScore: review?.entity_density_score != null ? String(review.entity_density_score) : null,
+          aiCitationReadinessScore: review?.ai_citation_readiness_score != null ? String(review.ai_citation_readiness_score) : null,
+          schemaMarkupRecommendations: out.schema_markup_recommendations || [],
+          revisionCount: existing ? (existing.revisionCount || 0) + 1 : 0,
+          updatedAt: new Date(),
+        },
+      });
 
-    if (revision_instruction && (existing as any)?.content) {
-      await supabase.from("voice_library").insert({ project_id, original_ai_text: (existing as any).content, edited_human_text: out.content, edit_type: "revision" });
+    if (revision_instruction && existing?.content) {
+      await db.insert(voiceLibraryTable).values({
+        projectId: project_id,
+        brandId: project.brandId,
+        writerId: project.writerId,
+        originalAiText: existing.content,
+        editedHumanText: out.content,
+        editType: "revision",
+      });
     }
 
-    await supabase.from("projects").update({ current_stage: 3, status: "drafting" } as any).eq("id", project_id);
+    await db.update(projectsTable).set({ currentStage: 3, status: "drafting" }).where(eq(projectsTable.id, project_id));
 
     res.json({ ok: true, draft: { ...out, ...(review || {}) } });
   } catch (e) {
@@ -576,7 +619,6 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
 
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/interview-step
- * Plain-text response; no tool. Frontend parses REACTION / NEXT_QUESTION.
  * ───────────────────────────────────────────────────────────── */
 router.post("/interview-step", requireAuth, async (req, res) => {
   try {
@@ -585,25 +627,27 @@ router.post("/interview-step", requireAuth, async (req, res) => {
     };
     if (!project_id || !section_id) { res.status(400).json({ error: "project_id and section_id required" }); return; }
 
-    const supabase = getSupabaseAdmin();
-    const [{ data: project }, { data: outline }, { data: prior }] = await Promise.all([
-      supabase.from("projects").select("*").eq("id", project_id).single(),
-      supabase.from("outlines").select("sections, h1").eq("project_id", project_id).single(),
-      supabase.from("interview_answers").select("*").eq("project_id", project_id).order("created_at"),
+    const [projectRows, outlineRows, priorRows] = await Promise.all([
+      db.select().from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
+      db.select({ sections: outlinesTable.sections, h1: outlinesTable.h1 }).from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
+      db.select().from(interviewAnswersTable).where(eq(interviewAnswersTable.projectId, project_id)).orderBy(interviewAnswersTable.createdAt),
     ]);
+    const project = projectRows[0];
+    const outline = outlineRows[0];
+    const prior = priorRows;
     if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
     const section = (outline?.sections as any[])?.find((s: any) => s.id === section_id);
 
-    const interviewInstructions = `You are interviewing the writer to extract their voice and POV for the section "${section?.heading}" (job: ${section?.job}) of "${(outline as any)?.h1}". Ask ONE question at a time. Reactive, conversational. Build on prior answers. Use playbook ICP/voice context to ask sharper questions.`;
+    const interviewInstructions = `You are interviewing the writer to extract their voice and POV for the section "${section?.heading}" (job: ${section?.job}) of "${outline?.h1}". Ask ONE question at a time. Reactive, conversational. Build on prior answers. Use playbook ICP/voice context to ask sharper questions.`;
     const { system: routedSystem, included } = await buildRoutedSystem("interview", interviewInstructions);
     req.log.info({ sections: included }, "interview-step: routed playbook sections");
 
     const metadataUserId = buildAnthropicUserId({
-      pod: (project as any).pod,
+      pod: project.pod,
       stage: "stage3",
       substage: `interview_${section_id}`,
-      writer_id: (project as any).writer_id,
+      writer_id: project.writerId,
     });
 
     const t0 = Date.now();
@@ -618,7 +662,7 @@ router.post("/interview-step", requireAuth, async (req, res) => {
         messages: [
           {
             role: "user",
-            content: `Prior Q&A:\n${(prior || []).map((p: any) => `Q: ${p.question}\nA: ${p.answer}`).join("\n\n")}\n\nLast answer from writer: ${last_answer || "(none yet — ask the first question)"}\n\nReact briefly (1 sentence) to the last answer, then ask the next question. Return only:\nREACTION: ...\nNEXT_QUESTION: ...`,
+            content: `Prior Q&A:\n${prior.map((p) => `Q: ${p.question}\nA: ${p.answer}`).join("\n\n")}\n\nLast answer from writer: ${last_answer || "(none yet — ask the first question)"}\n\nReact briefly (1 sentence) to the last answer, then ask the next question. Return only:\nREACTION: ...\nNEXT_QUESTION: ...`,
           },
         ],
       }),
@@ -648,8 +692,6 @@ router.post("/interview-step", requireAuth, async (req, res) => {
 
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/final-stitch
- * Pure aggregation — no Anthropic call. GoWinston AI detection is best-effort.
- * GoWinston key is stored in WINSTON_API_KEY (renamed from legacy ORIGINALITY_API_KEY).
  * ───────────────────────────────────────────────────────────── */
 const BANNED_PHRASES = [
   "in today's fast-paced world", "in conclusion", "leverage", "synergy",
@@ -661,46 +703,50 @@ router.post("/final-stitch", requireAuth, async (req, res) => {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
-    const supabase = getSupabaseAdmin();
-    const [{ data: outline }, { data: drafts }, { data: brief }] = await Promise.all([
-      supabase.from("outlines").select("*").eq("project_id", project_id).single(),
-      supabase.from("drafts").select("*").eq("project_id", project_id),
-      supabase.from("research_briefs").select("atomic_question_map, entity_data_requirements, ai_citation_landscape").eq("project_id", project_id).maybeSingle(),
+    const [projectRows, outlineRows, draftRows, briefRows] = await Promise.all([
+      db.select({ id: projectsTable.id, brandId: projectsTable.brandId }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
+      db.select().from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
+      db.select().from(draftsTable).where(eq(draftsTable.projectId, project_id)),
+      db.select({ atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, aiCitationLandscape: researchBriefsTable.aiCitationLandscape }).from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
     ]);
+    const project = projectRows[0];
+    const outline = outlineRows[0];
+    const drafts = draftRows;
+    const brief = briefRows[0];
     if (!outline) { res.status(500).json({ error: "outline not found" }); return; }
 
     const sectionsOrder = (outline.sections as any[]).map((s: any) => s.id);
     const ordered = sectionsOrder
-      .map((id: string) => drafts?.find((d: any) => d.section_id === id))
-      .filter(Boolean) as any[];
+      .map((id: string) => drafts.find((d) => d.sectionId === id))
+      .filter(Boolean) as typeof drafts;
 
     let stitched = `# ${(outline as any).h1}\n\n`;
-    for (const d of ordered) stitched += `## ${d.section_heading}\n\n${d.content}\n\n`;
+    for (const d of ordered) stitched += `## ${d.sectionHeading}\n\n${d.content}\n\n`;
 
     const word_count = stitched.split(/\s+/).filter(Boolean).length;
     const lower = stitched.toLowerCase();
     const banned_phrase_count = BANNED_PHRASES.reduce((n, p) => n + (lower.split(p).length - 1), 0);
-    const withCites = ordered.filter((d) => (d.citation_count || 0) > 0).length;
+    const withCites = ordered.filter((d) => (d.citationCount || 0) > 0).length;
     const citation_completeness = ordered.length ? Math.round((withCites / ordered.length) * 100) : 0;
     const voice_match_score = ordered.length
-      ? Math.round(ordered.reduce((s, d) => s + (Number(d.voice_match_score) || 0), 0) / ordered.length)
+      ? Math.round(ordered.reduce((s, d) => s + (Number(d.voiceMatchScore) || 0), 0) / ordered.length)
       : 0;
     const ai_citation_readiness_score = ordered.length
-      ? Math.round(ordered.reduce((s, d) => s + (Number(d.ai_citation_readiness_score) || 0), 0) / ordered.length)
+      ? Math.round(ordered.reduce((s, d) => s + (Number(d.aiCitationReadinessScore) || 0), 0) / ordered.length)
       : 0;
-    const atomic_chunks_count = ordered.reduce((n, d) => n + (Number(d.atomic_chunks_count) || 0), 0);
-    const atomic_questions_count = Array.isArray(brief?.atomic_question_map)
-      ? (brief!.atomic_question_map as any[]).filter((q: any) => q.liftable_paragraph).length
+    const atomic_chunks_count = ordered.reduce((n, d) => n + (Number(d.atomicChunksCount) || 0), 0);
+    const atomic_questions_count = Array.isArray(brief?.atomicQuestionMap)
+      ? (brief!.atomicQuestionMap as any[]).filter((q: any) => q.liftable_paragraph).length
       : 0;
 
     const schemaSet = new Map<string, any>();
     for (const d of ordered) {
-      for (const r of ((d.schema_markup_recommendations as any[]) || [])) {
+      for (const r of ((d.schemaMarkupRecommendations as any[]) || [])) {
         if (r?.type && r?.jsonld && !schemaSet.has(r.type)) schemaSet.set(r.type, r.jsonld);
       }
     }
     if (!schemaSet.has("Article") && !schemaSet.has("BlogPosting")) {
-      schemaSet.set("BlogPosting", { "@context": "https://schema.org", "@type": "BlogPosting", headline: (outline as any).h1 || "", description: (outline as any).meta_description || "", wordCount: word_count });
+      schemaSet.set("BlogPosting", { "@context": "https://schema.org", "@type": "BlogPosting", headline: (outline as any).h1 || "", description: (outline as any).metaDescription || "", wordCount: word_count });
     }
     const schema_markup_recommendations = Array.from(schemaSet.entries()).map(([type, jsonld]) => ({ type, jsonld }));
 
@@ -724,11 +770,40 @@ router.post("/final-stitch", requireAuth, async (req, res) => {
       }
     }
 
-    await supabase.from("draft_scores").upsert(
-      { project_id, voice_match_score, originality_score, banned_phrase_count, word_count, citation_completeness, final_draft: stitched, ai_citation_readiness_score, atomic_chunks_count, atomic_questions_count, schema_markup_recommendations },
-      { onConflict: "project_id" } as any,
-    );
-    await supabase.from("projects").update({ current_stage: 4, status: "review" } as any).eq("id", project_id);
+    await db
+      .insert(draftScoresTable)
+      .values({
+        projectId: project_id,
+        brandId: project?.brandId,
+        finalDraft: stitched,
+        voiceMatchScore: String(voice_match_score),
+        originalityScore: originality_score != null ? String(originality_score) : null,
+        bannedPhraseCount: banned_phrase_count,
+        wordCount: word_count,
+        citationCompleteness: String(citation_completeness),
+        aiCitationReadinessScore: String(ai_citation_readiness_score),
+        atomicChunksCount: atomic_chunks_count,
+        atomicQuestionsCount: atomic_questions_count,
+        schemaMarkupRecommendations: schema_markup_recommendations,
+      })
+      .onConflictDoUpdate({
+        target: draftScoresTable.projectId,
+        set: {
+          finalDraft: stitched,
+          voiceMatchScore: String(voice_match_score),
+          originalityScore: originality_score != null ? String(originality_score) : null,
+          bannedPhraseCount: banned_phrase_count,
+          wordCount: word_count,
+          citationCompleteness: String(citation_completeness),
+          aiCitationReadinessScore: String(ai_citation_readiness_score),
+          atomicChunksCount: atomic_chunks_count,
+          atomicQuestionsCount: atomic_questions_count,
+          schemaMarkupRecommendations: schema_markup_recommendations,
+          updatedAt: new Date(),
+        },
+      });
+
+    await db.update(projectsTable).set({ currentStage: 4, status: "review" }).where(eq(projectsTable.id, project_id));
 
     res.json({ ok: true, word_count, voice_match_score, originality_score, banned_phrase_count, citation_completeness, ai_citation_readiness_score, atomic_chunks_count, atomic_questions_count, schema_markup_recommendations });
   } catch (e) {
@@ -739,8 +814,6 @@ router.post("/final-stitch", requireAuth, async (req, res) => {
 
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/playbook-upload   (admin-only)
- * Body: { filename, mime_type, content_base64, uploaded_by? }
- * Supports .md / .txt / .pdf / .docx
  * ───────────────────────────────────────────────────────────── */
 router.post("/playbook-upload", requireAdmin, async (req, res) => {
   try {
@@ -773,30 +846,34 @@ router.post("/playbook-upload", requireAdmin, async (req, res) => {
     markdown = (markdown || "").trim();
     if (!markdown) { res.status(400).json({ error: "Extracted playbook is empty." }); return; }
 
-    const supabase = getSupabaseAdmin();
-    const { data: latest } = await supabase.from("playbook").select("version").order("version", { ascending: false }).limit(1).maybeSingle();
-    const nextVersion = ((latest as any)?.version ?? 0) + 1;
+    const latestRows = await db.select({ version: playbookTable.version }).from(playbookTable).orderBy(desc(playbookTable.version)).limit(1);
+    const nextVersion = (latestRows[0]?.version ?? 0) + 1;
 
-    const { data, error } = await supabase.from("playbook").insert({ content_markdown: markdown, version: nextVersion, source_filename: filename, uploaded_by: uploaded_by || null }).select().single();
-    if (error) throw error;
+    const [playbookRow] = await db
+      .insert(playbookTable)
+      .values({ contentMarkdown: markdown, version: nextVersion, sourceFilename: filename, uploadedBy: uploaded_by || null })
+      .returning();
 
     const sections = parsePlaybookSections(markdown);
     if (sections.length > 0) {
       const rows = sections.map((s) => ({
         version: nextVersion,
-        section_number: s.section_number,
-        section_title: s.section_title,
-        section_content: s.section_content,
-        section_token_estimate: s.section_token_estimate,
-        always_include: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
+        sectionNumber: s.section_number,
+        sectionTitle: s.section_title,
+        sectionContent: s.section_content,
+        sectionTokenEstimate: s.section_token_estimate,
+        alwaysInclude: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
       }));
-      const { error: secErr } = await supabase.from("playbook_sections").insert(rows);
-      if (secErr) req.log.warn({ err: secErr }, "playbook-upload: section insert error (non-fatal)");
+      try {
+        await db.insert(playbookSectionsTable).values(rows);
+      } catch (e) {
+        req.log.warn({ err: e }, "playbook-upload: section insert error (non-fatal)");
+      }
     } else {
       req.log.warn("playbook-upload: no sections detected — routing will fall back to full doc");
     }
 
-    res.json({ ok: true, playbook: data, sections_count: sections.length });
+    res.json({ ok: true, playbook: playbookRow, sections_count: sections.length });
   } catch (e) {
     req.log.error({ err: e }, "playbook-upload route error");
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
@@ -805,16 +882,19 @@ router.post("/playbook-upload", requireAdmin, async (req, res) => {
 
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/playbook-reparse   (admin-only)
- * Body: {} — re-parses the latest uploaded playbook version.
  * ───────────────────────────────────────────────────────────── */
 router.post("/playbook-reparse", requireAdmin, async (req, res) => {
   try {
-    const supabase = getSupabaseAdmin();
-    const { data: latest } = await supabase.from("playbook").select("version, content_markdown").order("version", { ascending: false }).limit(1).maybeSingle();
+    const latestRows = await db
+      .select({ version: playbookTable.version, contentMarkdown: playbookTable.contentMarkdown })
+      .from(playbookTable)
+      .orderBy(desc(playbookTable.version))
+      .limit(1);
+    const latest = latestRows[0];
     if (!latest) { res.status(404).json({ error: "no playbook uploaded yet" }); return; }
 
-    const version = (latest as any).version as number;
-    const markdown = ((latest as any).content_markdown as string) || "";
+    const version = latest.version;
+    const markdown = latest.contentMarkdown || "";
     const sections = parsePlaybookSections(markdown);
 
     if (sections.length === 0) {
@@ -822,17 +902,16 @@ router.post("/playbook-reparse", requireAdmin, async (req, res) => {
       return;
     }
 
-    await supabase.from("playbook_sections").delete().eq("version", version);
+    await db.delete(playbookSectionsTable).where(eq(playbookSectionsTable.version, version));
     const rows = sections.map((s) => ({
       version,
-      section_number: s.section_number,
-      section_title: s.section_title,
-      section_content: s.section_content,
-      section_token_estimate: s.section_token_estimate,
-      always_include: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
+      sectionNumber: s.section_number,
+      sectionTitle: s.section_title,
+      sectionContent: s.section_content,
+      sectionTokenEstimate: s.section_token_estimate,
+      alwaysInclude: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
     }));
-    const { error } = await supabase.from("playbook_sections").insert(rows);
-    if (error) throw error;
+    await db.insert(playbookSectionsTable).values(rows);
 
     res.json({ ok: true, version, sections_count: sections.length, sections: sections.map((s) => ({ n: s.section_number, title: s.section_title, tokens: s.section_token_estimate })) });
   } catch (e) {

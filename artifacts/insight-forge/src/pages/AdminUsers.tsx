@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Shield, ShieldOff, Loader2, Users, Save, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Navigate } from "react-router-dom";
@@ -36,32 +35,18 @@ export default function AdminUsers() {
 
   const load = async () => {
     setLoading(true);
-    const [{ data: u, error }, { data: bs }] = await Promise.all([
-      supabase.rpc("list_app_users_v2"),
-      supabase.from("brands").select("*").order("name"),
+    const [usersResp, brandsResp] = await Promise.all([
+      fetch("/api/admin/users", { credentials: "include" }),
+      fetch("/api/brands", { credentials: "include" }),
     ]);
-    if (error) {
-      // Fall back to legacy v1 if v2 isn't applied yet (e.g. preview not migrated).
-      const { data: legacy, error: e2 } = await supabase.rpc("list_app_users");
-      if (e2) {
-        setAuthorized(false);
-      } else {
-        setUsers(
-          (legacy || []).map((r) => ({
-            ...r,
-            role: (r.is_admin ? "admin" : "writer") as RoleEnum,
-            pod: null as PodEnum | null,
-            brand_access: [] as string[],
-          })),
-        );
-        setBrands((bs as Brand[]) || []);
-        setAuthorized(true);
-      }
-    } else {
-      setUsers((u as AppUser[]) || []);
-      setBrands((bs as Brand[]) || []);
-      setAuthorized(true);
+    if (usersResp.status === 403) {
+      setAuthorized(false);
+      setLoading(false);
+      return;
     }
+    setUsers(usersResp.ok ? await usersResp.json() : []);
+    setBrands(brandsResp.ok ? await brandsResp.json() : []);
+    setAuthorized(usersResp.ok);
     setLoading(false);
   };
 
@@ -110,26 +95,15 @@ export default function AdminUsers() {
         return;
       }
 
-      const { error } = await supabase
-        .from("user_profiles")
-        .upsert(
-          {
-            user_id: u.user_id,
-            role: draft.role,
-            pod: draft.pod || null,
-            brand_access: draft.brand_access,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id" },
-        );
-      if (error) throw error;
-
-      // Mirror admin role into legacy user_roles so existing checks
-      // (AppShell, list_app_users) keep working.
-      if (draft.role === "admin" && !u.is_admin) {
-        await supabase.from("user_roles").insert({ user_id: u.user_id, role: "admin" });
-      } else if (draft.role !== "admin" && u.is_admin) {
-        await supabase.from("user_roles").delete().eq("user_id", u.user_id).eq("role", "admin");
+      const resp = await fetch(`/api/admin/users/${u.user_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ role: draft.role, pod: draft.pod || null, brand_access: draft.brand_access }),
+      });
+      if (!resp.ok) {
+        const j = (await resp.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${resp.status}`);
       }
 
       toast.success(`Updated ${u.email}`);

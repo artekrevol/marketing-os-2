@@ -2,28 +2,20 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { ShieldCheck, Building2, ChevronDown, LogOut, LayoutDashboard } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/lib/supabase";
+import { useUser, useClerk } from "@clerk/react";
 import { BrandProvider, useActiveBrand } from "@/lib/brands";
 
 type AuthState = "loading" | "in" | "out" | "blocked" | "writer";
 
 /**
- * Roles allowed to enter SEO OS. Sprint 3 locked scope: only writers
- * are blocked. Admin / lead / reviewer / outreach all need access —
- * leads triage queue health, reviewers decide, outreach uses the
- * approved-content list downstream. The /decide endpoint still gates
- * the actual approve/reject mutation to admin or reviewer roles
- * server-side, so giving leads/outreach read access here is safe.
+ * Roles allowed to enter SEO OS. Writers are redirected back to ContentForge.
+ * Admin gate on mutations (approve/reject) is enforced server-side.
  */
 const SEO_OS_ROLES = new Set(["admin", "lead", "reviewer", "outreach"]);
 
-/**
- * Auth shell. Mirrors the ContentForge auth-lock pattern: never await
- * inside onAuthStateChange — defer DB lookups with setTimeout(..., 0)
- * so the Supabase NavigatorLock does not deadlock during PKCE token
- * refresh.
- */
 export default function AppShell({ children }: { children: ReactNode }) {
+  const { user, isLoaded, isSignedIn } = useUser();
+  const { signOut: clerkSignOut } = useClerk();
   const [authState, setAuthState] = useState<AuthState>("loading");
   const [email, setEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -31,86 +23,39 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [loc, setLoc] = useLocation();
 
   useEffect(() => {
-    let cancelled = false;
-
-    const handleSession = (session: { user?: { id: string; email?: string } } | null) => {
-      if (cancelled) return;
-      if (!session) {
-        setEmail(null);
-        setUserId(null);
-        setIsAdmin(false);
-        setAuthState("out");
-        return;
-      }
-      const e = (session.user?.email || "").toLowerCase();
-      setEmail(e);
-      setUserId(session.user!.id);
-
-      // SEO OS is reviewer-or-admin only. We must not flip the user
-      // "in" before the role lookup resolves — that would briefly
-      // expose the review surface to writers.
-      setTimeout(async () => {
-        if (cancelled) return;
-        try {
-          const [{ data: roles }, { data: profile }] = await Promise.all([
-            supabase.from("user_roles").select("role").eq("user_id", session.user!.id),
-            supabase
-              .from("user_profiles")
-              .select("brand_access,role")
-              .eq("user_id", session.user!.id)
-              .maybeSingle(),
-          ]);
-          if (cancelled) return;
-          const profileRole = (profile as { role?: string } | null)?.role ?? null;
-          const admin =
-            !!(roles ?? []).find((r: { role: string }) => r.role === "admin") ||
-            profileRole === "admin";
-          setIsAdmin(!!admin);
-          const access: string[] =
-            ((profile as { brand_access?: string[] } | null)?.brand_access) ?? [];
-
-          if (admin || (profileRole && SEO_OS_ROLES.has(profileRole))) {
-            setAuthState("in");
-          } else if (access.length > 0 || profileRole) {
-            // User exists in the system but isn't a reviewer/admin —
-            // surface the writer-facing message instead of a generic
-            // "no brand access" block.
-            setAuthState("writer");
-          } else {
-            setAuthState("blocked");
-          }
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("[AppShell] role/profile lookup failed:", err);
-          if (cancelled) return;
+    if (!isLoaded) return;
+    if (!isSignedIn) {
+      setEmail(null);
+      setUserId(null);
+      setIsAdmin(false);
+      setAuthState("out");
+      return;
+    }
+    const e = user.primaryEmailAddress?.emailAddress ?? null;
+    setEmail(e);
+    setUserId(user.id);
+    fetch("/api/me", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data: { isAdmin: boolean; role: string }) => {
+        const admin = data.isAdmin;
+        setIsAdmin(admin);
+        if (admin || SEO_OS_ROLES.has(data.role)) {
+          setAuthState("in");
+        } else if (data.role === "writer") {
+          setAuthState("writer");
+        } else {
           setAuthState("blocked");
         }
-      }, 0);
-    };
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) =>
-      handleSession(session as never),
-    );
-    supabase.auth.getSession().then(({ data }) => handleSession(data.session as never));
-
-    const safety = setTimeout(() => {
-      if (cancelled) return;
-      setAuthState((s) => (s === "loading" ? "out" : s));
-    }, 8000);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(safety);
-      sub.subscription.unsubscribe();
-    };
-  }, []);
+      })
+      .catch(() => setAuthState("blocked"));
+  }, [isLoaded, isSignedIn, user]);
 
   useEffect(() => {
     if (authState === "out" && loc !== "/auth") setLoc("/auth");
   }, [authState, loc, setLoc]);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await clerkSignOut();
     toast.success("Signed out");
     setLoc("/auth");
   };
@@ -124,7 +69,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }
 
   if (authState === "out") {
-    // Auth page renders without the chrome.
     return <>{children}</>;
   }
 
@@ -156,7 +100,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <div className="max-w-md border border-rule rounded-md bg-background p-8 text-center">
           <h1 className="font-serif text-xl mb-2">SEO OS is for reviewers</h1>
           <p className="text-sm text-ink-muted mb-1">
-            <span className="font-mono">{email}</span> isn’t a reviewer or admin.
+            <span className="font-mono">{email}</span> isn't a reviewer or admin.
           </p>
           <p className="text-sm text-ink-muted mb-6">
             Writers stay in ContentForge — submitted drafts surface there with

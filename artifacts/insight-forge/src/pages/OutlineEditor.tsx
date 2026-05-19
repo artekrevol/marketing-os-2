@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { GripVertical, Trash2, Plus, Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
 import type { Project, OutlineSection } from "@/lib/types";
@@ -17,26 +16,28 @@ export default function OutlineEditor() {
   useEffect(() => {
     let mounted = true;
     const load = async () => {
-      const { data } = await supabase.from("outlines").select("*").eq("project_id", project.id).maybeSingle();
-      if (mounted) {
-        setOutline(data);
-        setLoading(false);
-      }
+      const resp = await fetch(`/api/projects/${project.id}/outlines`, { credentials: "include" });
+      if (!mounted) return;
+      const data = resp.ok ? await resp.json() : null;
+      setOutline(data);
+      setLoading(false);
     };
     load();
-    const ch = supabase
-      .channel(`out-${project.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "outlines", filter: `project_id=eq.${project.id}` }, load)
-      .subscribe();
+    const timer = setInterval(() => { if (mounted) void load(); }, 8000);
     return () => {
       mounted = false;
-      supabase.removeChannel(ch);
+      clearInterval(timer);
     };
   }, [project.id]);
 
   const save = async (patch: any) => {
     setOutline((o: any) => ({ ...o, ...patch }));
-    await supabase.from("outlines").update(patch).eq("project_id", project.id);
+    await fetch(`/api/projects/${project.id}/outlines`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(patch),
+    });
   };
 
   const updateSection = (id: string, patch: Partial<OutlineSection>) => {
@@ -71,8 +72,18 @@ export default function OutlineEditor() {
 
   const lockOutline = async () => {
     setLocking(true);
-    await supabase.from("outlines").update({ locked_at: new Date().toISOString() }).eq("project_id", project.id);
-    await supabase.from("projects").update({ current_stage: 3, status: "drafting" }).eq("id", project.id);
+    await fetch(`/api/projects/${project.id}/outlines`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ locked_at: new Date().toISOString() }),
+    });
+    await fetch(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ current_stage: 3, status: "drafting" }),
+    });
     emit("outline.locked", "project", project.id, { sections: outline.sections.length }, project.brand_id ?? null);
     setLocking(false);
     toast.success("Outline locked. Starting draft.");

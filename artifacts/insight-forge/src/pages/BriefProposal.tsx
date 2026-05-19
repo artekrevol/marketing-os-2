@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
   Loader2,
@@ -52,54 +51,26 @@ export default function BriefProposalPage() {
   const [contentType, setContentType] = useState<ContentType>("blog");
   const [mode, setMode] = useState<Mode>("composition");
 
-  // Subscribe to project for proposal arrival via Supabase Realtime
-  useEffect(() => {
-    const ch = supabase
-      .channel(`brief-${project.id}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "projects", filter: `id=eq.${project.id}` },
-        (payload) => {
-          const p = payload.new as Project & { brief_error?: string | null };
-          if (p.ai_proposed_brief && !proposal) {
-            setProposal(p.ai_proposed_brief as BriefProposal);
-            setLoading(false);
-            setBriefError(null);
-          }
-          if ((p as any).status === "brief_failed") {
-            setBriefError(p.brief_error || "Brief generation failed. Please retry.");
-            setLoading(false);
-          }
-        },
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(ch);
-    };
-  }, [project.id, proposal]);
 
-  // Polling fallback — fires every 5 s while loading.
-  // Covers environments where Supabase Realtime is not enabled for the
-  // projects table, so the UI never gets stuck indefinitely at 94%.
+  // Poll every 5s while waiting for the brief to arrive
   useEffect(() => {
     if (!loading || proposal || briefError) return;
-    const id = setInterval(async () => {
-      const { data } = await supabase
-        .from("projects")
-        .select("status, ai_proposed_brief, brief_error")
-        .eq("id", project.id)
-        .single();
-      if (!data) return;
-      if ((data as any).ai_proposed_brief) {
-        setProposal((data as any).ai_proposed_brief as BriefProposal);
-        setLoading(false);
-        setBriefError(null);
-      } else if ((data as any).status === "brief_failed") {
-        setBriefError((data as any).brief_error || "Brief generation failed. Please retry.");
-        setLoading(false);
-      }
+    const timer = setInterval(async () => {
+      try {
+        const resp = await fetch(`/api/projects/${project.id}`, { credentials: "include" });
+        if (!resp.ok) return;
+        const data = (await resp.json()) as { status?: string; ai_proposed_brief?: any; brief_error?: string | null };
+        if (data.ai_proposed_brief) {
+          setProposal(data.ai_proposed_brief as BriefProposal);
+          setLoading(false);
+          setBriefError(null);
+        } else if (data.status === "brief_failed") {
+          setBriefError(data.brief_error || "Brief generation failed. Please retry.");
+          setLoading(false);
+        }
+      } catch { /* ignore network errors */ }
     }, 5000);
-    return () => clearInterval(id);
+    return () => clearInterval(timer);
   }, [loading, proposal, briefError, project.id]);
 
   // Safety net: if we've been "loading" for more than 6 minutes with no proposal
@@ -121,10 +92,12 @@ export default function BriefProposalPage() {
     setBriefError(null);
     setLoading(true);
     setProgress(6);
-    await supabase
-      .from("projects")
-      .update({ status: "brief_proposing", brief_error: null } as any)
-      .eq("id", project.id);
+    await fetch(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ status: "brief_proposing" }),
+    });
     const { error } = await aiClient.proposeBrief(project.id);
     if (error) {
       setBriefError(error.message || "Failed to start proposer");
@@ -189,7 +162,8 @@ export default function BriefProposalPage() {
   const doDiscard = async () => {
     setDiscarding(true);
     try {
-      await supabase.from("projects").delete().eq("id", project.id);
+      const resp = await fetch(`/api/projects/${project.id}`, { method: "DELETE", credentials: "include" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       toast.success("Project discarded.");
       setDiscardOpen(false);
       nav("/new");
@@ -227,11 +201,13 @@ export default function BriefProposalPage() {
     if (contentType !== original.content_type) overrides.content_type = contentType;
     if (mode !== original.mode) overrides.mode = mode;
 
-    const { error: upErr } = await supabase
-      .from("projects")
-      .update({
+    const patchResp = await fetch(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
         keyword: primary.keyword,
-        keyword_cluster: keywords as any,
+        keyword_cluster: keywords,
         funnel_stage: funnel,
         icps,
         pod,
@@ -240,13 +216,13 @@ export default function BriefProposalPage() {
         content_type: contentType,
         mode,
         user_overrides: overrides,
-        brief_confirmed_at: new Date().toISOString(),
         status: "researching",
         current_stage: 1,
-      })
-      .eq("id", project.id);
-    if (upErr) {
-      toast.error(upErr.message);
+      }),
+    });
+    if (!patchResp.ok) {
+      const j = (await patchResp.json().catch(() => ({}))) as { error?: string };
+      toast.error(j.error || `HTTP ${patchResp.status}`);
       setConfirming(false);
       return;
     }

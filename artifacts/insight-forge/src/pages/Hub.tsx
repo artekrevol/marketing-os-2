@@ -1,47 +1,27 @@
-import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
+import { useUser, useClerk } from "@clerk/react";
 import { NotebookPen, ShieldCheck, LogOut, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
+import { useEffect } from "react";
 
 export default function Hub() {
   const nav = useNavigate();
-  const [authState, setAuthState] = useState<"loading" | "in" | "out">("loading");
-  const [email, setEmail] = useState<string | null>(null);
+  const { user, isLoaded } = useUser();
+  const { signOut } = useClerk();
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        setEmail((data.session.user?.email ?? "").toLowerCase());
-        setAuthState("in");
-      } else {
-        setAuthState("out");
-      }
-    });
+    if (isLoaded && !user) {
+      nav("/auth", { replace: true });
+    }
+  }, [isLoaded, user, nav]);
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
-      if (session) {
-        setEmail((session.user?.email ?? "").toLowerCase());
-        setAuthState("in");
-      } else {
-        setAuthState("out");
-      }
-    });
-
-    return () => sub.subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (authState === "out") nav("/auth", { replace: true });
-  }, [authState, nav]);
-
-  const signOut = async () => {
-    await supabase.auth.signOut();
+  const handleSignOut = async () => {
+    await signOut();
     toast.success("Signed out");
     nav("/auth", { replace: true });
   };
 
-  if (authState === "loading") {
+  if (!isLoaded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-paper text-ink-muted text-sm">
         Loading…
@@ -49,7 +29,9 @@ export default function Hub() {
     );
   }
 
-  if (authState === "out") return null;
+  if (!user) return null;
+
+  const email = user.primaryEmailAddress?.emailAddress?.toLowerCase() ?? "";
 
   return (
     <div className="min-h-screen bg-paper text-ink flex flex-col">
@@ -66,7 +48,7 @@ export default function Hub() {
         <div className="flex items-center gap-4">
           <span className="text-xs text-ink-muted font-mono hidden sm:block">{email}</span>
           <button
-            onClick={signOut}
+            onClick={handleSignOut}
             className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink transition-colors"
           >
             <LogOut className="h-3.5 w-3.5" /> Sign out

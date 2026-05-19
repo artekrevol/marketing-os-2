@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { DollarSign, Zap, Database, AlertTriangle, RefreshCw } from "lucide-react";
 
 type Summary = {
@@ -46,13 +45,10 @@ export default function AdminUsage() {
   const load = async () => {
     setLoading(true);
     const since = new Date(Date.now() - RANGES[range] * 24 * 60 * 60 * 1000).toISOString();
-    const { data: res, error } = await (supabase.rpc as any)("admin_usage_summary", { _since: since });
-    if (error) {
-      console.error(error);
-      setData(null);
-    } else {
-      setData(res as Summary);
-    }
+    const resp = await fetch(`/api/admin/usage?since=${encodeURIComponent(since)}`, {
+      credentials: "include",
+    });
+    setData(resp.ok ? await resp.json() : null);
     setLoading(false);
   };
 

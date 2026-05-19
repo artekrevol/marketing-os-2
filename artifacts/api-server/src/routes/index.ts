@@ -4,13 +4,27 @@ import adminSystemRouter from "./admin-system";
 import qualityGateRouter from "./quality-gate";
 import recoveryRouter from "./recovery";
 import aiRouter from "./ai/index.js";
+import meRouter from "./me";
+import projectsRouter from "./projects.js";
+import brandsRouter from "./brands.js";
+import eventsRouter from "./events.js";
+import auditRouter from "./audit.js";
+import adminRouter from "./admin.js";
+import voiceLibraryRouter from "./voice-library.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/admin/system", adminSystemRouter);
+router.use("/admin", adminRouter);
 router.use("/quality-gate", qualityGateRouter);
 router.use("/recovery", recoveryRouter);
 router.use("/ai", aiRouter);
+router.use("/me", meRouter);
+router.use("/projects", projectsRouter);
+router.use("/brands", brandsRouter);
+router.use("/events", eventsRouter);
+router.use("/audit", auditRouter);
+router.use("/voice-library", voiceLibraryRouter);
 
 export default router;

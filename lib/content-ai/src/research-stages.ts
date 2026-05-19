@@ -1,4 +1,5 @@
-import { getSupabaseAdmin } from "./supabase-admin.js";
+import { db, fetchedPagesTable, researchBriefsTable, proofPointsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { buildRoutedSystem } from "./playbook.js";
 import { logUsage } from "./usage.js";
 import { buildAnthropicUserId } from "./anthropic-meta.js";
@@ -32,13 +33,14 @@ function stripHtml(html: string): { title: string; text: string } {
 export async function getCachedPage(url: string): Promise<{ title: string; text: string } | null> {
   if (!url) return null;
   try {
-    const { data: row } = await getSupabaseAdmin()
-      .from("fetched_pages")
-      .select("title, content, fetched_at")
-      .eq("url", url)
-      .maybeSingle();
-    if (row && (row as any).fetched_at && Date.now() - new Date((row as any).fetched_at).getTime() < ONE_HOUR_MS) {
-      return { title: (row as any).title || "", text: (row as any).content || "" };
+    const cachedRows = await db
+      .select({ title: fetchedPagesTable.title, content: fetchedPagesTable.content, fetchedAt: fetchedPagesTable.fetchedAt })
+      .from(fetchedPagesTable)
+      .where(eq(fetchedPagesTable.url, url))
+      .limit(1);
+    const cached = cachedRows[0];
+    if (cached?.fetchedAt && Date.now() - new Date(cached.fetchedAt).getTime() < ONE_HOUR_MS) {
+      return { title: cached.title || "", text: cached.content || "" };
     }
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 15000);
@@ -56,16 +58,13 @@ export async function getCachedPage(url: string): Promise<{ title: string; text:
     }
     if (!html) return null;
     const parsed = stripHtml(html);
-    await getSupabaseAdmin().from("fetched_pages").upsert(
-      {
-        url,
-        title: parsed.title,
-        content: parsed.text,
-        byte_size: parsed.text.length,
-        fetched_at: new Date().toISOString(),
-      },
-      { onConflict: "url" } as any,
-    );
+    await db
+      .insert(fetchedPagesTable)
+      .values({ url, title: parsed.title, content: parsed.text, byteSize: parsed.text.length, fetchedAt: new Date() })
+      .onConflictDoUpdate({
+        target: fetchedPagesTable.url,
+        set: { title: parsed.title, content: parsed.text, byteSize: parsed.text.length, fetchedAt: new Date() },
+      });
     return parsed;
   } catch (e) {
     console.warn(`[cache] error for ${url}: ${e}`);
@@ -454,14 +453,17 @@ function buildStageInstructions(
  * Preserved as-is per handoff doc — replace with jsonb_set() if scaling.
  */
 async function mergeSubStatus(project_id: string, patch: Record<string, any>): Promise<void> {
-  const { data } = await getSupabaseAdmin()
-    .from("research_briefs")
-    .select("sub_status")
-    .eq("project_id", project_id)
-    .maybeSingle();
-  const current = ((data as any)?.sub_status as Record<string, any>) ?? {};
+  const rows = await db
+    .select({ subStatus: researchBriefsTable.subStatus })
+    .from(researchBriefsTable)
+    .where(eq(researchBriefsTable.projectId, project_id))
+    .limit(1);
+  const current = (rows[0]?.subStatus as Record<string, any>) ?? {};
   const next = { ...current, ...patch };
-  await getSupabaseAdmin().from("research_briefs").update({ sub_status: next }).eq("project_id", project_id);
+  await db
+    .update(researchBriefsTable)
+    .set({ subStatus: next })
+    .where(eq(researchBriefsTable.projectId, project_id));
 }
 
 export async function runStage(args: {
@@ -513,31 +515,31 @@ export async function runStage(args: {
     });
 
     const patch: any = {};
-    if (stage === "search_intent") patch.search_intent = output;
-    else if (stage === "benchmark_teardown") patch.benchmark_teardown = output;
-    else if (stage === "competitor_teardown") patch.competitor_teardown = output;
-    else if (stage === "synergy_map") patch.synergy_map = output;
-    else if (stage === "ai_citation_landscape") patch.ai_citation_landscape = output;
+    if (stage === "search_intent") patch.searchIntent = output;
+    else if (stage === "benchmark_teardown") patch.benchmarkTeardown = output;
+    else if (stage === "competitor_teardown") patch.competitorTeardown = output;
+    else if (stage === "synergy_map") patch.synergyMap = output;
+    else if (stage === "ai_citation_landscape") patch.aiCitationLandscape = output;
     else if (stage === "atomic_and_entities") {
-      patch.atomic_question_map = output.atomic_question_map || [];
-      patch.entity_data_requirements = output.entity_data_requirements || {};
+      patch.atomicQuestionMap = output.atomic_question_map || [];
+      patch.entityDataRequirements = output.entity_data_requirements || {};
     } else if (stage === "angle_and_conversion") {
-      patch.angle_inventory = output.angle_inventory || {};
-      patch.conversion_signals = output.conversion_signals || {};
-      const rows = (output.proof_points || []).map((p: any) => ({
-        project_id: project.id,
+      patch.angleInventory = output.angle_inventory || {};
+      patch.conversionSignals = output.conversion_signals || {};
+      const ppRows = (output.proof_points || []).map((p: any) => ({
+        projectId: project.id,
         claim: p.claim,
-        source_url: p.source_url || null,
-        source_publication: p.source_publication || null,
-        publication_date: p.publication_date || null,
-        verification_status: p.verification_status || "unverified",
+        sourceUrl: p.source_url || null,
+        sourcePublication: p.source_publication || null,
+        publicationDate: p.publication_date || null,
+        verificationStatus: p.verification_status || "unverified",
       }));
-      await getSupabaseAdmin().from("proof_points").delete().eq("project_id", project.id);
-      if (rows.length) await getSupabaseAdmin().from("proof_points").insert(rows);
-      patch.proof_points_status = "done";
+      await db.delete(proofPointsTable).where(eq(proofPointsTable.projectId, project.id));
+      if (ppRows.length) await db.insert(proofPointsTable).values(ppRows);
+      patch.proofPointsStatus = "done";
     }
 
-    await getSupabaseAdmin().from("research_briefs").update(patch).eq("project_id", project.id);
+    await db.update(researchBriefsTable).set(patch).where(eq(researchBriefsTable.projectId, project.id));
     await mergeSubStatus(project.id, { [stage]: { status: "done", error: null, updated_at: new Date().toISOString() } });
     return { ok: true, output };
   } catch (e) {
@@ -554,7 +556,7 @@ export async function runStage(args: {
     });
     await mergeSubStatus(project.id, { [stage]: { status: "error", error: msg.slice(0, 300), updated_at: new Date().toISOString() } });
     if (stage === "angle_and_conversion") {
-      await getSupabaseAdmin().from("research_briefs").update({ proof_points_status: "error" }).eq("project_id", project.id);
+      await db.update(researchBriefsTable).set({ proofPointsStatus: "error" }).where(eq(researchBriefsTable.projectId, project.id));
     }
     return { ok: false, error: msg };
   }

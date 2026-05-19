@@ -1,6 +1,5 @@
 import { Outlet, useParams, Navigate } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useEffect, useState, useCallback } from "react";
 import StageNav from "@/components/StageNav";
 import type { Project } from "@/lib/types";
 
@@ -9,28 +8,22 @@ export default function ProjectLayout() {
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const load = useCallback(async () => {
+    if (!id) return;
+    const resp = await fetch(`/api/projects/${id}`, { credentials: "include" });
+    if (!resp.ok) { setLoading(false); return; }
+    const data = (await resp.json()) as Project;
+    setProject(data);
+    setLoading(false);
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
     let mounted = true;
-    const load = async () => {
-      const { data } = await supabase.from("projects").select("*").eq("id", id).single();
-      if (mounted) {
-        setProject((data as any) || null);
-        setLoading(false);
-      }
-    };
-    load();
-    const ch = supabase
-      .channel(`p-${id}`)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "projects", filter: `id=eq.${id}` }, (p) => {
-        setProject(p.new as any);
-      })
-      .subscribe();
-    return () => {
-      mounted = false;
-      supabase.removeChannel(ch);
-    };
-  }, [id]);
+    void load();
+    const timer = setInterval(() => { if (mounted) void load(); }, 10000);
+    return () => { mounted = false; clearInterval(timer); };
+  }, [id, load]);
 
   if (loading) return <div className="p-12 text-ink-muted">Loading project…</div>;
   if (!project) return <Navigate to="/" replace />;
@@ -45,7 +38,7 @@ export default function ProjectLayout() {
       </header>
       <StageNav projectId={project.id} current={project.current_stage} />
       <div className="flex-1 min-h-0">
-        <Outlet context={{ project }} />
+        <Outlet context={{ project, refresh: load }} />
       </div>
     </div>
   );
