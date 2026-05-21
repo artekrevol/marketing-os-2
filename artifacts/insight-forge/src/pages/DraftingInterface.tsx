@@ -978,7 +978,15 @@ export default function DraftingInterface() {
             // contain `null` items or items missing `phrase`. We must
             // normalize each entry to a known shape BEFORE any predicate
             // touches `.phrase`, or filtering crashes on bad legacy data.
-            const rawAll = Array.isArray(activeDraft?.voice_flags) ? (activeDraft?.voice_flags as unknown[]) : [];
+            // Recovery for legacy LLM-double-encoded rows (#26): if the
+            // stored value is a JSON-string, try one parse pass before
+            // giving up — older drafts persisted before the server-side
+            // recovery shipped have flags trapped inside a string.
+            let rawValue: unknown = activeDraft?.voice_flags;
+            if (typeof rawValue === "string") {
+              try { rawValue = JSON.parse(rawValue); } catch { rawValue = []; }
+            }
+            const rawAll = Array.isArray(rawValue) ? (rawValue as unknown[]) : [];
             const all = rawAll
               .map((f) => {
                 const item = (f ?? {}) as Record<string, unknown>;

@@ -369,7 +369,19 @@ const REVIEW_TOOL = {
 // characters, and clamp lengths so the renderer never sees escaped-JSON
 // soup leaking into the right-rail voice-flags panel.
 function sanitizeVoiceFlags(raw: unknown): Array<{ phrase: string; reason: string; alternative?: string }> {
-  if (!Array.isArray(raw)) return [];
+  // Recovery for the LLM-double-encode case: occasionally Anthropic returns
+  // the voice_flags value as a JSON-stringified string instead of a real
+  // array. Try one JSON.parse pass before falling back. If parsing yields
+  // a non-array (or throws), behave as before and return [].
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
   const clean = (s: unknown, max: number): string => {
     if (typeof s !== "string") return "";
     // (1) Decode common escaped literals — when the LLM double-encodes a
@@ -388,7 +400,7 @@ function sanitizeVoiceFlags(raw: unknown): Array<{ phrase: string; reason: strin
       .slice(0, max);
   };
   const out: Array<{ phrase: string; reason: string; alternative?: string }> = [];
-  for (const item of raw) {
+  for (const item of value) {
     if (!item || typeof item !== "object") continue;
     const phrase = clean((item as any).phrase, 80);
     const reason = clean((item as any).reason, 280);
