@@ -367,7 +367,10 @@ const STAGE_MODEL: Record<StageKey, string> = {
   atomic_and_entities: HAIKU,
   benchmark_teardown: HAIKU,
   competitor_teardown: HAIKU,
-  synergy_map: SONNET,
+  // synergy_map: moved Sonnet → Haiku. The task is summarising the
+  // pre-fetched company homepage, not deep reasoning. Cuts ~49s → ~10s
+  // on the critical path with negligible quality loss.
+  synergy_map: HAIKU,
   ai_citation_landscape: SONNET,
   angle_and_conversion: SONNET,
 };
