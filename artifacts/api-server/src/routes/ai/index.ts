@@ -330,9 +330,16 @@ const REVIEW_TOOL = {
       },
       voice_flags: {
         type: "array",
+        maxItems: 20,
         items: {
           type: "object",
-          properties: { phrase: { type: "string" }, reason: { type: "string" }, alternative: { type: "string" } },
+          additionalProperties: false,
+          properties: {
+            phrase: { type: "string", minLength: 1, maxLength: 80 },
+            reason: { type: "string", minLength: 1, maxLength: 280 },
+            alternative: { type: "string", maxLength: 80 },
+          },
+          required: ["phrase", "reason"],
         },
       },
       voice_match_score: { type: "number" },
@@ -353,6 +360,45 @@ const REVIEW_TOOL = {
     required: ["review_questions"],
   },
 };
+
+// Sprint 1 #6 (hotfix): defense-in-depth sanitization for `voice_flags`
+// before persistence. The REVIEW_TOOL schema constrains shape upstream,
+// but Anthropic occasionally returns extra keys or non-string values
+// (and historical drafts predate the schema constraint). We drop any
+// item missing a usable phrase+reason, coerce to strings, strip control
+// characters, and clamp lengths so the renderer never sees escaped-JSON
+// soup leaking into the right-rail voice-flags panel.
+function sanitizeVoiceFlags(raw: unknown): Array<{ phrase: string; reason: string; alternative?: string }> {
+  if (!Array.isArray(raw)) return [];
+  const clean = (s: unknown, max: number): string => {
+    if (typeof s !== "string") return "";
+    // (1) Decode common escaped literals — when the LLM double-encodes a
+    //     JSON-stringified value into a string field we get the literal
+    //     two-character sequence `\` + `n`, not U+000A. Convert those to
+    //     their real characters so the next pass collapses them.
+    // (2) Strip real control chars (U+0000–U+001F, U+007F).
+    // (3) Collapse all whitespace runs to a single space, trim, clamp.
+    return s
+      .replace(/\\r\\n|\\n|\\r|\\t/g, " ")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\")
+      .replace(/[\u0000-\u001F\u007F]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, max);
+  };
+  const out: Array<{ phrase: string; reason: string; alternative?: string }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const phrase = clean((item as any).phrase, 80);
+    const reason = clean((item as any).reason, 280);
+    if (!phrase || !reason) continue;
+    const alternative = clean((item as any).alternative, 80);
+    out.push(alternative ? { phrase, reason, alternative } : { phrase, reason });
+    if (out.length >= 20) break;
+  }
+  return out;
+}
 
 function countInlineCitations(text: string): number {
   if (!text) return 0;
@@ -569,7 +615,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
         sectionHeading: section.heading,
         content: out.content,
         reviewQuestions: review?.review_questions || [],
-        voiceFlags: review?.voice_flags || [],
+        voiceFlags: sanitizeVoiceFlags(review?.voice_flags),
         voiceMatchScore: String(review?.voice_match_score ?? 75),
         citationCount: realCitationCount,
         atomicChunksCount: out.atomic_chunks_count ?? 0,
@@ -585,7 +631,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
           sectionHeading: section.heading,
           content: out.content,
           reviewQuestions: review?.review_questions || [],
-          voiceFlags: review?.voice_flags || [],
+          voiceFlags: sanitizeVoiceFlags(review?.voice_flags),
           voiceMatchScore: String(review?.voice_match_score ?? 75),
           citationCount: realCitationCount,
           atomicChunksCount: out.atomic_chunks_count ?? 0,

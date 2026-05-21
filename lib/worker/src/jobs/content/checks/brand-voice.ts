@@ -28,6 +28,13 @@ import { Sentry } from "../../../sentry";
 
 const MODEL = "gpt-4o-mini";
 const EXCERPT_CHARS = 6000;
+// Sprint 1 #5: chunked scoring so the brand-voice signal covers the
+// whole article instead of just the first ~1,500 words. We split the
+// body into chunks of EXCERPT_CHARS, score each, then average. Capped
+// at MAX_CHUNKS to bound worst-case cost (4 chunks × 3 retries × 30s).
+// At ~24,000 chars (~4,500 words) coverage saturates for typical blog
+// posts; longer pieces sample first/middle/last/end via stride.
+const MAX_CHUNKS = 4;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -108,18 +115,39 @@ export async function runBrandVoiceCheck(
   }
 
   const voiceProfile = (brand.voiceProfile ?? {}) as Record<string, unknown>;
-  const excerpt = input.bodyMd.slice(0, EXCERPT_CHARS);
+  const chunks = chunkBody(input.bodyMd, EXCERPT_CHARS, MAX_CHUNKS);
+  const totalChars = chunks.reduce((n, c) => n + c.length, 0);
 
   let parsed: { score?: number; reasoning?: string; flags?: string[] } | null = null;
   try {
-    parsed = await scoreVoiceWithOpenAI(
-      {
-        voiceProfile,
-        excerpt,
-        brandName: brand.name,
-      },
-      log,
+    // Sequential, not parallel — keeps per-call rate-limit blast radius
+    // small and lets a single chunk's retries cost the wall-clock that
+    // the existing 90s qa_run budget already accounts for.
+    const results: Array<{ score: number; reasoning?: string; flags?: string[] }> = [];
+    for (const chunk of chunks) {
+      results.push(
+        await scoreVoiceWithOpenAI(
+          { voiceProfile, excerpt: chunk, brandName: brand.name },
+          log,
+        ),
+      );
+    }
+    // Length-weighted average so a trailing short chunk doesn't get
+    // equal pull with a full 6000-char chunk. Flag union dedupes across
+    // chunks so the same banned phrase flagged in two places shows once.
+    const weighted = results.reduce(
+      (acc, r, i) => acc + r.score * chunks[i]!.length,
+      0,
     );
+    const avgScore = totalChars > 0 ? weighted / totalChars : results[0]?.score ?? 0;
+    const allFlags = Array.from(
+      new Set(results.flatMap((r) => r.flags ?? [])),
+    );
+    const reasoning = results
+      .map((r, i) => (results.length > 1 ? `[chunk ${i + 1}] ${r.reasoning ?? ""}` : r.reasoning ?? ""))
+      .filter(Boolean)
+      .join(" · ");
+    parsed = { score: avgScore, reasoning, flags: allFlags };
   } catch (err) {
     log.error({ err }, "brand-voice: OpenAI call failed");
     Sentry.withScope((scope) => {
@@ -197,9 +225,49 @@ export async function runBrandVoiceCheck(
       reasoning: parsed.reasoning ?? null,
       flags: parsed.flags ?? [],
       voiceProfileKeys: Object.keys(voiceProfile),
-      excerptChars: excerpt.length,
+      excerptChars: totalChars,
+      chunkCount: chunks.length,
+      bodyChars: input.bodyMd.length,
     },
   };
+}
+
+/**
+ * Split bodyMd into up to `maxChunks` slices of `chunkSize` chars.
+ *
+ * Coverage guarantees:
+ * - ≤ chunkSize: returns the whole body as a single chunk (preserves
+ *   the pre-Sprint-1 single-call behavior for short pieces).
+ * - ≤ maxChunks * chunkSize: contiguous slices covering the FULL body
+ *   with no gaps. This is the common case for typical blog posts up to
+ *   ~24,000 chars / ~4,500 words at the current constants.
+ * - longer: SAMPLES maxChunks evenly-spaced windows. The head and tail
+ *   are always pinned; the middle is sampled. Coverage gaps exist by
+ *   design — the alternative is unbounded cost. Callers should treat
+ *   the resulting score as representative rather than exhaustive.
+ */
+export function chunkBody(body: string, chunkSize: number, maxChunks: number): string[] {
+  if (!body) return [""];
+  if (body.length <= chunkSize) return [body];
+  if (maxChunks <= 1) return [body.slice(0, chunkSize)];
+  const naturalChunks = Math.ceil(body.length / chunkSize);
+  if (naturalChunks <= maxChunks) {
+    const out: string[] = [];
+    for (let i = 0; i < naturalChunks; i++) {
+      out.push(body.slice(i * chunkSize, (i + 1) * chunkSize));
+    }
+    return out;
+  }
+  // Sample maxChunks windows at evenly-spaced offsets. The first window
+  // is the head; the last window pins to the end so we score the
+  // conclusion. Middle windows are interpolated.
+  const out: string[] = [];
+  const span = body.length - chunkSize;
+  for (let i = 0; i < maxChunks; i++) {
+    const start = Math.floor((span * i) / (maxChunks - 1));
+    out.push(body.slice(start, start + chunkSize));
+  }
+  return out;
 }
 
 /**

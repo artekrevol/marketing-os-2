@@ -16,6 +16,26 @@ import { aiClient } from "@/lib/ai-client";
 // at a glance. Server-side enforcement in draft-section already strips most
 // of these — this is the second layer for any that slip through or for
 // drafts produced before enforcement was added.
+// Sprint 1 #6 (hotfix): defense-in-depth for the voice-flags right rail.
+// The REVIEW_TOOL schema and server-side `sanitizeVoiceFlags` clamp what
+// gets persisted, but historical drafts predate both layers — and the
+// renderer should never trust LLM-shaped text to be a string at all.
+// Coerce, strip control chars, collapse whitespace, clamp length.
+function safeText(v: unknown, max = 280): string {
+  if (typeof v !== "string") return "";
+  // Order matters: decode literal escape sequences FIRST (when the
+  // server got a double-encoded JSON-stringified value), then strip
+  // real control chars, then collapse whitespace, trim, clamp.
+  return v
+    .replace(/\\r\\n|\\n|\\r|\\t/g, " ")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\")
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
 function renderWithCitations(text: string, whitelist: Set<string>) {
   if (!text) return null;
   const parts: React.ReactNode[] = [];
@@ -954,7 +974,21 @@ export default function DraftingInterface() {
         </div>
         <div className="p-3 space-y-3">
           {(() => {
-            const all = Array.isArray(activeDraft?.voice_flags) ? (activeDraft?.voice_flags as any[]) : [];
+            // Sanitize-then-filter (Sprint 1 #6): legacy/malformed rows can
+            // contain `null` items or items missing `phrase`. We must
+            // normalize each entry to a known shape BEFORE any predicate
+            // touches `.phrase`, or filtering crashes on bad legacy data.
+            const rawAll = Array.isArray(activeDraft?.voice_flags) ? (activeDraft?.voice_flags as unknown[]) : [];
+            const all = rawAll
+              .map((f) => {
+                const item = (f ?? {}) as Record<string, unknown>;
+                return {
+                  phrase: safeText(item.phrase, 80),
+                  reason: safeText(item.reason, 280),
+                  alternative: safeText(item.alternative, 80),
+                };
+              })
+              .filter((f) => f.phrase && f.reason);
             const visible = all.filter((f) => showDismissed || !dismissedSet.has(f.phrase));
             if (all.length === 0) {
               return <p className="text-xs text-ink-muted italic px-1">No uncertainties flagged.</p>;
@@ -963,31 +997,34 @@ export default function DraftingInterface() {
               return <p className="text-xs text-ink-muted italic px-1">All flags dismissed.</p>;
             }
             return visible.map((f, i) => {
-              const isDismissed = dismissedSet.has(f.phrase);
+              const phrase = f.phrase;
+              const reason = f.reason;
+              const alternative = f.alternative;
+              const isDismissed = dismissedSet.has(phrase);
               const isRevising = generating === active?.id;
               return (
                 <div
-                  key={`${f.phrase}-${i}`}
+                  key={`${phrase}-${i}`}
                   className={`border border-rule rounded-sm p-3 ${isDismissed ? "opacity-50" : ""}`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-medium leading-snug flex-1 min-w-0 break-words">"{f.phrase}"</p>
+                    <p className="text-sm font-medium leading-snug flex-1 min-w-0 break-words line-clamp-2">"{phrase}"</p>
                     <button
-                      onClick={() => copyPhrase(f.phrase)}
+                      onClick={() => copyPhrase(phrase)}
                       className="shrink-0 p-1 -mr-1 -mt-1 text-ink-muted hover:text-ink rounded-sm hover:bg-secondary"
                       title="Copy phrase (then ⌘F in the draft)"
                     >
                       <Copy className="h-3 w-3" />
                     </button>
                   </div>
-                  <p className="text-xs text-ink-muted mt-1">{f.reason}</p>
-                  {f.alternative && (
-                    <p className="text-xs text-accent mt-2">Alt: "{f.alternative}"</p>
+                  <p className="text-xs text-ink-muted mt-1 break-words line-clamp-3">{reason}</p>
+                  {alternative && (
+                    <p className="text-xs text-accent mt-2 break-words line-clamp-2">Alt: "{alternative}"</p>
                   )}
                   <div className="flex items-center gap-2 mt-3 pt-2 border-t border-rule">
-                    {f.alternative && !isDismissed && (
+                    {alternative && !isDismissed && (
                       <button
-                        onClick={() => applyAlternative(f.phrase, f.alternative)}
+                        onClick={() => applyAlternative(phrase, alternative)}
                         disabled={isRevising}
                         className="text-[11px] uppercase tracking-wider px-2 py-1 rounded-sm bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 inline-flex items-center gap-1"
                         title="Submit a revision that swaps this phrase for the suggested alternative"
@@ -998,14 +1035,14 @@ export default function DraftingInterface() {
                     )}
                     {isDismissed ? (
                       <button
-                        onClick={() => restoreFlag(f.phrase)}
+                        onClick={() => restoreFlag(phrase)}
                         className="text-[11px] uppercase tracking-wider px-2 py-1 rounded-sm text-ink-muted hover:bg-secondary"
                       >
                         Restore
                       </button>
                     ) : (
                       <button
-                        onClick={() => dismissFlag(f.phrase)}
+                        onClick={() => dismissFlag(phrase)}
                         className="text-[11px] uppercase tracking-wider px-2 py-1 rounded-sm text-ink-muted hover:bg-secondary"
                         title="Hide this flag — Haiku is wrong, this phrase is intentional"
                       >
