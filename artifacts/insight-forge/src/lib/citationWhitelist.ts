@@ -1,6 +1,6 @@
 /**
  * Project-scoped citation whitelist (client-side mirror of the server-side
- * whitelist used in supabase/functions/draft-section). A citation URL is
+ * whitelist used in the worker's draft-section job). A citation URL is
  * "verified" when its host matches one of the project's known sources:
  *   - any starred or unstarred proof_point.source_url
  *   - any top_cited_sources.url or suggested_authority_sources.url_or_topic

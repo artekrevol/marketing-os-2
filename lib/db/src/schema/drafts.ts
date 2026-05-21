@@ -14,7 +14,7 @@ export const draftsTable = pgTable("drafts", {
   approved: boolean("approved").notNull().default(false),
   voiceMatchScore: numeric("voice_match_score"),
   voiceFlags: jsonb("voice_flags"),
-  dismissedVoiceFlags: jsonb("dismissed_voice_flags"),
+  dismissedVoiceFlags: jsonb("dismissed_voice_flags").notNull().default([]),
   reviewQuestions: jsonb("review_questions"),
   citationCount: integer("citation_count"),
   revisionCount: integer("revision_count").notNull().default(0),

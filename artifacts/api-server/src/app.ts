@@ -9,6 +9,16 @@ import { logger } from "./lib/logger";
 
 const PgStore = ConnectPgSimple(session);
 
+// Fail fast in production if the session secret is not configured —
+// a hardcoded default would silently weaken session integrity.
+const SESSION_SECRET = process.env["SESSION_SECRET"];
+if (!SESSION_SECRET && process.env["NODE_ENV"] === "production") {
+  throw new Error(
+    "SESSION_SECRET environment variable is required in production",
+  );
+}
+const sessionSecret = SESSION_SECRET ?? "dev-secret-change-in-prod";
+
 const app: Express = express();
 
 // Replit (and most PaaS hosts) terminate TLS at the reverse proxy and forward
@@ -51,7 +61,7 @@ app.use(
       conString: process.env.DATABASE_URL,
       tableName: "session",
     }),
-    secret: process.env.SESSION_SECRET || "dev-secret-change-in-prod",
+    secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: {

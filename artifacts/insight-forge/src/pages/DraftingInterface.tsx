@@ -290,7 +290,7 @@ export default function DraftingInterface() {
   // - saveInlineEdit: writes content + last_edited_by='human' + recomputed
   //   citation_count to drafts, then captures the diff to voice_library so
   //   future drafts can learn from human edits (mirrors the AI-revision
-  //   capture in supabase/functions/draft-section). We do NOT bump
+  //   capture in the worker's draft-section job). We do NOT bump
   //   revision_count — that field is reserved for AI revisions per the
   //   existing schema, and Stage-3 cost telemetry depends on it.
   // - We deliberately do NOT recompute voice_match_score / entity_density_score

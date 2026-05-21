@@ -5,62 +5,11 @@ import { sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
 /**
- * Idempotent boot-time migrations — safe to run on every start.
+ * Boot-time data seeding (admin users, baseline brands, default QA checks).
+ * Schema is owned by Drizzle — schema patches belong in `lib/db/drizzle/`
+ * migrations, not here.
  */
-async function runBootMigrations(): Promise<void> {
-  try {
-    await db.execute(
-      sql`ALTER TABLE playbook ALTER COLUMN brand_id DROP NOT NULL`,
-    );
-    logger.info("boot-migration: playbook.brand_id is now nullable");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes("does not exist") && !msg.includes("already")) {
-      logger.warn({ err }, "boot-migration: playbook.brand_id — unexpected error (non-fatal)");
-    }
-  }
-
-  try {
-    await db.execute(
-      sql`ALTER TABLE playbook_sections ALTER COLUMN brand_id DROP NOT NULL`,
-    );
-    logger.info("boot-migration: playbook_sections.brand_id is now nullable");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes("does not exist") && !msg.includes("already")) {
-      logger.warn({ err }, "boot-migration: playbook_sections.brand_id — unexpected error (non-fatal)");
-    }
-  }
-
-  try {
-    await db.execute(
-      sql`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS password_hash TEXT`,
-    );
-    logger.info("boot-migration: user_profiles.password_hash column ensured");
-  } catch (err: unknown) {
-    logger.warn({ err }, "boot-migration: user_profiles.password_hash — unexpected error (non-fatal)");
-  }
-
-  try {
-    await db.execute(sql`
-      CREATE TABLE IF NOT EXISTS "session" (
-        "sid"    varchar      NOT NULL COLLATE "default",
-        "sess"   json         NOT NULL,
-        "expire" timestamp(6) NOT NULL,
-        CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
-      ) WITH (OIDS=FALSE)
-    `);
-    await db.execute(sql`
-      CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")
-    `);
-    logger.info("boot-migration: session table ensured");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes("already exists")) {
-      logger.warn({ err }, "boot-migration: session table — unexpected error (non-fatal)");
-    }
-  }
-
+async function runBootSeeds(): Promise<void> {
   const adminPassword = process.env["ADMIN_PASSWORD"];
   const seedEmails = (process.env["SEED_ADMIN_EMAILS"] ?? "")
     .split(",")
@@ -208,7 +157,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-await runBootMigrations();
+await runBootSeeds();
 
 const server = app.listen(port, (err) => {
   if (err) {

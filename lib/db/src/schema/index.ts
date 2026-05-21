@@ -1,5 +1,6 @@
 export * from "./brands";
 export * from "./user-profiles";
+export * from "./session";
 export * from "./events";
 export * from "./audit-log";
 export * from "./dead-jobs";

@@ -1,8 +1,8 @@
 /**
  * Brand-scope middleware.
  *
- * The worker uses the Supabase service role, which bypasses RLS. We
- * therefore enforce tenancy in code via this module:
+ * Tenancy is enforced entirely in application code — there is no
+ * Postgres RLS and no row-level triggers in production:
  *
  *   - `ScopedDb` exposes explicit `select / insert / update / delete`
  *     methods that AUTOMATICALLY apply `brand_id = scope.brandId`. Cross-
@@ -12,8 +12,6 @@
  *   - Operations on non-brand-scoped tables refuse via runtime throw,
  *     forcing the caller to use the underlying `tx` (`scope.db`)
  *     deliberately for system tables (events, dead_jobs, integration_call_log).
- *
- * This is the worker-side counterpart to RLS in the application path.
  */
 import {
   and,

@@ -1,24 +1,21 @@
 # `@workspace/db`
 
-Drizzle bindings for the Supabase schema, plus the worker's tenancy
-helpers. Schema source-of-truth still lives in
-`artifacts/insight-forge/supabase/migrations/*.sql`; the tables declared
-here are the subset the worker reads or writes.
+Drizzle schema for the platform Postgres DB (Replit-managed), plus the
+brand-tenancy enforcement helpers used by the API server and worker.
 
 ## `withBrandScope(brandId, fn)`
 
-The worker uses the Supabase **service role** and therefore bypasses
-RLS. To preserve tenant isolation we enforce brand scoping in code:
+Tenancy is enforced **in application code** — there is no Postgres RLS
+and there are no row-level triggers in production. Every read or write
+against a brand-scoped table must happen through `ScopedDb`, which
+automatically applies `brand_id = scope.brandId` and rejects cross-brand
+inserts/updates with `BrandScopeViolationError`.
 
 ```ts
 import { withBrandScope, assertBrandScope } from "@workspace/db";
 import { projectsTable } from "@workspace/db/schema";
 
 await withBrandScope(brandId, async ({ db, brandId }) => {
-  // db is a Drizzle transaction with:
-  //   set local row_security = off;
-  //   select set_config('app.current_brand', brandId, true);
-
   const row = { brandId, topic: "Hello", contentType: "blog" };
   assertBrandScope(brandId, row); // throws on mismatch / missing brand_id
   await db.insert(projectsTable).values(row);
@@ -41,21 +38,6 @@ await withBrandScope(brandId, async ({ db, brandId }) => {
 ### Brand-scoped tables
 
 The full list lives in `BRAND_SCOPED_TABLES` (`src/brand-scope.ts`).
-Currently scoped:
-
-- Sprint 1: `projects`, `drafts`, `outlines`, `research_findings`,
-  `voice_library`, `fetched_pages`, `ai_calls`, `page_visits`,
-  `topic_briefs`, `brand_personas`, `competitor_pages`,
-  `keyword_lists`, `rank_snapshots`.
-- Sprint 3 — Quality Gate: `content_objects`, `qa_runs`,
-  `qa_check_results`, `qa_signoffs`, `qa_overrides`,
-  `qa_check_definitions`.
-- Recovery War Room (Pattern A, all three): `recovery_baselines`
-  (UNIQUE per brand; RLS write = admin-only), `recovery_initiatives`
-  (RLS write = admin or editor with brand_access via
-  `is_admin_or_editor_for_brand(brand_id)`), `recovery_snapshots`
-  (RLS hard-denies all JWT writes — including admin; the worker writes
-  via service_role which bypasses RLS).
 
 ### Adding a new brand-scoped table
 
@@ -67,11 +49,21 @@ Currently scoped:
 
 ## Migrations
 
-Migrations are NOT applied by Drizzle in this repo — the source of
-truth is `artifacts/insight-forge/supabase/migrations/*.sql`, applied
-by hand to a Supabase preview branch by the operator. The Drizzle
-schema must stay aligned with whatever has been applied; if you add a
-column in SQL, mirror it here in the same PR.
+Drizzle is the single source of truth for the schema. To apply schema
+changes to dev:
+
+```bash
+pnpm --filter @workspace/db run push
+```
+
+For production, run the same `push` against the prod `DATABASE_URL` from
+a controlled environment (see the deployment skill). Do **not** patch
+the schema from the API server boot path — schema patches belong in
+Drizzle migrations only.
+
+The legacy Supabase migration SQL has been archived under
+`docs/legacy/supabase-migrations-archive/` for historical reference. It
+is no longer applied to any environment.
 
 ## Running tests
 

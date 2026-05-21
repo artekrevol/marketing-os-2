@@ -167,8 +167,9 @@ type _RecoverySnapshotTop10Required       = AssertRequiredField<typeof recoveryS
 type _RecoverySnapshotTop3Required        = AssertRequiredField<typeof recoverySnapshotsTable, "keywordsInTop3">;
 
 // ── fetched_pages (nullable brand_id — system-level page cache) ───────────────
-// brand_id is intentionally nullable; url is the only required field.
-type _FetchedPageUrlRequired = AssertRequiredField<typeof fetchedPagesTable, "url">;
+// brand_id is intentionally nullable; url and content are required.
+type _FetchedPageUrlRequired     = AssertRequiredField<typeof fetchedPagesTable, "url">;
+type _FetchedPageContentRequired = AssertRequiredField<typeof fetchedPagesTable, "content">;
 
 // ── playbook (nullable brand_id — global playbook, not brand-scoped) ──────────
 // All fields have defaults or are nullable; nothing is required in insert.
@@ -180,9 +181,11 @@ type _PlaybookSectionNumberRequired  = AssertRequiredField<typeof playbookSectio
 type _PlaybookSectionTitleRequired   = AssertRequiredField<typeof playbookSectionsTable, "sectionTitle">;
 type _PlaybookSectionContentRequired = AssertRequiredField<typeof playbookSectionsTable, "sectionContent">;
 
-// ── voice_library (nullable brand_id — optional brand association) ────────────
-// All columns are nullable or have defaults; nothing is required in insert.
-// The compile-time check is represented by the _min*Insert constant below.
+// ── voice_library (brand-scoped: brand_id NOT NULL in prod) ───────────────────
+// originalAiText, editedHumanText, and brandId are required.
+type _VoiceLibraryBrandIdRequired         = AssertRequiredField<typeof voiceLibraryTable, "brandId">;
+type _VoiceLibraryOriginalAiTextRequired  = AssertRequiredField<typeof voiceLibraryTable, "originalAiText">;
+type _VoiceLibraryEditedHumanTextRequired = AssertRequiredField<typeof voiceLibraryTable, "editedHumanText">;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compile-time: minimal insert objects typed against $inferInsert.
@@ -314,6 +317,7 @@ const _minRecoverySnapshotInsert: typeof recoverySnapshotsTable.$inferInsert = {
 // Nullable brand_id tables: minimal inserts confirm nothing required beyond table-specific fields.
 const _minFetchedPageInsert: typeof fetchedPagesTable.$inferInsert = {
   url: "https://example.com/some-page",
+  content: "<html>…page text…</html>",
 };
 
 const _minPlaybookInsert: typeof playbookTable.$inferInsert = {
@@ -327,7 +331,9 @@ const _minPlaybookSectionInsert: typeof playbookSectionsTable.$inferInsert = {
 };
 
 const _minVoiceLibraryInsert: typeof voiceLibraryTable.$inferInsert = {
-  // All columns nullable or have defaults — nothing required
+  brandId: BRAND_UUID,
+  originalAiText: "AI-generated draft sentence.",
+  editedHumanText: "Human-edited version of that sentence.",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,6 +361,7 @@ describe("schema smoke — brand_id is required in all brand-scoped tables", () 
     { name: "recovery_baselines",   table: recoveryBaselinesTable },
     { name: "recovery_initiatives", table: recoveryInitiativesTable },
     { name: "recovery_snapshots",   table: recoverySnapshotsTable },
+    { name: "voice_library",        table: voiceLibraryTable },
   ] as const;
 
   for (const { name, table } of tables) {
@@ -510,15 +517,16 @@ describe("schema smoke — nullable brand_id tables correctly allow omitting bra
     expect(result.success).toBe(true);
   });
 
-  it("fetched_pages.brandId is optional; url is the only required field", () => {
+  it("fetched_pages.brandId is optional; url and content are required", () => {
     const zodSchema = createInsertSchema(fetchedPagesTable);
     const withBrand = zodSchema.safeParse(_minFetchedPageInsert);
     expect(withBrand.success).toBe(true);
-    const withoutUrl = zodSchema.safeParse({});
-    expect(withoutUrl.success).toBe(false);
-    if (!withoutUrl.success) {
-      const paths = withoutUrl.error.issues.map((e) => e.path.join("."));
+    const empty = zodSchema.safeParse({});
+    expect(empty.success).toBe(false);
+    if (!empty.success) {
+      const paths = empty.error.issues.map((e) => e.path.join("."));
       expect(paths).toContain("url");
+      expect(paths).toContain("content");
       expect(paths).not.toContain("brandId");
     }
   });
@@ -546,11 +554,17 @@ describe("schema smoke — nullable brand_id tables correctly allow omitting bra
     }
   });
 
-  it("voice_library.brandId is optional; minimal insert requires no fields (all nullable)", () => {
+  it("voice_library.brandId, originalAiText, editedHumanText are required", () => {
     const zodSchema = createInsertSchema(voiceLibraryTable);
     const result = zodSchema.safeParse(_minVoiceLibraryInsert);
     expect(result.success).toBe(true);
-    const emptyResult = zodSchema.safeParse({});
-    expect(emptyResult.success).toBe(true);
+    const empty = zodSchema.safeParse({});
+    expect(empty.success).toBe(false);
+    if (!empty.success) {
+      const paths = empty.error.issues.map((e) => e.path.join("."));
+      expect(paths).toContain("brandId");
+      expect(paths).toContain("originalAiText");
+      expect(paths).toContain("editedHumanText");
+    }
   });
 });
