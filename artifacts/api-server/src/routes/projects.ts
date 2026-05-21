@@ -87,7 +87,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         url: url || null,
         userNotes: user_notes || null,
         contentType: "blog",
-        mode: "composition",
+        mode: "research",
         status: "proposing_brief",
         currentStage: 0,
         brandId: brand_id,
