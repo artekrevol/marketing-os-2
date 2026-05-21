@@ -67,7 +67,7 @@ async function callerCanWriteInitiative(
   try {
     const result = (await db.execute(
       sql`select 1 from public.user_profiles
-          where user_id = ${userId}::uuid
+          where user_id = ${userId}
             and role = 'editor'::public.app_user_role
             and ${brandId}::uuid = any(brand_access)
           limit 1`,

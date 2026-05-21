@@ -1,29 +1,55 @@
 import { Router } from "express";
-import { db, brandsTable } from "@workspace/db";
-import { eq, asc } from "drizzle-orm";
-import { requireAuth } from "../middlewares/auth.js";
+import { db, brandsTable, userProfilesTable } from "@workspace/db";
+import { eq, asc, inArray } from "drizzle-orm";
+import { requireAuth, requireAdmin } from "../middlewares/auth.js";
 
 const router = Router();
 
+function brandToSnake(b: typeof brandsTable.$inferSelect) {
+  return {
+    id: b.id,
+    slug: b.slug,
+    name: b.name,
+    primary_domain: b.primaryDomain,
+    voice_profile: b.voiceProfile,
+    thresholds: b.thresholds,
+    created_at: b.createdAt,
+    updated_at: b.updatedAt,
+  };
+}
+
 /**
  * GET /api/brands
- * Returns all brands, sorted by name.
+ *
+ * Admins see every brand. Non-admin writers see only the brands listed
+ * in their `user_profiles.brand_access` — previously this leaked the
+ * full brand directory to every authenticated user.
  */
-router.get("/", requireAuth, async (_req, res, next) => {
+router.get("/", requireAuth, async (req, res, next) => {
   try {
-    const rows = await db.select().from(brandsTable).orderBy(asc(brandsTable.name));
-    res.json(
-      rows.map((b) => ({
-        id: b.id,
-        slug: b.slug,
-        name: b.name,
-        primary_domain: b.primaryDomain,
-        voice_profile: b.voiceProfile,
-        thresholds: b.thresholds,
-        created_at: b.createdAt,
-        updated_at: b.updatedAt,
-      })),
-    );
+    const auth = req.auth;
+    if (!auth) { res.status(401).json({ error: "unauthenticated" }); return; }
+
+    if (auth.isAdmin) {
+      const rows = await db.select().from(brandsTable).orderBy(asc(brandsTable.name));
+      res.json(rows.map(brandToSnake));
+      return;
+    }
+
+    const profile = await db
+      .select({ brandAccess: userProfilesTable.brandAccess })
+      .from(userProfilesTable)
+      .where(eq(userProfilesTable.userId, auth.userId))
+      .limit(1);
+    const accessible = profile[0]?.brandAccess ?? [];
+    if (accessible.length === 0) { res.json([]); return; }
+
+    const rows = await db
+      .select()
+      .from(brandsTable)
+      .where(inArray(brandsTable.id, accessible))
+      .orderBy(asc(brandsTable.name));
+    res.json(rows.map(brandToSnake));
   } catch (err) {
     next(err);
   }
@@ -31,9 +57,12 @@ router.get("/", requireAuth, async (_req, res, next) => {
 
 /**
  * PATCH /api/brands/:id
- * Update mutable brand fields. Requires admin (enforced upstream by AdminBrands audit gate).
+ *
+ * Admin-only. The previous comment claimed this was "enforced upstream
+ * by AdminBrands audit gate" but the gate was UI-only — a direct API
+ * call from any writer could mutate brand settings. Now gated server-side.
  */
-router.patch("/:id", requireAuth, async (req, res, next) => {
+router.patch("/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const id = req.params["id"] as string;
     const { primary_domain, voice_profile, thresholds } = req.body as {
@@ -55,4 +84,3 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
 });
 
 export default router;
-

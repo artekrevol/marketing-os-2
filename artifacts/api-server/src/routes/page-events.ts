@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { db, eventsTable } from "@workspace/db";
-import { requireAuth } from "../middlewares/auth.js";
+import {
+  requireAuth,
+  assertBrandAccessForProject,
+  BrandAccessError,
+} from "../middlewares/auth.js";
 
 const router = Router();
 
@@ -8,6 +12,10 @@ const router = Router();
  * POST /api/page-events
  * Page-view telemetry from the frontend usePageTracker hook.
  * Stores into the shared events table with eventType="page_view".
+ *
+ * If a project_id is provided we verify the caller has access to that
+ * project's brand — otherwise a writer could pollute another brand's
+ * telemetry with fake page_view rows tagged to their projects.
  */
 router.post("/", requireAuth, async (req, res, next) => {
   try {
@@ -28,7 +36,11 @@ router.post("/", requireAuth, async (req, res, next) => {
       referrer?: string | null;
     };
 
-    const userId = (req as any).auth?.userId ?? null;
+    if (project_id) {
+      await assertBrandAccessForProject(req, project_id);
+    }
+
+    const userId = req.auth?.userId ?? null;
 
     await db.insert(eventsTable).values({
       eventType: "page_view",
@@ -47,6 +59,10 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     res.json({ ok: true });
   } catch (err) {
+    if (err instanceof BrandAccessError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });
