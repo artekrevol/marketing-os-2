@@ -71,6 +71,11 @@ export default function DraftingInterface() {
   const [briefLandscape, setBriefLandscape] = useState<any>(null);
   const [activeIdx, setActiveIdx] = useState(0);
   const [generating, setGenerating] = useState<string | null>(null);
+  // Tracks the specific voice-flag phrase currently being applied so we can
+  // show the spinner only on the clicked card. Without this the section-level
+  // `generating` flag flips every Apply button at once, making it look like
+  // all flags are firing when only one is.
+  const [applyingPhrase, setApplyingPhrase] = useState<string | null>(null);
   const [revisionInput, setRevisionInput] = useState("");
   const [stitching, setStitching] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
@@ -233,10 +238,21 @@ export default function DraftingInterface() {
 
   const applyAlternative = async (phrase: string, alternative: string) => {
     if (!active || !alternative) return;
+    // Block concurrent applies — same race as handleSelectionAction: two
+    // generates on one section let the second completion overwrite the first.
+    if (generating === active.id) {
+      toast.error("Wait for the current revision to finish.");
+      return;
+    }
     const instruction = `Replace the phrase "${phrase}" with "${alternative}". Do not change any other prose, citations, or structure.`;
     setReviseOpen(false);
     setRevisionInput("");
-    await generate(active.id, instruction);
+    setApplyingPhrase(phrase);
+    try {
+      await generate(active.id, instruction);
+    } finally {
+      setApplyingPhrase(null);
+    }
   };
 
   // Selection toolbar → AI revision. We save any in-progress inline edit
@@ -1009,6 +1025,11 @@ export default function DraftingInterface() {
               const reason = f.reason;
               const alternative = f.alternative;
               const isDismissed = dismissedSet.has(phrase);
+              // Only this card's Apply shows the spinner. Other cards are
+              // still disabled while a revision is in flight (concurrent
+              // generates would race), but they keep their normal icon so
+              // the writer can tell at a glance which flag is firing.
+              const isThisApplying = applyingPhrase === phrase;
               const isRevising = generating === active?.id;
               return (
                 <div
@@ -1037,7 +1058,7 @@ export default function DraftingInterface() {
                         className="text-[11px] uppercase tracking-wider px-2 py-1 rounded-sm bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 inline-flex items-center gap-1"
                         title="Submit a revision that swaps this phrase for the suggested alternative"
                       >
-                        {isRevising ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
+                        {isThisApplying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
                         Apply
                       </button>
                     )}
