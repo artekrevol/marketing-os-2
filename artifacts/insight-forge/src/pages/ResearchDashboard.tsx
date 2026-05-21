@@ -338,7 +338,7 @@ export default function ResearchDashboard() {
           <List label="What's exploitable" items={ct.whats_exploitable} accent />
         </Card>
 
-        <Card title={`04 — ${project.company_domain} synergy map`} k="c4" open={open} toggle={toggle} status={sub.synergy_map} onRetry={() => retryCard("synergy_map")}>
+        <Card title={`04 — ${project.company_domain || "Company"} synergy map`} k="c4" open={open} toggle={toggle} status={sub.synergy_map} onRetry={() => retryCard("synergy_map")}>
           {sm.ownable_angle && (
             <div className="mb-4 p-4 bg-secondary border-l-2 border-accent">
               <p className="text-[10px] uppercase tracking-widest text-ink-muted mb-1">Ownable angle</p>
