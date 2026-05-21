@@ -41,6 +41,26 @@ async function runBootMigrations(): Promise<void> {
     logger.warn({ err }, "boot-migration: user_profiles.password_hash — unexpected error (non-fatal)");
   }
 
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "session" (
+        "sid"    varchar      NOT NULL COLLATE "default",
+        "sess"   json         NOT NULL,
+        "expire" timestamp(6) NOT NULL,
+        CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
+      ) WITH (OIDS=FALSE)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")
+    `);
+    logger.info("boot-migration: session table ensured");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("already exists")) {
+      logger.warn({ err }, "boot-migration: session table — unexpected error (non-fatal)");
+    }
+  }
+
   const adminPassword = process.env["ADMIN_PASSWORD"];
   const seedEmails = (process.env["SEED_ADMIN_EMAILS"] ?? "")
     .split(",")
