@@ -132,7 +132,7 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
     if (body.competitor_url !== undefined) allowed.competitorUrl = body.competitor_url as string | null;
     if (body.benchmark_url !== undefined) allowed.benchmarkUrl = body.benchmark_url as string | null;
     if (body.content_type !== undefined) allowed.contentType = String(body.content_type);
-    if (body.mode !== undefined) allowed.mode = body.mode as string | null;
+    if (body.mode !== undefined && body.mode !== null) allowed.mode = body.mode as string;
     if (body.pod !== undefined) allowed.pod = body.pod as string | null;
     if (body.writer_id !== undefined) allowed.writerId = body.writer_id as string | null;
     if (body.user_notes !== undefined) allowed.userNotes = body.user_notes as string | null;
@@ -438,7 +438,8 @@ router.post("/:id/interview-answers", requireAuth, async (req, res, next) => {
     if (!section_id) { res.status(400).json({ error: "section_id required" }); return; }
 
     const projRows = await db.select({ brandId: projectsTable.brandId }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    const brandId = projRows[0]?.brandId ?? null;
+    const brandId = projRows[0]?.brandId;
+    if (!brandId) { res.status(404).json({ error: "project not found" }); return; }
 
     const [inserted] = await db.insert(interviewAnswersTable).values({
       projectId,

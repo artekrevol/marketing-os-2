@@ -7,7 +7,7 @@ export const interviewAnswersTable = pgTable("interview_answers", {
   projectId: uuid("project_id")
     .notNull()
     .references(() => projectsTable.id, { onDelete: "cascade" }),
-  brandId: uuid("brand_id").references(() => brandsTable.id, { onDelete: "restrict" }),
+  brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "restrict" }),
   sectionId: text("section_id").notNull(),
   question: text("question"),
   answer: text("answer"),

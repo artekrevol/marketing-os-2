@@ -8,7 +8,7 @@ export const draftScoresTable = pgTable("draft_scores", {
     .notNull()
     .unique()
     .references(() => projectsTable.id, { onDelete: "cascade" }),
-  brandId: uuid("brand_id").references(() => brandsTable.id, { onDelete: "restrict" }),
+  brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "restrict" }),
   finalDraft: text("final_draft"),
   voiceMatchScore: numeric("voice_match_score"),
   originalityScore: numeric("originality_score"),

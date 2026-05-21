@@ -7,7 +7,7 @@ export const fetchedPagesTable = pgTable("fetched_pages", {
   content: text("content"),
   byteSize: integer("byte_size"),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  brandId: uuid("brand_id"),
 });
 
 export type FetchedPage = typeof fetchedPagesTable.$inferSelect;

@@ -7,7 +7,7 @@ export const proofPointsTable = pgTable("proof_points", {
   projectId: uuid("project_id")
     .notNull()
     .references(() => projectsTable.id, { onDelete: "cascade" }),
-  brandId: uuid("brand_id").references(() => brandsTable.id, { onDelete: "restrict" }),
+  brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "restrict" }),
   claim: text("claim").notNull(),
   sourceUrl: text("source_url"),
   sourcePublication: text("source_publication"),

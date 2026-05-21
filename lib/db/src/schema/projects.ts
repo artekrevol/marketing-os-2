@@ -8,7 +8,7 @@ export const projectsTable = pgTable("projects", {
     .references(() => brandsTable.id, { onDelete: "restrict" }),
   topic: text("topic").notNull(),
   contentType: text("content_type").notNull(),
-  mode: text("mode"),
+  mode: text("mode").notNull().default("research"),
   status: text("status").notNull().default("draft"),
   currentStage: integer("current_stage").notNull().default(0),
   url: text("url"),

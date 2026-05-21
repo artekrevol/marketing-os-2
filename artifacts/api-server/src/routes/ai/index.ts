@@ -713,6 +713,7 @@ router.post("/final-stitch", requireAuth, async (req, res) => {
     const outline = outlineRows[0];
     const drafts = draftRows;
     const brief = briefRows[0];
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
     if (!outline) { res.status(500).json({ error: "outline not found" }); return; }
 
     const sectionsOrder = (outline.sections as any[]).map((s: any) => s.id);
@@ -774,7 +775,7 @@ router.post("/final-stitch", requireAuth, async (req, res) => {
       .insert(draftScoresTable)
       .values({
         projectId: project_id,
-        brandId: project?.brandId,
+        brandId: project.brandId,
         finalDraft: stitched,
         voiceMatchScore: String(voice_match_score),
         originalityScore: originality_score != null ? String(originality_score) : null,

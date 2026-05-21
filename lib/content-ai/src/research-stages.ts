@@ -528,6 +528,7 @@ export async function runStage(args: {
       patch.conversionSignals = output.conversion_signals || {};
       const ppRows = (output.proof_points || []).map((p: any) => ({
         projectId: project.id,
+        brandId: project.brand_id,
         claim: p.claim,
         sourceUrl: p.source_url || null,
         sourcePublication: p.source_publication || null,

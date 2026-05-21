@@ -4,7 +4,7 @@ import { projectsTable } from "./projects";
 
 export const draftsTable = pgTable("drafts", {
   id: uuid("id").primaryKey().defaultRandom(),
-  brandId: uuid("brand_id").references(() => brandsTable.id, { onDelete: "restrict" }),
+  brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "restrict" }),
   projectId: uuid("project_id")
     .notNull()
     .references(() => projectsTable.id, { onDelete: "cascade" }),

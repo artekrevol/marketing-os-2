@@ -8,7 +8,7 @@ export const outlinesTable = pgTable("outlines", {
     .notNull()
     .unique()
     .references(() => projectsTable.id, { onDelete: "cascade" }),
-  brandId: uuid("brand_id").references(() => brandsTable.id, { onDelete: "restrict" }),
+  brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "restrict" }),
   h1: text("h1"),
   metaDescription: text("meta_description"),
   sections: jsonb("sections").notNull().default([]),
