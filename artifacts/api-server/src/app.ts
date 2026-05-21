@@ -3,6 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import ConnectPgSimple from "connect-pg-simple";
+import healthRouter from "./routes/health";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
@@ -33,6 +34,11 @@ app.use(
 app.use(cors({ credentials: true, origin: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Health check is registered before the session middleware so it always
+// responds 200 regardless of session-store availability. This prevents
+// provisioning health checks from failing during a cold deploy.
+app.use("/api", healthRouter);
 
 app.use(
   session({
