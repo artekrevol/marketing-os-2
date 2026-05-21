@@ -660,8 +660,8 @@ function BaselineCard({ overview }: { overview: RecoveryOverview }) {
         <div className="font-mono">{b.baseline_keywords_in_top_10}</div>
         <div className="text-ink-muted">Top-3</div>
         <div className="font-mono">{b.baseline_keywords_in_top_3}</div>
-        <div className="text-ink-muted">Threshold</div>
-        <div className="font-mono">{fmtNum(b.recovery_threshold_pct, 0)}%</div>
+        <div className="text-ink-muted">Notes</div>
+        <div className="font-mono">{b.notes ?? "—"}</div>
       </div>
     </div>
   );

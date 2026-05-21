@@ -70,17 +70,11 @@ export async function lockBaseline(
         {
           brandId: input.brandId,
           baselineDate: input.baselineDate,
-          methodology: "30d_rolling_avg",
           baselineGscClicksDaily: null,
           baselineGa4SessionsDaily: null,
           baselineAvgPosition: rankings.avgPosition.toString(),
           baselineKeywordsInTop10: rankings.keywordsInTop10,
           baselineKeywordsInTop3: rankings.keywordsInTop3,
-          recoveryThresholdPct:
-            input.recoveryThresholdPct != null
-              ? input.recoveryThresholdPct.toString()
-              : "100",
-          recoveryConsecutiveDays: input.recoveryConsecutiveDays ?? 60,
           lockedBy: input.lockedBy,
           notes: input.notes ?? null,
         },

@@ -64,9 +64,9 @@ export async function handleRecoverySnapshot(
     // metrics are meaningless without it.
     const baselineRows = (await db.execute(sql`
       select
-        baseline_avg_position,
-        baseline_keywords_in_top_10,
-        baseline_keywords_in_top_3
+        avg_position_30d,
+        keywords_in_top_10,
+        keywords_in_top_3
       from public.recovery_baselines
       where brand_id = ${payload.brandId}::uuid
       limit 1
@@ -84,8 +84,8 @@ export async function handleRecoverySnapshot(
       );
       return { skipped: true, reason: "baseline_not_locked" };
     }
-    const baselineAvgPosition = Number(baselineRow.baseline_avg_position);
-    const baselineTop10 = Number(baselineRow.baseline_keywords_in_top_10);
+    const baselineAvgPosition = Number(baselineRow.avg_position_30d);
+    const baselineTop10 = Number(baselineRow.keywords_in_top_10);
 
     // Trailing 30-day rankings window ending on snapshotDate.
     const rankings = await computeRankingsBaseline(

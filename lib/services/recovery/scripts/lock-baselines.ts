@@ -385,9 +385,9 @@ async function readLockedBaseline(brandId: string): Promise<{
   const result = (await db.execute(sql`
     select
       baseline_date::text                  as baseline_date,
-      baseline_avg_position::float8        as avg_position,
-      baseline_keywords_in_top_10          as top_10,
-      baseline_keywords_in_top_3           as top_3
+      avg_position_30d::float8             as avg_position,
+      keywords_in_top_10                   as top_10,
+      keywords_in_top_3                    as top_3
     from public.recovery_baselines
     where brand_id = ${brandId}::uuid
     limit 1

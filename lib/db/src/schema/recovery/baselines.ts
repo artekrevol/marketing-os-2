@@ -10,17 +10,21 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "../brands";
-import { userProfilesTable } from "../user-profiles";
 
 /**
  * One row per brand. Locks the pre-October-2025 baseline metrics for
  * the Recovery War Room. UNIQUE per brand — only one baseline per
- * brand ever. RLS: read = standard; write = admin-only (the service
- * layer pairs every insert with an audit_log entry).
+ * brand ever.
+ *
+ * Column names in the DB use the short form (avg_position_30d, etc.)
+ * rather than the baseline_ prefix — the table name is already
+ * recovery_baselines, so the prefix is redundant.
  *
  * GSC and GA4 columns are NULLABLE until those ingestion pipelines
  * land. Position + top-N columns sourced from rank_snapshots are
  * NOT NULL — that data is already available.
+ *
+ * locked_by stores a Clerk user ID (text), not a UUID.
  */
 export const recoveryBaselinesTable = pgTable(
   "recovery_baselines",
@@ -30,21 +34,15 @@ export const recoveryBaselinesTable = pgTable(
       .notNull()
       .references(() => brandsTable.id, { onDelete: "restrict" }),
     baselineDate: date("baseline_date").notNull(),
-    methodology: text("methodology").notNull().default("30d_rolling_avg"),
 
-    baselineGscClicksDaily: numeric("baseline_gsc_clicks_daily"),
-    baselineGa4SessionsDaily: numeric("baseline_ga4_sessions_daily"),
-    baselineAvgPosition: numeric("baseline_avg_position").notNull(),
-    baselineKeywordsInTop10: integer("baseline_keywords_in_top_10").notNull(),
-    baselineKeywordsInTop3: integer("baseline_keywords_in_top_3").notNull(),
-
-    recoveryThresholdPct: numeric("recovery_threshold_pct").notNull().default("100"),
-    recoveryConsecutiveDays: integer("recovery_consecutive_days").notNull().default(60),
+    baselineGscClicksDaily: numeric("gsc_clicks_30d_avg"),
+    baselineGa4SessionsDaily: numeric("ga4_sessions_30d_avg"),
+    baselineAvgPosition: numeric("avg_position_30d").notNull(),
+    baselineKeywordsInTop10: integer("keywords_in_top_10").notNull(),
+    baselineKeywordsInTop3: integer("keywords_in_top_3").notNull(),
 
     lockedAt: timestamp("locked_at", { withTimezone: true }).notNull().defaultNow(),
-    lockedBy: uuid("locked_by")
-      .notNull()
-      .references(() => userProfilesTable.userId, { onDelete: "restrict" }),
+    lockedBy: text("locked_by").notNull(),
     notes: text("notes"),
   },
   (t) => [

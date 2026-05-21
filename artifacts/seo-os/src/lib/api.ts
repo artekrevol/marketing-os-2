@@ -141,14 +141,11 @@ export type RecoveryBaseline = {
   id: string;
   brand_id: string;
   baseline_date: string;
-  methodology: string;
   baseline_gsc_clicks_daily: string | null;
   baseline_ga4_sessions_daily: string | null;
   baseline_avg_position: string;
   baseline_keywords_in_top_10: number;
   baseline_keywords_in_top_3: number;
-  recovery_threshold_pct: string;
-  recovery_consecutive_days: number;
   locked_at: string;
   locked_by: string;
   notes: string | null;
@@ -232,14 +229,11 @@ type CamelKeys<T> = T extends RecoveryBaseline
       id: string;
       brandId: string;
       baselineDate: string;
-      methodology: string;
       baselineGscClicksDaily: string | null;
       baselineGa4SessionsDaily: string | null;
       baselineAvgPosition: string;
       baselineKeywordsInTop10: number;
       baselineKeywordsInTop3: number;
-      recoveryThresholdPct: string;
-      recoveryConsecutiveDays: number;
       lockedAt: string;
       lockedBy: string;
       notes: string | null;
@@ -252,14 +246,11 @@ function normaliseBaseline(b: CamelKeys<RecoveryBaseline> | null): RecoveryBasel
     id: b.id,
     brand_id: b.brandId,
     baseline_date: b.baselineDate,
-    methodology: b.methodology,
     baseline_gsc_clicks_daily: b.baselineGscClicksDaily,
     baseline_ga4_sessions_daily: b.baselineGa4SessionsDaily,
     baseline_avg_position: b.baselineAvgPosition,
     baseline_keywords_in_top_10: b.baselineKeywordsInTop10,
     baseline_keywords_in_top_3: b.baselineKeywordsInTop3,
-    recovery_threshold_pct: b.recoveryThresholdPct,
-    recovery_consecutive_days: b.recoveryConsecutiveDays,
     locked_at: b.lockedAt,
     locked_by: b.lockedBy,
     notes: b.notes,
