@@ -11,6 +11,11 @@ const PgStore = ConnectPgSimple(session);
 
 const app: Express = express();
 
+// Replit (and most PaaS hosts) terminate TLS at the reverse proxy and forward
+// plain HTTP internally. Without this, Express sees req.secure = false and
+// silently drops the Set-Cookie header for cookies marked secure: true.
+app.set("trust proxy", 1);
+
 app.use(
   pinoHttp({
     logger,
