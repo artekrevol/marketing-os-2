@@ -32,7 +32,7 @@ app.use(
   }),
 );
 
-app.use(cors());
+app.use(cors({ credentials: true, origin: true }));
 
 // Resolve publishable key per-hostname so the same server works across
 // all Replit preview domains and the published .replit.app domain.
