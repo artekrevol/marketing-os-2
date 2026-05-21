@@ -4,6 +4,42 @@ Run these steps before every `Publish` / `Deploy` action on the platform.
 
 ---
 
+## Step 0 — Schema smoke tests (automated)
+
+Run the schema smoke tests to catch insert-type regressions **before** touching the database:
+
+```bash
+pnpm run validate
+```
+
+This runs two checks in sequence:
+
+1. **Compile-time type assertions** (`pnpm run typecheck:libs && tsc --noEmit --project lib/db/tsconfig.test.json`):
+   Every brand-scoped table's `$inferInsert` type is asserted to require `brandId` and all other
+   NOT NULL / no-default columns. If a column's nullability changes in the schema file, the
+   TypeScript compiler errors out immediately — before any SQL reaches the database.
+
+2. **Zod runtime validation** (`vitest run` in `@workspace/db`):
+   `drizzle-zod`'s `createInsertSchema` generates a live Zod schema from each Drizzle table
+   definition. The test suite verifies that:
+   - Inserting without `brand_id` fails Zod validation for all 16 brand-scoped tables.
+   - A minimal valid insert (only the required columns) parses successfully.
+   - Tables with intentionally nullable `brand_id` (events, audit_log, usage_logs,
+     integration_call_log) correctly allow cross-brand writes.
+
+**What this catches:**
+
+| Schema change | How caught |
+|---|---|
+| `brandId` changed from `.notNull()` to nullable | TypeScript compile error + Zod no longer flags missing `brandId` |
+| New NOT NULL column added without default | TypeScript compile error (minimal insert missing the new field) |
+| Column type changed (e.g. `uuid` → `text`) | TypeScript compile error on the typed constant |
+| Required column accidentally given `.default()` | Zod no longer reports it as required (test catches the gap) |
+
+Test file: `lib/db/test/schema-smoke.test.ts`
+
+---
+
 ## Step 1 — Schema diff review
 
 Run the Drizzle push in dry-run mode to preview what the migration would do:

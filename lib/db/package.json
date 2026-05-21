@@ -11,7 +11,9 @@
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck:tests": "tsc --noEmit --project tsconfig.test.json",
+    "validate": "pnpm run typecheck:tests && vitest run test/schema-smoke.test.ts"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",
