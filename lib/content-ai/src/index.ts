@@ -21,8 +21,11 @@ export {
 export {
   getCachedPage,
   prefetchPages,
+  recordPrefetchStatus,
   runStage,
   STAGE_KEYS,
   STAGE_LABELS,
   type StageKey,
+  type PageFetchResult,
+  type PrefetchSummary,
 } from "./research-stages.js";

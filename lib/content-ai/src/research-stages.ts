@@ -30,8 +30,28 @@ function stripHtml(html: string): { title: string; text: string } {
   return { title, text: cleaned };
 }
 
-export async function getCachedPage(url: string): Promise<{ title: string; text: string } | null> {
-  if (!url) return null;
+export type PageFetchResult = {
+  url: string;
+  title: string;
+  text: string;
+  ok: boolean;
+  bytes: number;
+  httpStatus?: number;
+  error?: string;
+  fromCache?: boolean;
+};
+
+/**
+ * Fetch a URL (with 1h cache) and return parsed text + status metadata.
+ * Always returns a PageFetchResult — `ok: false` indicates the fetch
+ * failed, but the caller still gets the status so it can be surfaced
+ * to the user. A cache-write failure is logged but never throws away
+ * good fetched content.
+ */
+export async function getCachedPage(url: string, brandId?: string | null): Promise<PageFetchResult> {
+  if (!url) return { url: "", title: "", text: "", ok: false, bytes: 0, error: "no url" };
+
+  // 1) Cache hit
   try {
     const cachedRows = await db
       .select({ title: fetchedPagesTable.title, content: fetchedPagesTable.content, fetchedAt: fetchedPagesTable.fetchedAt })
@@ -39,37 +59,81 @@ export async function getCachedPage(url: string): Promise<{ title: string; text:
       .where(eq(fetchedPagesTable.url, url))
       .limit(1);
     const cached = cachedRows[0];
-    if (cached?.fetchedAt && Date.now() - new Date(cached.fetchedAt).getTime() < ONE_HOUR_MS) {
-      return { title: cached.title || "", text: cached.content || "" };
+    // Only treat the cache row as a hit if it actually has content — an
+    // empty/null content row (e.g. left over from a prior bug) should
+    // force a fresh fetch rather than serve nothing for an hour.
+    if (cached?.fetchedAt && cached.content && Date.now() - new Date(cached.fetchedAt).getTime() < ONE_HOUR_MS) {
+      const text = cached.content;
+      return { url, title: cached.title || "", text, ok: true, bytes: text.length, fromCache: true };
     }
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 15000);
-    let html = "";
-    try {
-      const r = await fetch(url, {
-        signal: ac.signal,
-        headers: { "user-agent": "Mozilla/5.0 (compatible; ContentForgeBot/1.0)" },
-      });
-      if (r.ok) html = await r.text();
-    } catch (e) {
-      console.warn(`[fetch] failed ${url}: ${e}`);
-    } finally {
-      clearTimeout(t);
-    }
-    if (!html) return null;
-    const parsed = stripHtml(html);
+  } catch (e) {
+    console.warn(`[cache] read error for ${url}: ${e}`);
+  }
+
+  // 2) Live fetch
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 15000);
+  let html = "";
+  let httpStatus: number | undefined;
+  let fetchError: string | undefined;
+  try {
+    const r = await fetch(url, {
+      signal: ac.signal,
+      headers: {
+        // Real-browser UA: many sites (e.g. Cloudflare-fronted, WordPress
+        // hardened with Wordfence) return 403/blank to obvious bot UAs.
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+      },
+      redirect: "follow",
+    });
+    httpStatus = r.status;
+    if (r.ok) html = await r.text();
+    else fetchError = `HTTP ${r.status}`;
+  } catch (e) {
+    fetchError = e instanceof Error ? e.message : String(e);
+    console.warn(`[fetch] failed ${url}: ${fetchError}`);
+  } finally {
+    clearTimeout(t);
+  }
+
+  if (!html) {
+    return { url, title: "", text: "", ok: false, bytes: 0, httpStatus, error: fetchError || "empty response" };
+  }
+
+  const parsed = stripHtml(html);
+
+  // 3) Cache write — best-effort. If this fails (e.g. tenant trigger
+  // requiring brand_id), we still return the fetched content so the
+  // research stages get real context.
+  try {
     await db
       .insert(fetchedPagesTable)
-      .values({ url, title: parsed.title, content: parsed.text, byteSize: parsed.text.length, fetchedAt: new Date() })
+      .values({
+        url,
+        title: parsed.title,
+        content: parsed.text,
+        byteSize: parsed.text.length,
+        fetchedAt: new Date(),
+        ...(brandId ? { brandId } : {}),
+      })
       .onConflictDoUpdate({
         target: fetchedPagesTable.url,
-        set: { title: parsed.title, content: parsed.text, byteSize: parsed.text.length, fetchedAt: new Date() },
+        set: {
+          title: parsed.title,
+          content: parsed.text,
+          byteSize: parsed.text.length,
+          fetchedAt: new Date(),
+          ...(brandId ? { brandId } : {}),
+        },
       });
-    return parsed;
   } catch (e) {
-    console.warn(`[cache] error for ${url}: ${e}`);
-    return null;
+    console.warn(`[cache] write error for ${url}: ${e}`);
   }
+
+  return { url, title: parsed.title, text: parsed.text, ok: true, bytes: parsed.text.length, httpStatus };
 }
 
 /* ───────── Anthropic call wrapper ───────── */
@@ -411,8 +475,11 @@ function projectContext(project: any): string {
 const COMMON_SEARCH_RULE =
   "HARD LIMIT: 3 web_search calls maximum. After 3 searches you MUST stop searching and call the submission tool with whatever you have. Prefer one authoritative source over multiple searches for the same fact.";
 
-function pageBlock(label: string, page: { title: string; text: string } | null): string {
-  if (!page) return `${label}: (could not fetch — work from URL alone)`;
+function pageBlock(label: string, page: PageFetchResult | null): string {
+  if (!page || !page.text) {
+    const reason = page?.error ? ` (${page.error})` : "";
+    return `${label}: (could not fetch${reason} — work from URL alone)`;
+  }
   return `${label} (pre-fetched, title="${page.title}"):\n${page.text}`;
 }
 
@@ -420,9 +487,9 @@ function buildStageInstructions(
   stage: StageKey,
   project: any,
   pages: {
-    benchmark: { title: string; text: string } | null;
-    competitor: { title: string; text: string } | null;
-    company: { title: string; text: string } | null;
+    benchmark: PageFetchResult | null;
+    competitor: PageFetchResult | null;
+    company: PageFetchResult | null;
   },
 ): string {
   const ctx = projectContext(project);
@@ -480,9 +547,9 @@ export async function runStage(args: {
   project: any;
   stage: StageKey;
   pages: {
-    benchmark: { title: string; text: string } | null;
-    competitor: { title: string; text: string } | null;
-    company: { title: string; text: string } | null;
+    benchmark: PageFetchResult | null;
+    competitor: PageFetchResult | null;
+    company: PageFetchResult | null;
   };
 }): Promise<{ ok: boolean; output?: any; error?: string }> {
   const { project, stage, pages } = args;
@@ -573,20 +640,51 @@ export async function runStage(args: {
   }
 }
 
-export async function prefetchPages(project: any): Promise<{
-  benchmark: { title: string; text: string } | null;
-  competitor: { title: string; text: string } | null;
-  company: { title: string; text: string } | null;
-}> {
+export type PrefetchSummary = {
+  benchmark: PageFetchResult | null;
+  competitor: PageFetchResult | null;
+  company: PageFetchResult | null;
+};
+
+export async function prefetchPages(project: any): Promise<PrefetchSummary> {
+  const brandId: string | null = project.brand_id ?? project.brandId ?? null;
   const companyUrl = project.company_domain
     ? project.company_domain.startsWith("http")
       ? project.company_domain
       : `https://${project.company_domain}`
     : "";
   const [benchmark, competitor, company] = await Promise.all([
-    project.benchmark_url ? getCachedPage(project.benchmark_url) : Promise.resolve(null),
-    project.competitor_url ? getCachedPage(project.competitor_url) : Promise.resolve(null),
-    companyUrl ? getCachedPage(companyUrl) : Promise.resolve(null),
+    project.benchmark_url ? getCachedPage(project.benchmark_url, brandId) : Promise.resolve(null),
+    project.competitor_url ? getCachedPage(project.competitor_url, brandId) : Promise.resolve(null),
+    companyUrl ? getCachedPage(companyUrl, brandId) : Promise.resolve(null),
   ]);
   return { benchmark, competitor, company };
+}
+
+/**
+ * Persist a per-URL summary of what prefetchPages returned into
+ * `research_briefs.sub_status._prefetch` so the UI can show the user
+ * exactly which pages were fed to the model (vs hallucinated from URL).
+ */
+export async function recordPrefetchStatus(projectId: string, pages: PrefetchSummary): Promise<void> {
+  const slim = (p: PageFetchResult | null) =>
+    p
+      ? {
+          url: p.url,
+          ok: p.ok,
+          bytes: p.bytes,
+          title: p.title || null,
+          http_status: p.httpStatus ?? null,
+          error: p.error ?? null,
+          from_cache: p.fromCache ?? false,
+        }
+      : null;
+  await mergeSubStatus(projectId, {
+    _prefetch: {
+      benchmark: slim(pages.benchmark),
+      competitor: slim(pages.competitor),
+      company: slim(pages.company),
+      recorded_at: new Date().toISOString(),
+    },
+  });
 }

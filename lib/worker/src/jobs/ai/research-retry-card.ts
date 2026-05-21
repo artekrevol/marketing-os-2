@@ -2,6 +2,7 @@ import type { JobData } from "@workspace/jobs";
 import {
   runStage,
   prefetchPages,
+  recordPrefetchStatus,
   STAGE_KEYS,
   type StageKey,
 } from "@workspace/content-ai";
@@ -44,6 +45,7 @@ export async function handleAiResearchRetryCard(
   };
 
   const pages = await prefetchPages(proj);
+  await recordPrefetchStatus(project_id, pages);
   const result = await runStage({ project: proj, stage: stage as StageKey, pages });
 
   if (!result.ok) {

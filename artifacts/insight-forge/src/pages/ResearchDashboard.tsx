@@ -309,6 +309,8 @@ export default function ResearchDashboard() {
         </button>
       </div>
 
+      <PrefetchPanel sub={sub} project={project} />
+
       <div className="space-y-3">
         <Card title="01 — Search intent" k="c1" open={open} toggle={toggle} status={sub.search_intent} onRetry={() => retryCard("search_intent")}>
           <KV label="Reader goal" value={si.reader_goal} />
@@ -506,6 +508,85 @@ export default function ResearchDashboard() {
       </div>
     </div>
     </>
+  );
+}
+
+type PrefetchStatus = {
+  url: string;
+  ok: boolean;
+  bytes: number;
+  title: string | null;
+  http_status: number | null;
+  error: string | null;
+  from_cache: boolean;
+};
+
+function PrefetchPanel({ sub, project }: { sub: any; project: any }) {
+  const pf = sub?._prefetch as
+    | { benchmark: PrefetchStatus | null; competitor: PrefetchStatus | null; company: PrefetchStatus | null }
+    | undefined;
+
+  const rows: Array<{ role: string; url: string; status: PrefetchStatus | null }> = [];
+  if (project.benchmark_url) rows.push({ role: "Benchmark blog", url: project.benchmark_url, status: pf?.benchmark ?? null });
+  if (project.competitor_url) rows.push({ role: "Competitor page", url: project.competitor_url, status: pf?.competitor ?? null });
+  if (project.company_domain) {
+    const cu = project.company_domain.startsWith("http") ? project.company_domain : `https://${project.company_domain}`;
+    rows.push({ role: "Company homepage", url: cu, status: pf?.company ?? null });
+  }
+  if (rows.length === 0) return null;
+
+  const fmtBytes = (n: number) => (n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
+
+  return (
+    <div className="mb-6 border border-ink/10 rounded-md bg-paper-2/40">
+      <div className="px-4 py-2.5 border-b border-ink/10 flex items-center justify-between">
+        <p className="text-[11px] uppercase tracking-[0.18em] text-ink-muted">Source pages fed to the model</p>
+        {!pf && <p className="text-[11px] text-ink-muted italic">Awaiting next research run…</p>}
+      </div>
+      <div className="divide-y divide-ink/5">
+        {rows.map((r) => {
+          const s = r.status;
+          const ok = s?.ok === true;
+          const pending = !s;
+          const dot = pending ? "bg-ink/20" : ok ? "bg-emerald-500" : "bg-rose-500";
+          const detail = pending
+            ? "not yet fetched"
+            : ok
+              ? `${fmtBytes(s!.bytes)} of text${s!.from_cache ? " · cached" : ""}${s!.title ? ` · "${s!.title.slice(0, 80)}"` : ""}`
+              : s!.http_status
+                ? `HTTP ${s!.http_status}${s!.error && !s!.error.startsWith("HTTP") ? ` · ${s!.error}` : ""}`
+                : s!.error || "fetch failed";
+          return (
+            <div key={r.role} className="px-4 py-2.5 flex items-start gap-3 text-xs">
+              <span className={`mt-1.5 inline-block h-2 w-2 rounded-full ${dot} shrink-0`} aria-hidden />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-ink">{r.role}</span>
+                  <a
+                    href={r.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-ink-muted hover:text-ink truncate underline decoration-dotted underline-offset-2"
+                    title={r.url}
+                  >
+                    {r.url}
+                  </a>
+                </div>
+                <p className={`mt-0.5 ${ok ? "text-ink-muted" : pending ? "text-ink-muted italic" : "text-rose-600"}`}>
+                  {ok ? "✓ " : pending ? "" : "✗ "}
+                  {detail}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {pf && rows.some((r) => r.status && !r.status.ok) && (
+        <div className="px-4 py-2 border-t border-ink/10 text-[11px] text-ink-muted">
+          Any source marked ✗ was unreachable — those cards rely on the URL slug alone and may contain placeholders.
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -2,6 +2,7 @@ import type { JobData } from "@workspace/jobs";
 import {
   runStage,
   prefetchPages,
+  recordPrefetchStatus,
   STAGE_KEYS,
   STAGE_LABELS,
 } from "@workspace/content-ai";
@@ -100,7 +101,16 @@ export async function handleAiResearchGenerate(
 
   const t0 = Date.now();
   const pages = await prefetchPages(proj);
-  log.info({ ms: Date.now() - t0 }, "research-generate: prefetch done");
+  log.info(
+    {
+      ms: Date.now() - t0,
+      benchmark: pages.benchmark ? { ok: pages.benchmark.ok, bytes: pages.benchmark.bytes, http: pages.benchmark.httpStatus, error: pages.benchmark.error } : null,
+      competitor: pages.competitor ? { ok: pages.competitor.ok, bytes: pages.competitor.bytes, http: pages.competitor.httpStatus, error: pages.competitor.error } : null,
+      company: pages.company ? { ok: pages.company.ok, bytes: pages.company.bytes, http: pages.company.httpStatus, error: pages.company.error } : null,
+    },
+    "research-generate: prefetch done",
+  );
+  await recordPrefetchStatus(project_id, pages);
 
   const results = await Promise.allSettled(
     STAGE_KEYS.map((stage) => runStage({ project: proj, stage, pages })),
