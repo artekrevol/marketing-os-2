@@ -155,13 +155,35 @@ router.get("/playbook", async (_req, res, next) => {
 
     if (pb.length === 0) return void res.json(null);
 
+    const row = pb[0]!;
+
     const sections = await db
       .select()
       .from(playbookSectionsTable)
-      .where(eq(playbookSectionsTable.version, pb[0]!.version))
+      .where(eq(playbookSectionsTable.version, row.version))
       .orderBy(asc(playbookSectionsTable.sectionNumber));
 
-    res.json({ ...pb[0], sections });
+    // Serialize to snake_case so the frontend (which predates OpenAPI codegen
+    // for this endpoint) can read content_markdown, uploaded_at, etc. directly.
+    res.json({
+      id: row.id,
+      version: row.version,
+      content_markdown: row.contentMarkdown,
+      source_filename: row.sourceFilename,
+      uploaded_by: row.uploadedBy,
+      uploaded_at: row.uploadedAt,
+      created_at: row.createdAt,
+      sections: sections.map((s) => ({
+        id: s.id,
+        version: s.version,
+        section_number: s.sectionNumber,
+        section_title: s.sectionTitle,
+        section_content: s.sectionContent,
+        section_token_estimate: s.sectionTokenEstimate,
+        always_include: s.alwaysInclude,
+        created_at: s.createdAt,
+      })),
+    });
   } catch (err) {
     next(err);
   }
