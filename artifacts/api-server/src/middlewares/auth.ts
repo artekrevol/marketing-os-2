@@ -35,6 +35,18 @@ function seedAdminEmails(): Set<string> {
 }
 
 /**
+ * Returns the set of Clerk user IDs that are unconditionally admin.
+ * Sourced from SEED_ADMIN_USER_IDS (comma-separated).
+ * More reliable than email matching: user IDs are immutable, never null,
+ * and don't depend on Clerk email resolution succeeding.
+ * Example: SEED_ADMIN_USER_IDS=user_abc123,user_xyz456
+ */
+function seedAdminUserIds(): Set<string> {
+  const raw = process.env["SEED_ADMIN_USER_IDS"] ?? "";
+  return new Set(raw.split(",").map((id) => id.trim()).filter(Boolean));
+}
+
+/**
  * Fetches the primary email for a Clerk user via the backend API.
  * Falls back to null if the call fails (e.g. network, wrong key).
  * Used because Replit-managed Clerk does not include email in session claims
@@ -65,7 +77,9 @@ async function ensureUserProfile(
   email: string | null,
 ): Promise<{ isAdmin: boolean }> {
   const admins = seedAdminEmails();
-  const isSeedAdmin = !!email && admins.has(email.toLowerCase());
+  const adminIds = seedAdminUserIds();
+  const isSeedAdmin =
+    adminIds.has(userId) || (!!email && admins.has(email.toLowerCase()));
 
   const rows = await db
     .select({ role: userProfilesTable.role, email: userProfilesTable.email })

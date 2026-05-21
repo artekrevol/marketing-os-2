@@ -139,3 +139,4 @@ VITE_SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 VITE_SUPABASE_PROJECT_ID = "duqpsdhrttzdzjlhnubj"
 SUPABASE_URL = "https://duqpsdhrttzdzjlhnubj.supabase.co"
 SEED_ADMIN_EMAILS = "abeer@tekrevol.com,rabia.mahmood@tekrevol.com"
+SEED_ADMIN_USER_IDS = "user_3DxcxlhKpZC1QG0aZhP4eYa01OS"
