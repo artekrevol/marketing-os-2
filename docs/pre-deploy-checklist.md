@@ -52,8 +52,8 @@ Review every generated SQL statement:
 
 | SQL pattern | Required action |
 |---|---|
-| `ALTER TABLE … ADD COLUMN … NOT NULL` | Confirm the inserting route always supplies that column. If it can be missing, add a default or drop the NOT NULL via a boot migration. |
-| `ALTER TABLE … DROP NOT NULL` | Add an idempotent boot migration in `artifacts/api-server/src/index.ts` (see existing `runBootMigrations()` examples). |
+| `ALTER TABLE … ADD COLUMN … NOT NULL` | Confirm the inserting route always supplies that column. If it can be missing, add a `.default(...)` in the Drizzle schema or fix the route to supply it. Do not add boot patches. |
+| `ALTER TABLE … DROP NOT NULL` | Fix in the Drizzle schema (`lib/db/src/schema/*.ts`) and apply via `pnpm --filter @workspace/db run push`. Do NOT add boot patches in `artifacts/api-server/src/index.ts` — the only allowed exception is `bootstrapSchema()` for the `session` table + `password_hash` column, and it must not be extended. |
 | `ALTER TABLE … ALTER COLUMN … TYPE …` | Check every route that reads or writes that column; handle both old and new types for the rolling deploy window. |
 | `DROP COLUMN` | Check all routes; never drop a column used by a live frontend without a code-first deploy that stops reading it. |
 
@@ -110,18 +110,20 @@ For each hit, confirm the consuming frontend reads the right field names:
 
 ---
 
-## Step 4 — Boot migration check
+## Step 4 — Schema bootstrap & migration runner check
 
-Open `artifacts/api-server/src/index.ts` and read `runBootMigrations()`.
+Drizzle is the single source of truth for schema. The old `runBootMigrations()` boot-patch function has been removed; schema changes belong in `lib/db/src/schema/*.ts` and are applied via `pnpm --filter @workspace/db run push`.
 
-For any NOT NULL constraint that exists in production but is absent (or wrong) in the Drizzle schema, an idempotent SQL snippet must be present here. Current boot migrations:
+The only remaining runtime safety net is `bootstrapSchema()` in `artifacts/api-server/src/index.ts`, which ensures two objects exist on a fresh DB before the server accepts traffic:
 
-- `playbook.brand_id` → nullable (idempotent `ALTER TABLE … ALTER COLUMN … DROP NOT NULL IF EXISTS`)
-- `playbook_sections.brand_id` → nullable
+- `session` table (express-session storage)
+- `user_profiles.password_hash` column (local-admin login)
 
-If you add a new column with a NOT NULL constraint to Drizzle that doesn't have a matching constraint in production, either:
-- Add a boot migration to add the constraint, or
-- Confirm the column already exists as NOT NULL in production from a previous migration
+**Do not extend this list.** Until a deploy-time migration runner is wired in (tracked as a follow-up task), any new schema additions must be applied manually with `pnpm --filter @workspace/db run push` against production before the deploy.
+
+Before publishing, confirm:
+- All schema changes have been applied to the production DB (run `pnpm --filter @workspace/db run push` against `DATABASE_URL` pointing to prod, then verify with the column queries in Step 2)
+- `bootstrapSchema()` has not grown new statements
 
 ---
 
@@ -160,8 +162,8 @@ invalid input syntax
 A clean boot looks like:
 
 ```
-boot-migration: playbook.brand_id is now nullable
-boot-migration: playbook_sections.brand_id is now nullable
+boot-schema: session table + password_hash column ensured
+boot-migration: all seed brands already present
 Server listening  port=8080
 ```
 
@@ -175,5 +177,5 @@ These mismatches are intentional — do not "fix" them by pushing the Drizzle sc
 
 | Table | Column | Drizzle | Production | Reason |
 |---|---|---|---|---|
-| `playbook` | `brand_id` | nullable | nullable (was NOT NULL, boot migration dropped it) | Playbooks are global, not brand-scoped |
+| `playbook` | `brand_id` | nullable | nullable | Playbooks are global, not brand-scoped |
 | `playbook_sections` | `brand_id` | nullable | nullable | Same as above |

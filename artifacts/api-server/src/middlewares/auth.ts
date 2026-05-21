@@ -1,6 +1,6 @@
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler } from "express";
 import { db } from "@workspace/db";
-import { userProfilesTable } from "@workspace/db";
+import { userProfilesTable, projectsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 export interface AuthContext {
@@ -99,6 +99,101 @@ export const requireAuth: RequestHandler = async (req, res, next) => {
     req.auth = { userId, email, isAdmin };
     next();
   } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Brand-access authorization helpers.
+ *
+ * `requireAuth` only verifies the caller is logged in. These helpers add
+ * the second layer: verify the caller (a) is an admin, or (b) has the
+ * project/brand in their `user_profiles.brand_access` array.
+ *
+ * Use `assertBrandAccessForProject(req, projectId)` inside any route
+ * handler that takes a `:id` (project id) param and reads or writes
+ * project-scoped data. Returns the resolved `brandId` on success, or
+ * throws a `BrandAccessError` that the router translates to 403/404.
+ */
+export class BrandAccessError extends Error {
+  constructor(public readonly status: 403 | 404, message: string) {
+    super(message);
+  }
+}
+
+async function userHasBrandAccess(userId: string, brandId: string): Promise<boolean> {
+  const rows = await db
+    .select({ brandAccess: userProfilesTable.brandAccess })
+    .from(userProfilesTable)
+    .where(eq(userProfilesTable.userId, userId))
+    .limit(1);
+  return (rows[0]?.brandAccess ?? []).includes(brandId);
+}
+
+/**
+ * Resolve a project's brand and confirm the authenticated user may act
+ * on it. Throws BrandAccessError(404) if the project is missing,
+ * BrandAccessError(403) if the user is not an admin and lacks brand_access.
+ */
+export async function assertBrandAccessForProject(
+  req: Request,
+  projectId: string,
+): Promise<string> {
+  const auth = req.auth;
+  if (!auth) {
+    throw new BrandAccessError(403, "unauthenticated");
+  }
+  const rows = await db
+    .select({ brandId: projectsTable.brandId })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, projectId))
+    .limit(1);
+  const brandId = rows[0]?.brandId;
+  if (!brandId) {
+    throw new BrandAccessError(404, "project not found");
+  }
+  if (!auth.isAdmin && !(await userHasBrandAccess(auth.userId, brandId))) {
+    throw new BrandAccessError(403, "forbidden");
+  }
+  return brandId;
+}
+
+/**
+ * Confirm the authenticated user may act on a given brand directly.
+ * Used by routes that take a brandId from the query/body (e.g.
+ * GET /api/projects?brandId=…) rather than via a project lookup.
+ */
+export async function assertBrandAccess(
+  req: Request,
+  brandId: string,
+): Promise<void> {
+  const auth = req.auth;
+  if (!auth) throw new BrandAccessError(403, "unauthenticated");
+  if (!auth.isAdmin && !(await userHasBrandAccess(auth.userId, brandId))) {
+    throw new BrandAccessError(403, "forbidden");
+  }
+}
+
+/**
+ * Express middleware: read `project_id` from the request body and verify
+ * the authenticated caller has brand-access for that project (or is an
+ * admin). Use on any project-mutating route that takes `project_id` in
+ * the body — most `/api/ai/*` endpoints. Mounts after `requireAuth`.
+ */
+export const requireProjectAccess: RequestHandler = async (req, res, next) => {
+  try {
+    const projectId = (req.body as { project_id?: unknown })?.project_id;
+    if (typeof projectId !== "string" || !projectId) {
+      res.status(400).json({ error: "project_id required" });
+      return;
+    }
+    await assertBrandAccessForProject(req, projectId);
+    next();
+  } catch (err) {
+    if (err instanceof BrandAccessError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 };

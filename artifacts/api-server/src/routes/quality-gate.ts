@@ -26,7 +26,7 @@ async function callerCanReview(userId: string, isAdmin: boolean): Promise<boolea
   try {
     const result = (await db.execute(
       sql`select 1 from public.user_profiles
-          where user_id = ${userId}::uuid
+          where user_id = ${userId}
             and role in ('admin','reviewer')
           limit 1`,
     )) as unknown as { rows?: unknown[] } | unknown[];

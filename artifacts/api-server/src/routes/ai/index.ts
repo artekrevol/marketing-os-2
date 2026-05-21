@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth, requireAdmin } from "../../middlewares/auth.js";
+import { requireAuth, requireAdmin, requireProjectAccess } from "../../middlewares/auth.js";
 import { getQueue } from "@workspace/jobs";
 import {
   buildRoutedSystem,
@@ -56,7 +56,7 @@ async function callAnthropicRaw(body: Record<string, unknown>): Promise<any> {
  * POST /api/ai/propose-brief
  * Enqueues the brief proposal job and returns 202 immediately.
  * ───────────────────────────────────────────────────────────── */
-router.post("/propose-brief", requireAuth, async (req, res) => {
+router.post("/propose-brief", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
@@ -90,7 +90,7 @@ router.post("/propose-brief", requireAuth, async (req, res) => {
  * POST /api/ai/research-generate
  * Enqueues the full 7-stage research run. Returns 200 immediately.
  * ───────────────────────────────────────────────────────────── */
-router.post("/research-generate", requireAuth, async (req, res) => {
+router.post("/research-generate", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
@@ -111,7 +111,7 @@ router.post("/research-generate", requireAuth, async (req, res) => {
  * POST /api/ai/research-retry-card
  * Enqueues a single-stage retry. Returns 200 immediately.
  * ───────────────────────────────────────────────────────────── */
-router.post("/research-retry-card", requireAuth, async (req, res) => {
+router.post("/research-retry-card", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id, stage } = req.body as { project_id?: string; stage?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
@@ -173,7 +173,7 @@ const OUTLINE_TOOL = {
   },
 };
 
-router.post("/outline-generate", requireAuth, async (req, res) => {
+router.post("/outline-generate", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
@@ -402,7 +402,7 @@ function enforceCitationWhitelist(text: string, hosts: Set<string>): { text: str
   return { text: out, stripped };
 }
 
-router.post("/draft-section", requireAuth, async (req, res) => {
+router.post("/draft-section", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id, section_id, revision_instruction } = req.body as {
       project_id?: string; section_id?: string; revision_instruction?: string;
@@ -620,7 +620,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/interview-step
  * ───────────────────────────────────────────────────────────── */
-router.post("/interview-step", requireAuth, async (req, res) => {
+router.post("/interview-step", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id, section_id, last_answer } = req.body as {
       project_id?: string; section_id?: string; last_answer?: string;
@@ -698,7 +698,7 @@ const BANNED_PHRASES = [
   "delve", "navigate the landscape", "game-changer", "unlock the power",
 ];
 
-router.post("/final-stitch", requireAuth, async (req, res) => {
+router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }

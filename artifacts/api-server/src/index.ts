@@ -5,9 +5,47 @@ import { sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
 /**
+ * Boot-time schema bootstrap — narrow, idempotent safety net.
+ *
+ * Drizzle owns schema definition (`lib/db/src/schema/*.ts`), but this
+ * project does not yet wire `drizzle-kit generate` + a migration runner
+ * into the deploy pipeline. Until that lands, this helper guarantees the
+ * two objects the API server *requires* to accept its first request
+ * exist on a fresh database:
+ *   - the `session` table (express-session storage)
+ *   - the `user_profiles.password_hash` column (local-admin login)
+ *
+ * Do NOT extend this list. New schema additions belong in proper
+ * Drizzle migrations, not here. Tracked: follow-up "Run database schema
+ * updates automatically on every deploy".
+ */
+async function bootstrapSchema(): Promise<void> {
+  try {
+    await db.execute(
+      sql`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS password_hash text`,
+    );
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "session" (
+        "sid"    varchar      NOT NULL,
+        "sess"   json         NOT NULL,
+        "expire" timestamp(6) NOT NULL,
+        CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
+      )
+    `);
+    await db.execute(
+      sql`CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")`,
+    );
+    logger.info("boot-schema: session table + password_hash column ensured");
+  } catch (err: unknown) {
+    logger.error({ err }, "boot-schema: failed to ensure required objects");
+    throw err;
+  }
+}
+
+/**
  * Boot-time data seeding (admin users, baseline brands, default QA checks).
- * Schema is owned by Drizzle — schema patches belong in `lib/db/drizzle/`
- * migrations, not here.
+ * Schema is owned by Drizzle — schema patches belong in proper migrations,
+ * not here. The narrow exception is `bootstrapSchema()` above.
  */
 async function runBootSeeds(): Promise<void> {
   const adminPassword = process.env["ADMIN_PASSWORD"];
@@ -157,6 +195,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+await bootstrapSchema();
 await runBootSeeds();
 
 const server = app.listen(port, (err) => {

@@ -205,7 +205,7 @@ export async function callerHasBrandAccess(brandId: string, userId: string): Pro
   const { db } = await import("@workspace/db");
   const result = await db.execute(
     sql`select 1 from public.user_profiles
-        where user_id = ${userId}::uuid
+        where user_id = ${userId}
           and (${brandId}::uuid = any(brand_access) or role = 'admin')
         limit 1`,
   );
