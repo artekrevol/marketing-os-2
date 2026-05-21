@@ -9,7 +9,7 @@ export default function Auth() {
           <NotebookPen className="h-5 w-5 text-accent" strokeWidth={1.75} />
           <span className="font-serif text-2xl tracking-tight">ContentForge</span>
         </div>
-        <SignIn />
+        <SignIn routing="path" path="/auth" />
       </div>
     </div>
   );

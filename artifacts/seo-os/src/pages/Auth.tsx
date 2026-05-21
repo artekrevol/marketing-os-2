@@ -12,7 +12,7 @@ export default function Auth() {
         <p className="text-[11px] uppercase tracking-widest text-ink-muted mb-4 text-center">
           Quality Gate sign-in
         </p>
-        <SignIn />
+        <SignIn routing="hash" />
       </div>
     </div>
   );

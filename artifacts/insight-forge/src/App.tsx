@@ -38,6 +38,10 @@ function ClerkWithRouter({ children }: { children: React.ReactNode }) {
     <ClerkProvider
       publishableKey={clerkPubKey}
       proxyUrl={clerkProxyUrl}
+      signInUrl="/auth"
+      signUpUrl="/auth"
+      signInFallbackRedirectUrl="/projects"
+      signUpFallbackRedirectUrl="/projects"
       routerPush={(to) => navigate(to)}
       routerReplace={(to) => navigate(to, { replace: true })}
     >

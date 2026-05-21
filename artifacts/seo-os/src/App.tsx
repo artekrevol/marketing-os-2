@@ -17,6 +17,8 @@ const clerkPubKey = publishableKeyFromHost(
   import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
 );
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+// Strip trailing slash so signInUrl="/seo-os/auth" is always valid
+const appBase = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function Routed() {
   return (
@@ -39,6 +41,10 @@ function ClerkWithWouter({ children }: { children: React.ReactNode }) {
     <ClerkProvider
       publishableKey={clerkPubKey}
       proxyUrl={clerkProxyUrl}
+      signInUrl={`${appBase}/auth`}
+      signUpUrl={`${appBase}/auth`}
+      signInFallbackRedirectUrl={`${appBase}/quality-gate`}
+      signUpFallbackRedirectUrl={`${appBase}/quality-gate`}
       routerPush={(to) => navigate(to)}
       routerReplace={(to) => navigate(to)}
     >
