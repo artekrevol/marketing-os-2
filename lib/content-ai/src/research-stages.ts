@@ -1,5 +1,5 @@
 import { db, fetchedPagesTable, researchBriefsTable, proofPointsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { buildRoutedSystem } from "./playbook.js";
 import { logUsage } from "./usage.js";
 import { buildAnthropicUserId } from "./anthropic-meta.js";
@@ -451,21 +451,28 @@ function buildStageInstructions(
 }
 
 /**
- * Read-modify-write on research_briefs.sub_status JSONB.
- * Known race condition under high contention (7 parallel stages).
- * Preserved as-is per handoff doc — replace with jsonb_set() if scaling.
+ * Atomic per-key patch of research_briefs.sub_status JSONB using jsonb_set
+ * in a single UPDATE. The previous read-modify-write version suffered from
+ * lost updates when multiple of the 7 parallel stages mutated sub_status
+ * concurrently (a stage could finish, write "done", then a stale snapshot
+ * from another stage would overwrite it back to "running"). Postgres takes
+ * a row lock during UPDATE, so chained jsonb_set calls here serialize
+ * correctly across concurrent callers.
  */
 async function mergeSubStatus(project_id: string, patch: Record<string, any>): Promise<void> {
-  const rows = await db
-    .select({ subStatus: researchBriefsTable.subStatus })
-    .from(researchBriefsTable)
-    .where(eq(researchBriefsTable.projectId, project_id))
-    .limit(1);
-  const current = (rows[0]?.subStatus as Record<string, any>) ?? {};
-  const next = { ...current, ...patch };
+  const entries = Object.entries(patch);
+  if (entries.length === 0) return;
+
+  let expr = sql`coalesce(${researchBriefsTable.subStatus}, '{}'::jsonb)`;
+  for (const [key, value] of entries) {
+    const path = `{${key}}`;
+    const jsonVal = JSON.stringify(value);
+    expr = sql`jsonb_set(${expr}, ${path}::text[], ${jsonVal}::jsonb, true)`;
+  }
+
   await db
     .update(researchBriefsTable)
-    .set({ subStatus: next })
+    .set({ subStatus: expr })
     .where(eq(researchBriefsTable.projectId, project_id));
 }
 
