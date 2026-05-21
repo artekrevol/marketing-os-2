@@ -1,0 +1,103 @@
+SPRINT 2: Live Signals on the Drafting Page
+
+Goal: Move four quality signals from post-stitch review into the writer's
+drafting experience. Writers see drift while they write, not after.
+
+Dependencies satisfied (Sprint 1, commit 08599d8):
+- brand-voice.ts scores up to ~24K chars contiguously via chunkBody()
+- voice_flags pipeline sanitized end-to-end (REVIEW_TOOL schema +
+  sanitizeVoiceFlags() + safeText renderer)
+- writers no longer see escaped-JSON soup in voice flags
+
+PLACEMENT DECISION (fill in before dispatch):
+[TBD — Rabia design call. Options: thin band at top of active section /
+right-rail sidebar dashboard / inline highlights + status row at section
+header. Apply chosen placement uniformly across all four tasks.]
+
+Run in Plan mode. Four tasks, strictly sequential. Do not open task N+1
+until task N is merged. Each task gets its own commit + architect review.
+
+──────────────────────────────────────────────────────────────────────────
+TASK 1 — Banned-phrase highlighter (ships first, smallest scope)
+──────────────────────────────────────────────────────────────────────────
+File: artifacts/insight-forge/src/pages/DraftingInterface.tsx (+ helper)
+Behavior:
+  - As writer types, scan against the brand's banned_phrases list.
+  - Each match highlighted inline. Hover tooltip shows the suggested
+    replacement from voice_library.
+  - One-click accept applies the replacement.
+  - Use the freshly-sanitized voice_flags pipeline. Do NOT re-implement
+    detection logic.
+Acceptance:
+  - Writer can type 'leverage our cutting-edge solutions', see live
+    highlight, hover for replacement, click to apply.
+  - No screen flicker on rapid typing.
+  - No false positives from punctuation/whitespace boundaries.
+
+──────────────────────────────────────────────────────────────────────────
+TASK 2 — Live originality meter
+──────────────────────────────────────────────────────────────────────────
+File: DraftingInterface.tsx + new local-heuristic helper
+Behavior:
+  - Local heuristic on keystroke (debounce 300ms): sentence-length
+    variance, n-gram repetition, transition-phrase density. Produces a
+    quick proxy score.
+  - Originality.ai call on 5s typing-pause debounce. Reconciles the
+    local proxy.
+  - Color bands: green <15%, yellow 15-20%, red >20%.
+  - Render per chosen placement.
+Acceptance:
+  - Indicator updates within 500ms of typing pause.
+  - On save, Originality.ai reconciles the local heuristic score.
+  - Score persists across section navigation.
+  - Non-blocking — no spinner gates writing.
+
+──────────────────────────────────────────────────────────────────────────
+TASK 3 — Atomic-question coverage tracker (biggest scope; plan carefully)
+──────────────────────────────────────────────────────────────────────────
+File: DraftingInterface.tsx sidebar + new check at
+      lib/worker/src/jobs/content/checks/atomic-coverage.ts
+Behavior:
+  - Sidebar lists every atomic_question from the locked brief.
+  - Each is a checkbox auto-ticked when a paragraph in the draft
+    answers it.
+  - Verifier: cosine-sim between question embedding and paragraph
+    embeddings (start threshold 0.65), followed by LLM verify pass
+    on ambiguous matches (0.50-0.75 band).
+  - Re-runs on section approve, not on every keystroke.
+Acceptance:
+  - Draft answering 10 of 12 brief questions shows 10/12 in sidebar
+    with the 2 unanswered marked red.
+  - Click an unanswered question → "no paragraph in your draft
+    answers this" surface in the editor.
+  - False-positive rate <10% audited on first 20 real drafts.
+
+──────────────────────────────────────────────────────────────────────────
+TASK 4 — Live voice-match per section (ships last; calibration-heavy)
+──────────────────────────────────────────────────────────────────────────
+File: DraftingInterface.tsx + reuse runBrandVoiceCheck from Sprint 1
+Behavior:
+  - Each section header shows current voice-match score.
+  - Score updates on section approve (not keystroke — too expensive).
+  - Score below threshold (default 70 for TekRevol) surfaces a "make
+    this sound more like us" assist button.
+  - Assist re-runs the section through the AI with voice_library
+    exemplars in the prompt.
+Acceptance:
+  - Per-section score visible on every approved section.
+  - Score persists across navigation.
+  - Re-assist button works one-click.
+  - Calibration session scheduled with Rabia after first 5 drafts
+    have used it.
+
+──────────────────────────────────────────────────────────────────────────
+SPRINT DEFINITION OF DONE
+──────────────────────────────────────────────────────────────────────────
+- Writer drafting a TekRevol piece sees all four signals without
+  leaving the section they're working on.
+- Dismissing a flag on any signal feeds back into voice_library so
+  the system stops repeating itself.
+- No regression on existing drafting workflow (revise-with-instructions,
+  draft-all, section approve, brief checklist).
+- All four tasks merged, smoke-tested on a real draft, architect-reviewed.
+- Stale-validator-verdict bug from Sprint 1 to be raised separately.
