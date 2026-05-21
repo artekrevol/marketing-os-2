@@ -6,6 +6,7 @@ export const playbookTable = pgTable("playbook", {
   contentMarkdown: text("content_markdown").notNull().default(""),
   sourceFilename: text("source_filename"),
   uploadedBy: text("uploaded_by"),
+  brandId: uuid("brand_id"),
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -18,6 +19,7 @@ export const playbookSectionsTable = pgTable("playbook_sections", {
   sectionContent: text("section_content").notNull(),
   sectionTokenEstimate: integer("section_token_estimate").notNull().default(0),
   alwaysInclude: boolean("always_include").notNull().default(false),
+  brandId: uuid("brand_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
