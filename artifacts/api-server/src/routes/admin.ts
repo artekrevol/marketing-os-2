@@ -104,8 +104,19 @@ router.get("/dashboard", async (_req, res, next) => {
 
     const ids = projects.map((p) => p.id);
 
+    const voiceMapped = voiceRows.map((v) => ({
+      id: v.id,
+      project_id: v.projectId,
+      brand_id: v.brandId,
+      writer_id: v.writerId,
+      original_ai_text: v.originalAiText,
+      edited_human_text: v.editedHumanText,
+      edit_type: v.editType,
+      captured_at: v.capturedAt,
+    }));
+
     if (ids.length === 0) {
-      return void res.json({ rows: [], voice: voiceRows });
+      return void res.json({ rows: [], voice: voiceMapped });
     }
 
     const [scores, drafts, proofs] = await Promise.all([
@@ -165,17 +176,6 @@ router.get("/dashboard", async (_req, res, next) => {
           : null,
       };
     });
-
-    const voiceMapped = voiceRows.map((v) => ({
-      id: v.id,
-      project_id: v.projectId,
-      brand_id: v.brandId,
-      writer_id: v.writerId,
-      original_ai_text: v.originalAiText,
-      edited_human_text: v.editedHumanText,
-      edit_type: v.editType,
-      captured_at: v.capturedAt,
-    }));
 
     res.json({ rows: enriched, voice: voiceMapped });
   } catch (err) {

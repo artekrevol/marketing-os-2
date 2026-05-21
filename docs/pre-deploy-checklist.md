@@ -70,8 +70,7 @@ For each hit, confirm the consuming frontend reads the right field names:
 - `GET /api/admin/playbook` → explicit snake_case mapping ✓
 - `GET /api/admin/activity` → explicit snake_case mapping ✓
 - `GET /api/admin/usage` → explicit snake_case mapping ✓
-- `GET /api/admin/dashboard` → **spreads raw Drizzle rows (camelCase)** — known issue tracked in Task #22
-- `GET /api/me` → returns `brands` array as raw Drizzle rows (camelCase `primaryDomain`, `voiceProfile`, etc.)
+- `GET /api/admin/dashboard` → explicit snake_case mapping via `voiceMapped` + per-field project/scores mapping ✓
 
 ---
 
