@@ -12,10 +12,12 @@ import auditRouter from "./audit.js";
 import adminRouter from "./admin.js";
 import voiceLibraryRouter from "./voice-library.js";
 import pageEventsRouter from "./page-events.js";
+import authRouter from "./auth.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use("/auth", authRouter);
 router.use("/admin/system", adminSystemRouter);
 router.use("/admin", adminRouter);
 router.use("/quality-gate", qualityGateRouter);

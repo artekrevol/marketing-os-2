@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useLocation, useParams } from "react-router-dom";
-import { useUser } from "@clerk/react";
+import { useAuth } from "./useAuth";
 
 /**
  * Tracks how long the signed-in user spends on each route, plus best-effort
@@ -9,7 +9,7 @@ import { useUser } from "@clerk/react";
 export function usePageTracker() {
   const loc = useLocation();
   const params = useParams();
-  const { user } = useUser();
+  const { user } = useAuth();
   const startRef = useRef<number>(Date.now());
   const pathRef = useRef<string>(loc.pathname);
   const projectRef = useRef<string | null>((params as any).id || null);
@@ -18,7 +18,7 @@ export function usePageTracker() {
 
   useEffect(() => {
     if (user) {
-      userRef.current = { id: user.id, email: user.primaryEmailAddress?.emailAddress ?? null };
+      userRef.current = { id: user.id, email: user.email };
     } else {
       userRef.current = null;
     }

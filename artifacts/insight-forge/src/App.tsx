@@ -1,10 +1,9 @@
-import { ClerkProvider } from "@clerk/react";
-import { publishableKeyFromHost } from "@clerk/react/internal";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider } from "@/lib/useAuth";
 import AppShell from "./components/AppShell";
 import Hub from "./pages/Hub.tsx";
 import Index from "./pages/Index.tsx";
@@ -26,43 +25,17 @@ import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
 
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
-
-function ClerkWithRouter({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigate();
-  return (
-    <ClerkProvider
-      publishableKey={clerkPubKey}
-      proxyUrl={clerkProxyUrl}
-      signInUrl="/auth"
-      signUpUrl="/auth"
-      signInFallbackRedirectUrl="/projects"
-      signUpFallbackRedirectUrl="/projects"
-      routerPush={(to) => navigate(to)}
-      routerReplace={(to) => navigate(to, { replace: true })}
-    >
-      {children}
-    </ClerkProvider>
-  );
-}
-
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner />
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <ClerkWithRouter>
+        <AuthProvider>
           <Routes>
-            {/* Standalone pages — no sidebar chrome */}
             <Route path="/" element={<Hub />} />
             <Route path="/auth" element={<Auth />} />
 
-            {/* ContentForge app — sidebar chrome via AppShell */}
             <Route element={<AppShell />}>
               <Route path="/projects" element={<Index />} />
               <Route path="/new" element={<NewProject />} />
@@ -84,7 +57,7 @@ const App = () => (
               <Route path="*" element={<NotFound />} />
             </Route>
           </Routes>
-        </ClerkWithRouter>
+        </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

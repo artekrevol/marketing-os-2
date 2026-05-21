@@ -1,24 +1,22 @@
 import { useNavigate } from "react-router-dom";
-import { useUser, useClerk } from "@clerk/react";
+import { useAuth } from "@/lib/useAuth";
 import { NotebookPen, ShieldCheck, LogOut, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { useEffect } from "react";
 
 export default function Hub() {
   const nav = useNavigate();
-  const { user, isLoaded } = useUser();
-  const { signOut } = useClerk();
+  const { user, isLoaded, isSignedIn, signOut } = useAuth();
 
   useEffect(() => {
-    if (isLoaded && !user) {
+    if (isLoaded && !isSignedIn) {
       nav("/auth", { replace: true });
     }
-  }, [isLoaded, user, nav]);
+  }, [isLoaded, isSignedIn, nav]);
 
   const handleSignOut = async () => {
     await signOut();
     toast.success("Signed out");
-    nav("/auth", { replace: true });
   };
 
   if (!isLoaded) {
@@ -30,8 +28,6 @@ export default function Hub() {
   }
 
   if (!user) return null;
-
-  const email = user.primaryEmailAddress?.emailAddress?.toLowerCase() ?? "";
 
   return (
     <div className="min-h-screen bg-paper text-ink flex flex-col">
@@ -46,7 +42,7 @@ export default function Hub() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-xs text-ink-muted font-mono hidden sm:block">{email}</span>
+          <span className="text-xs text-ink-muted font-mono hidden sm:block">{user.email}</span>
           <button
             onClick={handleSignOut}
             className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink transition-colors"

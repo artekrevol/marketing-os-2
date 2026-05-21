@@ -2,52 +2,36 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { ShieldCheck, Building2, ChevronDown, LogOut, LayoutDashboard } from "lucide-react";
 import { toast } from "sonner";
-import { useUser, useClerk } from "@clerk/react";
+import { useAuth } from "@/lib/useAuth";
 import { BrandProvider, useActiveBrand } from "@/lib/brands";
 
 type AuthState = "loading" | "in" | "out" | "blocked" | "writer";
 
-/**
- * Roles allowed to enter SEO OS. Writers are redirected back to ContentForge.
- * Admin gate on mutations (approve/reject) is enforced server-side.
- */
 const SEO_OS_ROLES = new Set(["admin", "lead", "reviewer", "outreach"]);
 
 export default function AppShell({ children }: { children: ReactNode }) {
-  const { user, isLoaded, isSignedIn } = useUser();
-  const { signOut: clerkSignOut } = useClerk();
+  const { user, isLoaded, isSignedIn, signOut: authSignOut } = useAuth();
   const [authState, setAuthState] = useState<AuthState>("loading");
-  const [email, setEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [loc, setLoc] = useLocation();
+
+  const email = user?.email ?? null;
+  const userId = user?.id ?? null;
+  const isAdmin = user?.isAdmin ?? false;
 
   useEffect(() => {
     if (!isLoaded) return;
     if (!isSignedIn) {
-      setEmail(null);
-      setUserId(null);
-      setIsAdmin(false);
       setAuthState("out");
       return;
     }
-    const e = user.primaryEmailAddress?.emailAddress ?? null;
-    setEmail(e);
-    setUserId(user.id);
-    fetch("/api/me", { credentials: "include" })
-      .then((r) => r.json())
-      .then((data: { isAdmin: boolean; role: string }) => {
-        const admin = data.isAdmin;
-        setIsAdmin(admin);
-        if (admin || SEO_OS_ROLES.has(data.role)) {
-          setAuthState("in");
-        } else if (data.role === "writer") {
-          setAuthState("writer");
-        } else {
-          setAuthState("blocked");
-        }
-      })
-      .catch(() => setAuthState("blocked"));
+    const role = user!.role;
+    if (user!.isAdmin || SEO_OS_ROLES.has(role)) {
+      setAuthState("in");
+    } else if (role === "writer") {
+      setAuthState("writer");
+    } else {
+      setAuthState("blocked");
+    }
   }, [isLoaded, isSignedIn, user]);
 
   useEffect(() => {
@@ -55,9 +39,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [authState, loc, setLoc]);
 
   const signOut = async () => {
-    await clerkSignOut();
+    await authSignOut();
     toast.success("Signed out");
-    setLoc("/auth");
   };
 
   if (authState === "loading") {

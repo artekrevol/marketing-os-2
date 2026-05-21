@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { useUser, useClerk } from "@clerk/react";
+import { useAuth } from "@/lib/useAuth";
 import { Plus, NotebookPen, LayoutGrid, LogOut, Shield, Activity, DollarSign, Building2, ChevronDown, Server, LayoutDashboard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -10,26 +10,13 @@ import { BrandProvider, useActiveBrand } from "@/lib/brands";
 
 export default function AppShell() {
   usePageTracker();
-  const { user, isLoaded, isSignedIn } = useUser();
-  const { signOut: clerkSignOut } = useClerk();
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [meLoaded, setMeLoaded] = useState(false);
+  const { user, isLoaded, isSignedIn, signOut: authSignOut } = useAuth();
   const loc = useLocation();
   const nav = useNavigate();
 
+  const isAdmin = user?.isAdmin ?? false;
+  const email = user?.email ?? null;
   const userId = user?.id ?? null;
-  const email = user?.primaryEmailAddress?.emailAddress ?? null;
-
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn) return;
-    fetch("/api/me", { credentials: "include" })
-      .then((r) => r.json())
-      .then((data: { isAdmin?: boolean }) => {
-        setIsAdmin(!!data.isAdmin);
-        setMeLoaded(true);
-      })
-      .catch(() => setMeLoaded(true));
-  }, [isLoaded, isSignedIn]);
 
   useEffect(() => {
     if (isLoaded && !isSignedIn && loc.pathname !== "/auth") {
@@ -38,12 +25,11 @@ export default function AppShell() {
   }, [isLoaded, isSignedIn, loc.pathname, nav]);
 
   const signOut = async () => {
-    await clerkSignOut();
+    await authSignOut();
     toast.success("Signed out");
-    nav("/auth", { replace: true });
   };
 
-  if (!isLoaded || (isSignedIn && !meLoaded)) {
+  if (!isLoaded) {
     return <div className="min-h-screen flex items-center justify-center bg-paper text-ink-muted text-sm">Loading…</div>;
   }
 
@@ -177,7 +163,6 @@ export default function AppShell() {
   );
 }
 
-// Project list scoped to the active brand. Polls every 30 s instead of Realtime.
 function ProjectList() {
   const { activeBrand, loading: brandLoading } = useActiveBrand();
   const [projects, setProjects] = useState<Project[]>([]);

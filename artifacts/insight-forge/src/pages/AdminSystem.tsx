@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Navigate } from "react-router-dom";
-import { useUser } from "@clerk/react";
+import { useAuth } from "@/lib/useAuth";
 import { Activity, Server, AlertTriangle, RefreshCw, Loader2, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
 
@@ -59,7 +59,7 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 }
 
 export default function AdminSystem() {
-  const { user, isLoaded } = useUser();
+  const { user, isLoaded } = useAuth();
   const [authState, setAuthState] = useState<"loading" | "ok" | "denied">("loading");
   const [freshness, setFreshness] = useState<Freshness | null>(null);
   const [queues, setQueues] = useState<QueueCount[]>([]);

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useUser } from "@clerk/react";
 import { Download, ArrowRight, Upload, BookOpen, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { aiClient } from "@/lib/ai-client";
+import { useAuth } from "@/lib/useAuth";
 
 export default function AdminDashboard() {
-  const { user } = useUser();
+  const { user } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [voice, setVoice] = useState<any[]>([]);
   const [playbook, setPlaybook] = useState<any>(null);
@@ -57,7 +57,7 @@ export default function AdminDashboard() {
       const content_base64 = btoa(binary);
       // Capture who uploaded (email — durable identifier; auth.user().id would also work
       // but email is what the admin card surfaces and what writers will recognise).
-      const uploaded_by = user?.primaryEmailAddress?.emailAddress || null;
+      const uploaded_by = user?.email || null;
       const { data, error } = await aiClient.playbookUpload(file.name, file.type, content_base64, uploaded_by);
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);

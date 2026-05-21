@@ -2,27 +2,24 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import bcrypt from "bcryptjs";
 
 /**
  * Idempotent boot-time migrations — safe to run on every start.
- * Used for schema fixes that Drizzle Kit's publish diff won't apply
- * automatically (e.g. dropping a NOT NULL constraint).
  */
 async function runBootMigrations(): Promise<void> {
   try {
-    // Make brand_id nullable on playbook (was erroneously NOT NULL in prod,
-    // preventing upload since the playbook is a global company-level document).
     await db.execute(
       sql`ALTER TABLE playbook ALTER COLUMN brand_id DROP NOT NULL`,
     );
     logger.info("boot-migration: playbook.brand_id is now nullable");
   } catch (err: unknown) {
-    // Column may not exist yet or already nullable — both are fine.
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes("does not exist") && !msg.includes("already")) {
       logger.warn({ err }, "boot-migration: playbook.brand_id — unexpected error (non-fatal)");
     }
   }
+
   try {
     await db.execute(
       sql`ALTER TABLE playbook_sections ALTER COLUMN brand_id DROP NOT NULL`,
@@ -32,6 +29,49 @@ async function runBootMigrations(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes("does not exist") && !msg.includes("already")) {
       logger.warn({ err }, "boot-migration: playbook_sections.brand_id — unexpected error (non-fatal)");
+    }
+  }
+
+  try {
+    await db.execute(
+      sql`ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS password_hash TEXT`,
+    );
+    logger.info("boot-migration: user_profiles.password_hash column ensured");
+  } catch (err: unknown) {
+    logger.warn({ err }, "boot-migration: user_profiles.password_hash — unexpected error (non-fatal)");
+  }
+
+  const adminPassword = process.env["ADMIN_PASSWORD"];
+  const seedEmails = (process.env["SEED_ADMIN_EMAILS"] ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (adminPassword && seedEmails.length > 0) {
+    const hash = await bcrypt.hash(adminPassword, 12);
+    for (const email of seedEmails) {
+      try {
+        const existing = await db.execute(
+          sql`SELECT user_id FROM user_profiles WHERE email = ${email} LIMIT 1`,
+        );
+        if (existing.rows.length > 0) {
+          const userId = (existing.rows[0] as { user_id: string }).user_id;
+          await db.execute(
+            sql`UPDATE user_profiles SET password_hash = ${hash}, role = 'admin', updated_at = now() WHERE user_id = ${userId}`,
+          );
+          logger.info(`boot-migration: seeded admin password for ${email} (existing user)`);
+        } else {
+          const userId = `local:${email}`;
+          await db.execute(
+            sql`INSERT INTO user_profiles (user_id, email, role, brand_access, password_hash, created_at, updated_at)
+                VALUES (${userId}, ${email}, 'admin', '{}', ${hash}, now(), now())
+                ON CONFLICT (user_id) DO UPDATE SET password_hash = ${hash}, role = 'admin', updated_at = now()`,
+          );
+          logger.info(`boot-migration: seeded new admin user for ${email}`);
+        }
+      } catch (err: unknown) {
+        logger.warn({ err, email }, "boot-migration: failed to seed admin password (non-fatal)");
+      }
     }
   }
 }
@@ -61,11 +101,6 @@ const server = app.listen(port, (err) => {
   logger.info({ port }, "Server listening");
 });
 
-// In production the embedded BullMQ workers start alongside the HTTP server
-// in the same process — no separate worker process or extra port needed.
-// In development the `lib/worker: BullMQ Worker` workflow runs standalone
-// so we skip embedding to avoid the pino thread-stream/ESM conflict that
-// arises when two pino instances compete for the same worker-file paths.
 if (process.env["NODE_ENV"] === "production") {
   import("@workspace/worker/embedded")
     .then(({ startEmbeddedWorkers }) => startEmbeddedWorkers())
