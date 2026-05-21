@@ -135,10 +135,49 @@ router.get("/dashboard", async (_req, res, next) => {
       const minutes = Math.round(
         (Date.now() - new Date(p.createdAt).getTime()) / 60000,
       );
-      return { ...p, scores: sc ?? null, citations: dCount, proofs: pCount, minutes };
+      return {
+        id: p.id,
+        brand_id: p.brandId,
+        topic: p.topic,
+        content_type: p.contentType,
+        mode: p.mode,
+        status: p.status,
+        current_stage: p.currentStage,
+        url: p.url,
+        keyword: p.keyword,
+        funnel_stage: p.funnelStage,
+        pod: p.pod,
+        writer_id: p.writerId,
+        created_by: p.createdBy,
+        created_at: p.createdAt,
+        updated_at: p.updatedAt,
+        citations: dCount,
+        proofs: pCount,
+        minutes,
+        scores: sc
+          ? {
+              voice_match_score: sc.voiceMatchScore,
+              originality_score: sc.originalityScore,
+              banned_phrase_count: sc.bannedPhraseCount,
+              word_count: sc.wordCount,
+              ai_citation_readiness_score: sc.aiCitationReadinessScore,
+            }
+          : null,
+      };
     });
 
-    res.json({ rows: enriched, voice: voiceRows });
+    const voiceMapped = voiceRows.map((v) => ({
+      id: v.id,
+      project_id: v.projectId,
+      brand_id: v.brandId,
+      writer_id: v.writerId,
+      original_ai_text: v.originalAiText,
+      edited_human_text: v.editedHumanText,
+      edit_type: v.editType,
+      captured_at: v.capturedAt,
+    }));
+
+    res.json({ rows: enriched, voice: voiceMapped });
   } catch (err) {
     next(err);
   }
