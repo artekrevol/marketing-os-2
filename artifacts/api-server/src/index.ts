@@ -94,6 +94,104 @@ async function runBootMigrations(): Promise<void> {
       }
     }
   }
+
+  // Seed the four baseline brand tenants. UUIDs match dev so cross-environment
+  // data references stay stable. ON CONFLICT keeps this idempotent — manual
+  // edits to brand rows in production are preserved on subsequent boots.
+  const SEED_BRANDS: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    primaryDomain: string;
+  }> = [
+    { id: "2d10bb54-ba9a-4444-8a18-a262bca9b2bc", slug: "tekrevol", name: "TekRevol", primaryDomain: "tekrevol.com" },
+    { id: "cb798bf3-9fbf-40db-a36a-0806a02205ab", slug: "claimshield", name: "ClaimShield", primaryDomain: "claimshield.io" },
+    { id: "932fc5fa-de80-4d52-8512-1aa908b8d98a", slug: "reverto", name: "Reverto", primaryDomain: "reverto.com" },
+    { id: "3a976040-dc9b-47eb-b9d8-4deb8aef2d1b", slug: "censusflow", name: "CensusFlow", primaryDomain: "censusflow.com" },
+  ];
+
+  const DEFAULT_THRESHOLDS = JSON.stringify({
+    originality_min: 0.7,
+    reading_grade_target: 9,
+  });
+
+  let seededBrandCount = 0;
+  for (const b of SEED_BRANDS) {
+    try {
+      const result = await db.execute(
+        sql`INSERT INTO brands (id, slug, name, primary_domain, voice_profile, thresholds, created_at, updated_at)
+            VALUES (${b.id}::uuid, ${b.slug}, ${b.name}, ${b.primaryDomain}, '{}'::jsonb, ${DEFAULT_THRESHOLDS}::jsonb, now(), now())
+            ON CONFLICT (id) DO NOTHING`,
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        seededBrandCount++;
+        logger.info(`boot-migration: seeded brand ${b.slug}`);
+      }
+    } catch (err: unknown) {
+      logger.warn({ err, brand: b.slug }, "boot-migration: failed to seed brand (non-fatal)");
+    }
+  }
+  if (seededBrandCount === 0) {
+    logger.info("boot-migration: all seed brands already present");
+  }
+
+  // Grant every seeded admin email full access to all seed brands, but only
+  // if their brand_access is currently empty — never clobber a manual grant.
+  if (seedEmails.length > 0) {
+    // Build a Postgres array literal: '{uuid1,uuid2,...}'. UUIDs come from a
+    // hard-coded allowlist above, so direct interpolation is safe here.
+    const allBrandsLiteral = `{${SEED_BRANDS.map((b) => b.id).join(",")}}`;
+    for (const email of seedEmails) {
+      try {
+        const result = await db.execute(
+          sql`UPDATE user_profiles
+              SET brand_access = ${allBrandsLiteral}::uuid[], updated_at = now()
+              WHERE email = ${email}
+                AND (brand_access IS NULL OR cardinality(brand_access) = 0)`,
+        );
+        if (result.rowCount && result.rowCount > 0) {
+          logger.info(`boot-migration: granted full brand access to ${email}`);
+        }
+      } catch (err: unknown) {
+        logger.warn({ err, email }, "boot-migration: failed to grant brand access (non-fatal)");
+      }
+    }
+  }
+
+  // Seed the default Quality-Gate checks for any brand that has none. Every
+  // brand needs these 4 rows for the Quality Gate workflow to evaluate drafts.
+  const DEFAULT_QA_CHECKS: Array<{
+    name: string;
+    severity: "hard" | "warn";
+    threshold: number;
+  }> = [
+    { name: "originality", severity: "hard", threshold: 0.7 },
+    { name: "brief_compliance", severity: "hard", threshold: 0.75 },
+    { name: "brand_voice", severity: "warn", threshold: 0.6 },
+    { name: "reading_level", severity: "warn", threshold: 9.0 },
+  ];
+
+  try {
+    const brandRows = await db.execute(
+      sql`SELECT id::text AS id FROM brands
+          WHERE id NOT IN (SELECT DISTINCT brand_id FROM qa_check_definitions WHERE brand_id IS NOT NULL)`,
+    );
+    for (const row of brandRows.rows as Array<{ id: string }>) {
+      for (const c of DEFAULT_QA_CHECKS) {
+        try {
+          await db.execute(
+            sql`INSERT INTO qa_check_definitions (brand_id, check_name, severity, enabled, threshold, config, created_at, updated_at)
+                VALUES (${row.id}::uuid, ${c.name}, ${c.severity}, true, ${c.threshold}, '{}'::jsonb, now(), now())`,
+          );
+        } catch (err: unknown) {
+          logger.warn({ err, brandId: row.id, check: c.name }, "boot-migration: failed to seed qa check (non-fatal)");
+        }
+      }
+      logger.info(`boot-migration: seeded default QA checks for brand ${row.id}`);
+    }
+  } catch (err: unknown) {
+    logger.warn({ err }, "boot-migration: failed to seed QA checks (non-fatal)");
+  }
 }
 
 const rawPort = process.env["PORT"];
