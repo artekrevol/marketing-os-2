@@ -14,6 +14,8 @@ import {
 } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth.js";
 import { eq, desc, gte, sql, and, count, sum, inArray, asc } from "drizzle-orm";
+import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
 
 const router = Router();
 
@@ -50,6 +52,87 @@ router.get("/users", async (_req, res, next) => {
         last_sign_in: null,
       })),
     );
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/admin/users — create a new local-auth user.
+ *
+ * Auth here is bcrypt + session (despite the @clerk/express install), so
+ * "create user" means: generate a userId, hash the password, and write a
+ * user_profiles row. The new user can log in immediately at /api/auth/login
+ * with the email + password the admin supplies. Email is unique-by-policy
+ * (login looks up by email) so we reject duplicates explicitly.
+ */
+router.post("/users", async (req, res, next) => {
+  try {
+    const body = req.body as {
+      email?: unknown;
+      password?: unknown;
+      role?: unknown;
+      pod?: unknown;
+      brand_access?: unknown;
+      display_name?: unknown;
+    };
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const role = typeof body.role === "string" ? body.role : "writer";
+    const pod = typeof body.pod === "string" && body.pod ? body.pod : null;
+    const brandAccess = Array.isArray(body.brand_access)
+      ? (body.brand_access.filter((x) => typeof x === "string") as string[])
+      : [];
+    const displayName =
+      typeof body.display_name === "string" && body.display_name.trim()
+        ? body.display_name.trim()
+        : null;
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: "valid email required" });
+      return;
+    }
+    if (password.length < 8) {
+      res.status(400).json({ error: "password must be at least 8 characters" });
+      return;
+    }
+    const allowedRoles = new Set(["admin", "editor", "writer", "strategist", "analyst"]);
+    if (!allowedRoles.has(role)) {
+      res.status(400).json({ error: "invalid role" });
+      return;
+    }
+
+    const existing = await db
+      .select({ userId: userProfilesTable.userId })
+      .from(userProfilesTable)
+      .where(eq(userProfilesTable.email, email))
+      .limit(1);
+    if (existing.length > 0) {
+      res.status(409).json({ error: "a user with that email already exists" });
+      return;
+    }
+
+    const userId = randomUUID();
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    await db.insert(userProfilesTable).values({
+      userId,
+      email,
+      passwordHash,
+      displayName,
+      role,
+      pod,
+      brandAccess: brandAccess as unknown as string[],
+    });
+
+    res.status(201).json({
+      user_id: userId,
+      email,
+      role,
+      pod,
+      brand_access: brandAccess,
+      display_name: displayName,
+    });
   } catch (err) {
     next(err);
   }

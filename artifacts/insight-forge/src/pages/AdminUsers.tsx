@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Shield, ShieldOff, Loader2, Users, Save, Pencil } from "lucide-react";
+import { Loader2, Users, Save, Pencil, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Navigate } from "react-router-dom";
 import { recordAudit } from "@/lib/audit";
@@ -32,6 +32,84 @@ export default function AdminUsers() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<{ role: RoleEnum; pod: PodEnum; brand_access: string[] } | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newUser, setNewUser] = useState<{
+    email: string;
+    password: string;
+    display_name: string;
+    role: RoleEnum;
+    pod: PodEnum;
+    brand_access: string[];
+  }>({ email: "", password: "", display_name: "", role: "writer", pod: "", brand_access: [] });
+
+  const openCreate = () => {
+    setNewUser({ email: "", password: "", display_name: "", role: "writer", pod: "", brand_access: [] });
+    setCreateOpen(true);
+  };
+  const closeCreate = () => {
+    if (creating) return;
+    setCreateOpen(false);
+  };
+  const toggleNewBrand = (id: string) => {
+    setNewUser((u) => ({
+      ...u,
+      brand_access: u.brand_access.includes(id)
+        ? u.brand_access.filter((x) => x !== id)
+        : [...u.brand_access, id],
+    }));
+  };
+  const createUser = async () => {
+    const email = newUser.email.trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error("Enter a valid email.");
+      return;
+    }
+    if (newUser.password.length < 8) {
+      toast.error("Password must be at least 8 characters.");
+      return;
+    }
+    setCreating(true);
+    try {
+      // Audit-first, same pattern as access-change edits.
+      const audit = await recordAudit("user.create", "user", email, `Created account for ${email}`, {
+        email,
+        role: newUser.role,
+        pod: newUser.pod || null,
+        brand_access: newUser.brand_access,
+      });
+      if (!audit.ok) {
+        toast.error("Audit log failed; create aborted: " + audit.error);
+        setCreating(false);
+        return;
+      }
+      const resp = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          email,
+          password: newUser.password,
+          display_name: newUser.display_name.trim() || null,
+          role: newUser.role,
+          pod: newUser.pod || null,
+          brand_access: newUser.brand_access,
+        }),
+      });
+      if (!resp.ok) {
+        const j = (await resp.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${resp.status}`);
+      }
+      toast.success(`Created ${email}`);
+      setCreateOpen(false);
+      await load();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Create failed";
+      toast.error(msg);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -130,15 +208,23 @@ export default function AdminUsers() {
 
   return (
     <div className="max-w-6xl mx-auto px-10 py-10">
-      <div className="mb-8">
-        <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">Admin</p>
-        <h1 className="font-serif text-3xl mt-1 flex items-center gap-2">
-          <Users className="h-6 w-6 text-accent" /> Users & access
-        </h1>
-        <p className="text-sm text-ink-muted mt-2 max-w-2xl">
-          Assign role, pod, and brand access. Every change is written to the audit log with a
-          required justification.
-        </p>
+      <div className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">Admin</p>
+          <h1 className="font-serif text-3xl mt-1 flex items-center gap-2">
+            <Users className="h-6 w-6 text-accent" /> Users & access
+          </h1>
+          <p className="text-sm text-ink-muted mt-2 max-w-2xl">
+            Assign role, pod, and brand access. Every change is written to the audit log with a
+            required justification.
+          </p>
+        </div>
+        <button
+          onClick={openCreate}
+          className="shrink-0 text-xs px-3 py-2 bg-ink text-paper rounded-sm hover:bg-accent inline-flex items-center gap-1.5"
+        >
+          <UserPlus className="h-3.5 w-3.5" /> Add user
+        </button>
       </div>
 
       {loading ? (
@@ -272,6 +358,145 @@ export default function AdminUsers() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {createOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center p-4"
+          onClick={closeCreate}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-background border border-rule rounded-sm shadow-xl w-full max-w-lg"
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-rule">
+              <p className="text-sm font-medium flex items-center gap-2">
+                <UserPlus className="h-4 w-4 text-accent" /> Add user
+              </p>
+              <button
+                onClick={closeCreate}
+                disabled={creating}
+                className="p-1 hover:bg-secondary rounded-sm disabled:opacity-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-widest text-ink-muted">Email</label>
+                <input
+                  type="email"
+                  value={newUser.email}
+                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                  placeholder="person@example.com"
+                  autoComplete="off"
+                  className="mt-1 w-full px-2 py-1.5 text-sm border border-rule rounded-sm bg-background"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-widest text-ink-muted">
+                  Temporary password
+                </label>
+                <input
+                  type="text"
+                  value={newUser.password}
+                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                  placeholder="At least 8 characters — share securely"
+                  autoComplete="new-password"
+                  className="mt-1 w-full px-2 py-1.5 text-sm font-mono border border-rule rounded-sm bg-background"
+                />
+                <p className="mt-1 text-[10px] text-ink-muted">
+                  Ask the user to change it on first sign-in.
+                </p>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-widest text-ink-muted">
+                  Display name (optional)
+                </label>
+                <input
+                  type="text"
+                  value={newUser.display_name}
+                  onChange={(e) => setNewUser({ ...newUser, display_name: e.target.value })}
+                  className="mt-1 w-full px-2 py-1.5 text-sm border border-rule rounded-sm bg-background"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest text-ink-muted">Role</label>
+                  <select
+                    value={newUser.role}
+                    onChange={(e) => setNewUser({ ...newUser, role: e.target.value as RoleEnum })}
+                    className="mt-1 w-full px-2 py-1.5 text-sm border border-rule rounded-sm bg-background"
+                  >
+                    {ROLES.map((r) => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest text-ink-muted">Pod</label>
+                  <select
+                    value={newUser.pod}
+                    onChange={(e) => setNewUser({ ...newUser, pod: e.target.value as PodEnum })}
+                    className="mt-1 w-full px-2 py-1.5 text-sm border border-rule rounded-sm bg-background"
+                  >
+                    {PODS.map((p) => (
+                      <option key={p || "none"} value={p}>{p || "—"}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-widest text-ink-muted">
+                  Brand access
+                </label>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {brands.length === 0 ? (
+                    <span className="text-xs text-ink-muted">No brands available.</span>
+                  ) : (
+                    brands.map((b) => {
+                      const on = newUser.brand_access.includes(b.id);
+                      return (
+                        <button
+                          key={b.id}
+                          onClick={() => toggleNewBrand(b.id)}
+                          className={`text-[10px] px-2 py-0.5 rounded-sm border ${
+                            on
+                              ? "bg-ink text-paper border-ink"
+                              : "border-rule hover:border-ink"
+                          }`}
+                        >
+                          {b.name}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-rule">
+              <button
+                onClick={closeCreate}
+                disabled={creating}
+                className="text-xs px-3 py-1.5 border border-rule rounded-sm hover:bg-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createUser}
+                disabled={creating}
+                className="text-xs px-3 py-1.5 bg-ink text-paper rounded-sm hover:bg-accent disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                {creating ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <UserPlus className="h-3 w-3" />
+                )}
+                Create user
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
