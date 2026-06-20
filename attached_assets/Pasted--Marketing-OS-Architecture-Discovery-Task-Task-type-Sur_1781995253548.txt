@@ -1,0 +1,150 @@
+# Marketing OS — Architecture Discovery Task
+
+**Task type:** Survey only. **DO NOT** modify, create, delete, or rename any file. **DO NOT** install dependencies or run migrations. **DO NOT** start the dev server. The only acceptable output is a structured report at the end of this task — see Section J. If you find yourself wanting to "fix" something you discover, note it in the report and move on.
+
+A separate dispatch is being prepared to integrate SEO Dashboard functionality (keyword research, rank tracking, competitor analysis) into Marketing OS. The author of that dispatch needs accurate, current architectural context. Your job is to gather it.
+
+---
+
+## Section A — Repo structure
+
+1. Run `ls -la` at the repo root and report the full listing.
+2. Report whether this is:
+   - a single Express + React app (monolith), OR
+   - a monorepo with workspaces (pnpm/yarn/npm workspaces), OR
+   - a monorepo with build tooling (Turborepo, Nx, Lerna).
+3. Show the root `package.json` in full.
+4. List every directory under `artifacts/` and `packages/` (if those exist). For each, show its `package.json` in full if present.
+5. For each app or package, identify in one line what it is (e.g., "writer-facing ContentForge frontend," "Express API," "shared Drizzle schema").
+
+---
+
+## Section B — Database and schema
+
+The previous architectural context for this dispatch was that the platform sat on Supabase. **That context is stale.** Do not assume Supabase. Report what is actually wired up.
+
+1. Identify the current database. Look for clues in env example files (`.env.example`, `.env.sample`), connection strings in code, and `package.json` dependencies. Report:
+   - Database engine (Postgres / MySQL / SQLite / etc.)
+   - Hosting (Neon / Railway / Supabase / self-hosted / etc.) — check for provider-specific connection-string formats
+   - Connection-string env var name
+2. Identify the ORM by checking dependencies. Report:
+   - ORM name and version
+   - Where the schema files live (full paths)
+   - Where migrations live
+   - Schema-management command (e.g., `drizzle-kit push`, `prisma migrate`)
+3. Run a search for every table definition. Use a search appropriate to the ORM:
+   - For Drizzle: `grep -rEn "^export const \w+ = (pg|mysql|sqlite)Table" --include="*.ts"`
+   - For Prisma: `cat prisma/schema.prisma` and list `model` definitions
+   - For TypeORM: search for `@Entity` decorators
+4. List every table found, with: name, file location, and a one-line description of what it stores based on its columns.
+5. Identify multi-tenancy:
+   - Is there a `brand_id` column on any tables? If so, list which.
+   - Is there a `users` table? Show its column definitions.
+   - Are there any Row-Level Security policies, brand-scoping helpers (`withBrandScope`, `currentBrand`, similar), or middleware that filters by brand/user?
+6. Report whether any keyword, ranking, competitor, or SEO-related tables already exist — even partially scaffolded.
+
+---
+
+## Section C — Auth
+
+1. Identify the auth library by checking dependencies (e.g., `passport`, `@supabase/auth`, `lucia`, `next-auth`, custom). Report the library and version.
+2. Show the auth middleware (the function that protects routes) in full.
+3. Show one example of a route that uses it, so the pattern is clear.
+4. Identify how the authenticated user's identity reaches a route handler (request decoration? context?). Show a 5–10 line snippet.
+
+---
+
+## Section D — Async / worker tier
+
+1. Identify whether a background job system is wired up. Check for BullMQ, BullJS, Inngest, Trigger.dev, cron, raw setInterval, etc.
+2. If BullMQ or similar is present:
+   - Where do producers (enqueue functions) live? List file paths.
+   - Where do consumers (worker handlers) live? List file paths.
+   - What queue names exist? List them.
+   - What job types are registered? List them with one-line descriptions.
+   - Where does Redis live (env var name and any visible host)?
+3. If no background system is wired, say so explicitly.
+
+---
+
+## Section E — Integrations
+
+1. Search the codebase for third-party API clients. Specifically check for:
+   - Anthropic (`@anthropic-ai/sdk`)
+   - OpenAI (`openai`)
+   - Winston AI / GoWinston (look for `winston`, `gowinston`, or `originality` references — note that env var may be `WINSTON_API_KEY`)
+   - DataForSEO (`dataforseo`)
+   - Google Search Console / GA4
+   - Apollo, Clearbit, or similar enrichment
+2. For each found, report:
+   - Where the client is initialized (file path)
+   - Whether it's in a shared package or scattered across consumers
+   - The env vars it uses
+3. Explicitly confirm whether DataForSEO is currently in the codebase at all. The dispatcher reports it was removed from deployment; verify whether the code is also gone or just dormant.
+
+---
+
+## Section F — Frontends and routing
+
+For each frontend app (likely at `artifacts/*` or similar):
+
+1. Frontend framework and version (React, Vue, Svelte, etc.).
+2. Routing library (React Router, Wouter, TanStack Router, file-based router, etc.).
+3. State management library (TanStack Query, SWR, Redux, Zustand, etc.).
+4. UI component library (shadcn/ui, MUI, Mantine, custom, etc.).
+5. **Where the navigation is defined.** If it's a config array, paste the array. If it's hardcoded in a layout component, paste the relevant JSX block.
+6. **Where the layout shell lives** (the component wrapping all pages with header/sidebar/content area). Report the file path.
+7. List the existing top-level pages/routes for this frontend.
+
+---
+
+## Section G — ContentForge current state
+
+1. Of the five Content Engine stages — Topic Intelligence, Brief Studio, Production Workspace, Quality Gate, Publishing Pipeline — report which are currently implemented, even partially. For each implemented stage, list the relevant route paths and page components.
+2. Search for an `/data/` directory at repo root. Report whether these files exist and their sizes:
+   - `/data/playbook.md`
+   - `/data/reviews_bank.json`
+   - `/data/internal_linking.xlsx`
+   - `/data/local_context/*.md`
+3. Search for an asset loader module (likely under `lib/`, `packages/`, or `artifacts/api-server/`). If found, report file path and the function names it exports.
+4. Search for the `REVIEW_TOOL` schema — likely in `artifacts/api-server/src/routes/ai/` or similar. Report whether it has been extended with fields like `meta_description`, `faq_schema`, `cost_table`, `case_studies_cited`, `external_authority_citations`. List which fields are present.
+5. Report whether a content-quality-fix dispatch appears to have been executed previously, by checking git log for commits mentioning "content quality," "validators," "brand mention ratio," "case study narrative," "DataForSEO ingestion," or similar.
+
+---
+
+## Section H — SEO module current state
+
+The dispatcher mentioned that an SEO module exists in the codebase but hasn't been fully built out. Investigate:
+
+1. Search for any directory named `seo`, `seo-os`, `topic-intelligence`, `performance-monitor`, `on-page`, `technical-seo`, or similar. Report what's there — even if empty scaffolding.
+2. Search for any frontend pages or route definitions matching those names.
+3. Search for any tables in the schema with names suggesting keyword, ranking, competitor, crawl, or SERP storage.
+4. Search for any worker jobs matching those concepts.
+5. Report honestly: is the SEO module empty scaffolding (placeholder files, empty directories, README only), partial work (some routes/pages exist but incomplete), or significant work (real functionality present)?
+
+---
+
+## Section I — Deployment and environment
+
+1. Where is the platform deployed currently? Check for Replit Deployments config, Railway config (`railway.json`, `nixpacks.toml`), Vercel config (`vercel.json`), or Render config.
+2. What is the deployment topology — single service, or separate frontend/backend/worker services?
+3. Show the `.env.example` or equivalent so the dispatcher knows what env vars are expected.
+4. Note any environment variables that look unusual or stale (e.g., references to providers no longer in use).
+
+---
+
+## Section J — Required final report format
+
+Produce a single markdown document organized exactly by these sections. Use the section headings above as H2s. Within each section, use prose plus code blocks where requested. Do not summarize — show the actual file contents and command outputs where asked. The dispatcher will read this end-to-end and feed it back into the next dispatch.
+
+End the report with a section titled **"Open Questions and Surprises"** in which you note:
+
+- Anything in the codebase that contradicts the architectural context above (e.g., remnants of Supabase code that are no longer wired up; references to packages or services that don't exist; obvious incomplete migrations).
+- Anything you found that the dispatcher should know but wasn't explicitly asked.
+- Any blocker that would prevent the SEO Dashboard integration from being feasible as a single sequential dispatch.
+
+That section is the most important part of the report. The dispatcher specifically wants to know what they don't know.
+
+---
+
+**Begin now. Do not write code. Survey only. Single structured report at the end.**
