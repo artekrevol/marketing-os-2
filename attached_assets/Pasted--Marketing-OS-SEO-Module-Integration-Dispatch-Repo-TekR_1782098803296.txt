@@ -1,0 +1,384 @@
+# Marketing OS — SEO Module Integration Dispatch
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Source codebase:** SEO-main (uploaded separately — standalone keyword/rank tracking tool, source-of-extraction only)
+**Target module:** `artifacts/seo-os` (already exists; currently houses Quality Gate + Recovery)
+**Dispatch type:** Single consolidated change. Sequential, do not subdivide.
+
+This dispatch lands keyword research, rank tracking, competitor discovery, and crawl scheduling inside Marketing OS — using the platform's existing patterns (Drizzle schema in `lib/db`, BullMQ worker tier, `withBrandScope()` tenancy, session-based auth, Wouter routing in `seo-os`). The source code in SEO-main is a reference; do not merge it as a unit. Take what's listed, leave the rest.
+
+---
+
+## What's already in place (grounded in the most recent architecture survey)
+
+- Monorepo, pnpm workspaces. Node 24, TS 5.9, ESM.
+- `artifacts/seo-os/` exists — React 18 + Vite + Wouter, currently routes Quality Gate (`/quality-gate`) and Recovery.
+- `lib/db/src/schema/` — Drizzle schema. Tables in place: `user_profiles`, `projects`, `outlines`, `drafts`, `research_briefs`, `voice_library`, `usage_logs`, `recovery_*`, `qa_*`, sessions.
+- `lib/integrations/` — DataForSEO client and Originality.AI client present. DataForSEO is dormant (taken off deployment). This dispatch reactivates and extends, not rebuilds.
+- `lib/jobs/src/types.ts` — job-type registry. `lib/worker/src/jobs/index.ts` — dispatch.
+- BullMQ queues: `maintenance`, `integrations`, `projects`, `content`, `scoring`, `ai`.
+- Auth: `requireAuth` middleware (express-session + bcryptjs + Postgres-backed sessions), `assertBrandAccess` / `assertBrandAccessForProject` / `requireProjectAccess` for brand-scoped routes.
+- Multi-tenancy: app-layer only. `BRAND_SCOPED_TABLES` allow-list + `withBrandScope()` / `ScopedDb` wrapper.
+- Critical finding: `BRAND_SCOPED_TABLES` already names `keyword_lists`, `rank_snapshots`, `competitor_pages` — the schema for these doesn't exist yet. This dispatch fills that gap using those names, not SEO-main's table names.
+
+---
+
+## Goal
+
+After this dispatch, an authenticated user with appropriate brand access can — from inside the existing SEO OS frontend at `/seo-os/`:
+
+- Manage keywords and keyword lists, scoped to their active brand.
+- Manage geographic locations for SERP tracking.
+- Trigger ad-hoc crawls or schedule recurring rank checks.
+- View current rankings and ranking history for any keyword × location.
+- Discover and review competitors surfaced from SERP data, blacklist irrelevant ones.
+- See competitor insights (overlap with TekRevol keyword set, content gaps).
+
+All data is brand-scoped through `withBrandScope()`. All routes use the existing auth + brand-access middleware. All async work runs on the existing BullMQ tier.
+
+---
+
+## Source codebase orientation — SEO-main zip
+
+The zip is a fully separate, deployed SEO rank-tracking tool. Same stack as Marketing OS (React + Express + Drizzle + Wouter + shadcn/ui), which makes extraction relatively clean. **It is a source-of-extraction, not a merge target.** Do not attempt to bring its app structure, routing root, auth, or storage abstraction.
+
+### What to extract
+
+**Server-side modules → port into existing `lib/integrations/dataforseo/`:**
+| Source path | Destination | Notes |
+|---|---|---|
+| `server/dataForSEO.ts` | `lib/integrations/dataforseo/client.ts` | Reconcile with existing DataForSEO client; merge, don't replace blindly |
+| `server/dataForSEOSchemas.ts` | `lib/integrations/dataforseo/schemas.ts` | Zod schemas for response shapes |
+| `server/locationCodesUtil.ts` | `lib/integrations/dataforseo/location-codes.ts` | DataForSEO location code mapping |
+| `server/cache.ts` | `lib/integrations/dataforseo/cache.ts` | In-memory cache; 7-day TTL |
+| `server/onPageAPI.ts` | `lib/integrations/dataforseo/onpage.ts` | OnPage API (same vendor — lives alongside) |
+| `server/crawler.ts` | `lib/worker/src/jobs/seo/crawler.ts` | Batch crawling, rate-limited. Re-shape into a BullMQ job handler |
+| `server/scheduler.ts` | (do NOT port directly) | Replaced by BullMQ scheduled-jobs primitive |
+| Competitor-insights logic in `server/competitorInsightsRoutes.ts` | Extract handler logic into `artifacts/api-server/src/routes/seo/competitor-insights.ts` | Endpoint paths change per Section 4 |
+
+**Frontend pages → port into `artifacts/seo-os/src/pages/seo/`:**
+
+The new pages live next to the existing Quality Gate and Recovery sections. They use the same auth/brand/layout shell.
+
+| Source path | Destination | Notes |
+|---|---|---|
+| `client/src/pages/Dashboard.tsx` | `seo/Dashboard.tsx` | SEO overview (KPI tiles, recent rank changes) |
+| `client/src/pages/ManageKeywords.tsx` | `seo/Keywords.tsx` | Keyword CRUD |
+| `client/src/pages/ManageLocations.tsx` | `seo/Locations.tsx` | Location CRUD |
+| `client/src/pages/KeywordGroups.tsx` | `seo/KeywordLists.tsx` | Rename Group → List to match Marketing OS naming |
+| `client/src/pages/CurrentRankings.tsx` | `seo/Rankings.tsx` | Live ranking display |
+| `client/src/pages/CompetitorAnalysis.tsx` | `seo/Competitors.tsx` | Competitor discovery |
+| `client/src/pages/CompetitorInsightsFix.tsx` | `seo/CompetitorInsights.tsx` | Use the "Fix" version — it's the maintained one |
+| `client/src/pages/Schedule.tsx` | `seo/Schedule.tsx` | Crawl-schedule management UI |
+
+### What to explicitly ignore
+
+- All client pages with "Test" or "Diagnostic" in the name (`OnPageAPITest.tsx`, `KeywordResearchAPITest.tsx`, `CompetitorInsightsDiagnostic.tsx`).
+- Server-side: `server/onPageAPITestRoutes.ts`, `server/onPageAPIDiagnosticRoutes.ts`, `server/keywordResearchAPITestRoutes.ts`, `server/diagnosticRoutes.ts`.
+- `server/storage.ts`, `server/storage-db.ts`, `server/pgStorage.ts` — SEO-main's storage abstraction is not ported. Write Drizzle queries directly against `lib/db` to match the rest of Marketing OS.
+- `server/routes.ts` — the 1,500-line monolithic router. Extract only the handler logic for the endpoints in Section 4; do not port the file whole.
+- `server/index.ts`, `server/vite.ts`, `server/db.ts` — SEO-main bootstrap. Marketing OS has its own.
+- `server/init-proxies.ts` — port only if Section 3 reveals the existing rank-checking pipeline needs the proxy management; defer otherwise.
+- `client/src/App.tsx` — do not port. Sub-mount the SEO pages into the existing `seo-os` router.
+- Migration files, root-level scripts (`import_*.js`, `fix-*.js`, `update-*.js`, `migrate-*.js`, `test-*.ts`), `tests/`, `attached_assets/`, `zip-chunks/`, `public/`, all root-level `.md` files (read `docs/architecture-overview.md` for orientation only).
+- Replit-specific files in SEO-main (`.replit`, `replit.nix`).
+- Anything Clerk-related in SEO-main (it doesn't have any, but flagged for completeness — and do not introduce Clerk to Marketing OS as part of this dispatch).
+
+---
+
+## Phase 0 — Pre-flight (report before continuing)
+
+Confirm the architectural state before any code is written:
+
+1. **`lib/integrations/dataforseo/` current state.** List its files. Show the exports of each. Specifically report: which DataForSEO endpoints are already implemented in the existing client (Search Volume? SERP API? Keyword Ideas?), and what shape its responses take. This determines what's a merge vs. a new addition vs. a replacement in Phase 2.
+2. **`BRAND_SCOPED_TABLES` source.** Locate the allow-list. Show its current contents. Confirm that `keyword_lists`, `rank_snapshots`, `competitor_pages` are still on it and that no schema files exist for them yet.
+3. **`artifacts/seo-os` router.** Show how routes are currently declared (likely a single `App.tsx` with Wouter `<Route>` declarations). Show the layout shell and navigation source.
+4. **`lib/jobs/src/types.ts`.** Show current job types. Confirm no `seo_*` or `rank_check` types exist yet.
+5. **Worker queue mapping.** Show which jobs currently dispatch on the `integrations` queue. This dispatch will add to it.
+6. **DataForSEO Replit Secrets.** Confirm `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` are set in Replit Secrets. If not, halt this dispatch with a clear instruction to set them before proceeding.
+7. **Existing routes under `/api/seo*`.** Grep and report. There should be none.
+
+Report findings before any code is written.
+
+---
+
+## Phase 1 — Schema additions
+
+Add nine tables to `lib/db/src/schema/seo.ts` (new file). All brand-scoped tables follow the existing Marketing OS pattern: `brand_id` column, snake_case names, foreign keys to existing tables where applicable. **No `seo_*` prefix** — these are first-class platform entities, named per the allow-list convention.
+
+### 1.1 Tables
+
+```typescript
+// lib/db/src/schema/seo.ts
+
+// Geographic targets for SERP queries
+locations              // id, brand_id, name, country_code, region, city, dataforseo_location_code, language_code, created_at, updated_at
+
+// Keyword collections (lists of keywords for tracking)
+keyword_lists          // id, brand_id, name, parent_list_id (self-FK, nullable for hierarchy), description, created_at, updated_at
+
+// Individual keywords being tracked
+keywords               // id, brand_id, keyword_text, list_id (FK → keyword_lists, nullable), location_id (FK → locations), search_volume, cpc, competition, last_checked_at, created_at, updated_at
+
+// Point-in-time ranking results
+rank_snapshots         // id, brand_id, keyword_id (FK), location_id (FK), batch_id (FK → crawl_batches), position, url, found_at_position (boolean), serp_features (jsonb), captured_at
+
+// Batch metadata for crawl runs
+crawl_batches          // id, brand_id, status (enum: pending/running/complete/failed), keyword_count, completed_count, started_at, finished_at, error_message, created_at
+
+// Recurring crawl schedules
+crawl_schedules        // id, brand_id, list_id (FK → keyword_lists, nullable — null means all keywords), cron_expression, active, last_run_at, next_run_at, created_at, updated_at
+
+// Competitor URLs surfaced from SERP data
+competitor_pages       // id, brand_id, competitor_domain, url, keyword_id (FK), position, captured_at
+
+// Aggregated competitor intelligence
+competitor_insights    // id, brand_id, competitor_domain, shared_keyword_count, average_position, top_keywords (jsonb), last_computed_at, created_at, updated_at
+
+// Domains excluded from competitor discovery
+blacklisted_domains    // id, brand_id, domain, reason, created_at
+```
+
+Place in `lib/db/src/schema/seo.ts`. Re-export from the schema barrel. Do not co-mingle with content-engine tables (briefs, drafts, etc.) — keep separate file for legibility.
+
+### 1.2 Brand-access allow-list
+
+After defining the tables, add their names to `BRAND_SCOPED_TABLES` (locate via Phase 0 report). Confirmed additions:
+
+- `locations`
+- `keywords`
+- `rank_snapshots`
+- `crawl_batches`
+- `crawl_schedules`
+- `competitor_pages`
+- `competitor_insights`
+- `blacklisted_domains`
+
+(`keyword_lists` is already in the allow-list per the survey — verify it still is.)
+
+### 1.3 Migration
+
+Run `pnpm --filter @marketing-os/db drizzle-kit push` (or the project's equivalent). Report the resulting SQL before applying. **No data backfill** — fresh tables.
+
+### 1.4 Type exports
+
+Export Drizzle-inferred row types and insert types from `lib/db/src/schema/seo.ts`. Use the project's existing convention for naming (likely `Location` / `NewLocation`, `Keyword` / `NewKeyword`, etc.).
+
+---
+
+## Phase 2 — Integrations: extend `lib/integrations/dataforseo/`
+
+The DataForSEO client already exists in `lib/integrations/`. This phase reconciles SEO-main's version with what's there, prioritizing the existing Marketing OS code style.
+
+### 2.1 Reconciliation rule
+
+For each endpoint in SEO-main's `dataForSEO.ts`:
+
+- If the **same endpoint** is already implemented in `lib/integrations/dataforseo/`, keep the existing implementation. Add any improvements from SEO-main (better error handling, fuller Zod schemas) as targeted edits, not file overwrites.
+- If the endpoint is **new** (not in the existing client), add it.
+- If the existing client uses a different request/response shape than SEO-main, **do not silently change it**. Report the divergence in the Phase 2 completion summary and proceed with the existing shape.
+
+### 2.2 Required endpoints after this phase
+
+The reconciled client must support:
+
+- **Search Volume** (`/keywords_data/google_ads/search_volume/live`) — used by Topic Intelligence and content briefing
+- **SERP API Live Advanced** (`/serp/google/organic/live/advanced`) — used by rank tracking and competitor discovery
+- **Keyword Ideas** (`/keywords_data/google_ads/keywords_for_keywords/live`) — used by LSI expansion
+- **Ranked Keywords** (`/dataforseo_labs/google/ranked_keywords/live`) — used by competitor insights
+- **OnPage Instant** (`/on_page/instant_pages`) — used by external citation grounding (future content quality fix dispatch will consume)
+
+### 2.3 Cache
+
+`lib/integrations/dataforseo/cache.ts` provides an in-memory cache keyed by `(endpoint, query-fingerprint)` with 7-day TTL. If the existing client already has caching, reconcile rather than duplicate.
+
+### 2.4 Cost tracking
+
+Each call logs to a `usage_logs` table entry (already exists per discovery). Tag entries with `provider: 'dataforseo'`, `endpoint`, `cost_estimated_usd`. Per-brand daily spend visible in admin UI later — out of scope for this dispatch but the data is recorded.
+
+---
+
+## Phase 3 — Worker jobs
+
+Crawls, rank checks, competitor discovery, and competitor-insight computation run async on BullMQ.
+
+### 3.1 New job types — `lib/jobs/src/types.ts`
+
+Add four typed job definitions. Naming follows the existing registry's convention:
+
+- `seo.crawl.run` — execute a crawl batch (one batch = N keywords × M locations)
+- `seo.rank-check.scheduled` — triggered by `crawl_schedules`; enqueues a `seo.crawl.run` for the right keyword set
+- `seo.competitor.discover` — for a given keyword set, pull SERP data and upsert `competitor_pages`
+- `seo.competitor-insights.compute` — recompute `competitor_insights` for a brand (e.g. weekly)
+
+All payload schemas in the registry. All include `brandId` so the worker can `withBrandScope()`.
+
+### 3.2 Worker handlers — `lib/worker/src/jobs/seo/`
+
+One handler per job type. Each handler:
+
+1. Validates payload against the registered schema.
+2. Wraps work in `withBrandScope(payload.brandId, async (db) => { ... })`.
+3. Uses the DataForSEO client from `lib/integrations/dataforseo/`.
+4. Writes results via Drizzle through the scoped DB handle.
+5. Updates batch/job status fields.
+
+### 3.3 Queue assignment
+
+Use the existing `integrations` queue. Do not create a new queue. If queue back-pressure becomes a real problem after launch, a `rank-tracking` queue can be split out later — out of scope for this dispatch.
+
+### 3.4 Scheduled jobs
+
+Use BullMQ's repeatable jobs primitive. On startup, the worker reads `crawl_schedules` where `active = true` and registers a repeatable job per row. When a schedule is created/updated/deactivated via the API, the API publishes a job-registry event the worker consumes. Use the existing event/dispatch pattern from the codebase rather than introducing new infrastructure.
+
+### 3.5 Idempotency
+
+Per the existing convention, deterministic `jobId`s prevent double-runs. For `seo.crawl.run`, jobId = `crawl:${batchId}`. For scheduled rank checks, jobId includes the scheduled timestamp.
+
+---
+
+## Phase 4 — API routes
+
+Create `artifacts/api-server/src/routes/seo/` with one file per resource. Each exports an Express router. A parent `seo/index.ts` mounts them under `/api/seo`.
+
+### 4.1 Route mapping
+
+| Source endpoint (SEO-main) | New endpoint | Auth |
+|---|---|---|
+| `GET/POST /api/keywords`, `/api/keywords/:id`, `/api/keywords/bulk` | `/api/seo/keywords/*` | requireAuth + brand-access |
+| `GET/POST /api/keywords/rankings` | `/api/seo/keywords/:id/rankings` | requireAuth + brand-access |
+| `GET/POST /api/locations`, `/api/locations/:id` | `/api/seo/locations/*` | requireAuth + brand-access |
+| `GET/POST /api/keyword-groups/*` | `/api/seo/keyword-lists/*` (note rename) | requireAuth + brand-access |
+| `GET/POST /api/competitors`, `/api/blacklisted-competitors/*` | `/api/seo/competitor-pages/*`, `/api/seo/blacklisted-domains/*` | requireAuth + brand-access |
+| `POST /api/crawl`, `GET /api/crawl/status`, `GET /api/crawl/results/:batchId`, `POST /api/crawl/reset` | `/api/seo/crawls/*` | requireAuth + brand-access |
+| `GET /api/current-rankings` | `/api/seo/rankings/current` | requireAuth + brand-access |
+| `GET /api/rankings`, `/api/rankings/history` | `/api/seo/rankings/*` | requireAuth + brand-access |
+| `GET /api/dashboard/stats`, `GET/POST /api/dashboard/layouts/*` | `/api/seo/dashboard/*` | requireAuth + brand-access |
+| `GET/POST /api/schedule`, `/api/schedule/:id` | `/api/seo/schedules/*` | requireAuth + brand-access |
+| Competitor insights endpoints | `/api/seo/competitor-insights/*` | requireAuth + brand-access |
+
+### 4.2 Auth + brand-access
+
+Every route uses `requireAuth` followed by either `assertBrandAccess(req.session.userId, brandId)` or, for project-scoped operations, `requireProjectAccess`. Never write hand-rolled `brand_id = ?` filters — go through `withBrandScope()` for any multi-row operation.
+
+### 4.3 Validation
+
+Use Zod schemas from `lib/db/src/schema/seo.ts` (export `insertKeywordSchema`, `insertLocationSchema`, etc. via `drizzle-zod`'s `createInsertSchema`). Routes validate request bodies against these.
+
+### 4.4 OpenAPI
+
+If the project uses Orval/api-spec codegen (per discovery — `lib/api-spec`), regenerate the OpenAPI spec for the new routes. Otherwise skip.
+
+---
+
+## Phase 5 — Frontend pages in `artifacts/seo-os`
+
+The new pages live in `artifacts/seo-os/src/pages/seo/`. They use the same auth, brand-switcher, and layout shell as the existing Quality Gate and Recovery pages.
+
+### 5.1 Routing — Wouter
+
+`artifacts/seo-os` already uses Wouter — same router SEO-main uses, so primitives translate one-to-one. In the seo-os app's router declaration, add:
+
+- `/seo` → `Dashboard`
+- `/seo/keywords` → `Keywords`
+- `/seo/locations` → `Locations`
+- `/seo/keyword-lists` → `KeywordLists`
+- `/seo/rankings` → `Rankings`
+- `/seo/competitors` → `Competitors`
+- `/seo/insights` → `CompetitorInsights`
+- `/seo/schedules` → `Schedule`
+
+The existing routes (`/quality-gate`, `/recovery`, etc.) remain unchanged.
+
+### 5.2 Layout
+
+Pages render inside seo-os's existing app shell. Strip any header/sidebar markup that SEO-main's pages carry — they should be content-only.
+
+### 5.3 API client
+
+Use the same data-fetching pattern as existing seo-os pages (likely TanStack Query — confirm via Phase 0). Every `fetch('/api/keywords')` style call from SEO-main becomes `/api/seo/keywords` here. All requests use `credentials: 'include'` to attach the existing session cookie.
+
+### 5.4 TanStack Query keys
+
+Namespace SEO query keys as `['seo', ...]` (e.g., `['seo', 'keywords', filters]`) to avoid cache collisions with Quality Gate, Recovery, and content queries.
+
+### 5.5 Brand context
+
+The active brand comes from the existing `useActiveBrand()` hook (or whatever seo-os already uses). Every list query filters by it implicitly via brand-scoped API routes; no client-side brand filtering needed.
+
+### 5.6 Page-specific notes
+
+- **Dashboard**: customizable layout via `seo_dashboard_layouts` — drop this for v1, render a fixed layout. The drag-and-drop layout system in SEO-main is a nice-to-have, not core.
+- **CompetitorInsightsFix.tsx → CompetitorInsights.tsx**: this is the maintained version; ignore the `CompetitorInsights.tsx` and `CompetitorInsightsDiagnostic.tsx` siblings in the source.
+- **Rankings**: confirm pagination/virtualization survives the port — this is the heaviest page in SEO-main and may load thousands of rows.
+
+---
+
+## Phase 6 — Navigation integration
+
+The existing seo-os app likely has a sidebar or top nav. Add a "SEO Intelligence" section to it, with sub-items for each of the new pages (Dashboard, Keywords, Lists, Locations, Rankings, Competitors, Insights, Schedules). Leave the existing Quality Gate and Recovery sections in place — they remain top-level peers, not children of SEO Intelligence.
+
+If the nav is config-driven (a TypeScript array), append. If hardcoded JSX, add markup in the same shell file Phase 0 identified.
+
+Reading order in the nav (recommendation): Quality Gate, Recovery, SEO Intelligence (with sub-items expanded by default on `/seo/*` routes).
+
+---
+
+## Phase 7 — Smoke tests + acceptance
+
+Each must pass before declaring complete.
+
+1. Drizzle migration runs cleanly against the dev database — all nine tables created with correct FKs.
+2. `BRAND_SCOPED_TABLES` now includes the new table names; `withBrandScope()` correctly scopes queries against them (verified by a multi-brand test: brand A's user sees no brand B data).
+3. A logged-in user with brand access sees the new "SEO Intelligence" nav in seo-os.
+4. Clicking it lands on `/seo` (Dashboard), rendered inside the existing seo-os shell.
+5. Creating a keyword via UI persists to `keywords` with the active brand's `brand_id`.
+6. Creating a location persists to `locations` with the active brand's `brand_id`.
+7. Triggering an ad-hoc crawl (`POST /api/seo/crawls`) creates a `crawl_batches` row, enqueues a `seo.crawl.run` job, and populates `rank_snapshots` when the worker completes it.
+8. The Rankings page displays the new snapshots scoped to the active brand.
+9. Creating a `crawl_schedule` causes the worker to register a repeatable job; manually triggering it produces a new batch on the expected cadence.
+10. Competitor discovery returns SERP-derived competitor pages for an existing keyword.
+11. A second user with access to a different brand sees zero data from the first user.
+12. Hitting any `/api/seo/*` route without a session returns 401.
+13. Hitting any `/api/seo/*` route as an authenticated user without access to the target brand returns 403 via `BrandAccessError`.
+14. `pnpm typecheck` passes across libs and artifacts.
+
+### Acceptance criteria
+
+1. Phase 0 report submitted with all 7 findings.
+2. Nine schema tables created with FKs; allow-list updated; migration SQL reviewed.
+3. DataForSEO client reconciled (not rebuilt) per Phase 2.1; OnPage endpoint added.
+4. Four job types registered; four handlers implemented; scheduled jobs working.
+5. Eleven route groups exposed under `/api/seo/*`, all auth-gated and brand-scoped.
+6. Eight frontend pages render under `/seo/*` inside seo-os's existing shell.
+7. Navigation entry added; reads correctly under existing nav structure.
+8. All 14 smoke tests pass.
+9. `git show --stat HEAD` reflects expected paths: `lib/db/src/schema/seo.ts`, `lib/integrations/dataforseo/*`, `lib/jobs/src/types.ts`, `lib/worker/src/jobs/seo/*`, `artifacts/api-server/src/routes/seo/*`, `artifacts/seo-os/src/pages/seo/*`, navigation file, allow-list file.
+
+---
+
+## Phase 8 — Architect / validator notes
+
+Replit Architect has surfaced issues mid-task in prior dispatches (escaped-literal decoding, null-safe filters, divide-by-zero guards, sampling docs). Treat any architect feedback as authoritative — fix in-task rather than deferring. Before reporting completion, run `git show --stat HEAD` so the validator sees the actual diff.
+
+Note that the worker must build before api-server (api-server bundles `dist/embedded.mjs`). Build order matters: `pnpm --filter @marketing-os/worker build` then `pnpm --filter @marketing-os/api-server build`. If the integrated dev workflow is one command, verify it still works after this dispatch.
+
+---
+
+## Operational notes
+
+- **DataForSEO Secrets** must be set in Replit Secrets (`DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`) before Phase 2 testing. Agent halts cleanly if missing.
+- **Cost shape**: every DataForSEO call hits real money. The crawler in SEO-main has rate-limiting and batching; preserve both during the port. Each call logs to `usage_logs` so per-brand spend can be audited.
+- **Page parity over enhancement.** The goal is functional parity with SEO-main's user experience, not improvement. Do not redesign pages, do not consolidate routes, do not refactor the crawler. Improvements come in follow-on dispatches once SEO functionality is shipped and stable.
+- **No `seo_*` table prefix.** Marketing OS conventions are plain names (`keyword_lists`, `rank_snapshots`). SEO-main's names are different; the dispatch's Phase 1 mapping is authoritative.
+- **No Clerk introduction.** The frontends ship dead Clerk deps; do not wire Clerk during this dispatch even if SEO-main happens to use it. (It doesn't, but flagged.)
+- **No new `/data` directory.** A separate content-quality-fix dispatch (deferred) will introduce a file-based asset loader for the playbook and reviews bank. This dispatch does not touch that.
+- **TanStack Query keys** are namespaced `['seo', ...]` — enforce consistently.
+- **Diagnostic pages intentionally omitted.** Three "Test" / "Diagnostic" pages in SEO-main are dev utilities and stay out of the production module.
+- **No data migration** from SEO-main's existing database. Users start fresh in Marketing OS.
+- **Schema drift risk.** The platform currently uses `drizzle-kit push` without committed migration files. This dispatch follows that pattern but the underlying risk is real — a separate dispatch to introduce a production migration story is recommended.
+- **Open questions surfaced by the architecture survey**, deferred to separate dispatches: Clerk cleanup (dead deps removal), Supabase ghost cleanup (.replit stale references), Anthropic SDK adoption, production migration story. None of these block the SEO integration.
+
+---
+
+**Critical: deliver the dispatch sequentially. Phase 0 reports before Phase 1 begins. Phase 1 completes (with migration SQL reviewed) before Phase 2 begins. Phase 7 smoke tests are not optional — all 14 pass or the dispatch is not complete.**
