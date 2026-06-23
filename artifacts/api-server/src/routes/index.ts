@@ -14,6 +14,7 @@ import voiceLibraryRouter from "./voice-library.js";
 import pageEventsRouter from "./page-events.js";
 import authRouter from "./auth.js";
 import seoRouter from "./seo/index.js";
+import dashboardRouter from "./dashboard.js";
 import { requireSeoRole } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
@@ -27,6 +28,7 @@ router.use("/recovery", recoveryRouter);
 router.use("/seo", requireSeoRole, seoRouter);
 router.use("/ai", aiRouter);
 router.use("/me", meRouter);
+router.use("/dashboard", dashboardRouter);
 router.use("/projects", projectsRouter);
 router.use("/brands", brandsRouter);
 router.use("/events", eventsRouter);

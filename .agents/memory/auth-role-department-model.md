@@ -19,10 +19,14 @@ job function (craft) is independent of what they're allowed to do (authority).
 ## Module gating must be server-enforced, not just client-side
 
 SEO OS entry is gated on `role ∈ {admin, lead, reviewer}` (members → ContentForge).
-This gate exists in THREE places that must stay in sync:
+This gate exists in several places that must stay in sync:
 - Frontend UX: SEO OS `AppShell` SEO_OS_ROLES + Hub SEO tile gate.
 - **Server (authoritative):** `requireSeoRole` middleware mounted on the
   `/api/seo` router in `routes/index.ts`, BEFORE the subrouters.
+- Hub dashboard rollup (`GET /api/dashboard/summary`): SEO initiative stats +
+  activity are computed only when `canSeo` (admin|lead|reviewer); members get 0 /
+  empty. Any new cross-module aggregate surface must apply the same role check so
+  it never leaks SEO data to roles that cannot enter the module.
 
 **Why:** brand-access alone is NOT sufficient to enter SEO — a `member` with
 brand access could otherwise call `/api/seo/*` directly. A client-only gate is a
