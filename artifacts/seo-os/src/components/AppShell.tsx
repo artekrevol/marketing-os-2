@@ -124,9 +124,21 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
           <BrandSwitcher />
 
-          <nav className="px-3 py-3 space-y-1 flex-1">
+          <nav className="px-3 py-3 space-y-1 flex-1 overflow-y-auto">
             <NavItem href="/quality-gate" label="Review queue" />
             <NavItem href="/recovery" label="Recovery" />
+
+            <div className="pt-4 pb-1 px-3 text-[10px] uppercase tracking-widest text-ink-muted">
+              SEO Intelligence
+            </div>
+            <NavItem href="/seo" label="Dashboard" exact />
+            <NavItem href="/seo/keywords" label="Keywords" />
+            <NavItem href="/seo/keyword-lists" label="Lists" />
+            <NavItem href="/seo/locations" label="Locations" />
+            <NavItem href="/seo/rankings" label="Rankings" />
+            <NavItem href="/seo/competitors" label="Competitors" />
+            <NavItem href="/seo/insights" label="Insights" />
+            <NavItem href="/seo/schedules" label="Schedules" />
           </nav>
 
           <div className="px-3 py-3 border-t border-rule">
@@ -155,9 +167,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function NavItem({ href, label }: { href: string; label: string }) {
+function NavItem({
+  href,
+  label,
+  exact = false,
+}: {
+  href: string;
+  label: string;
+  exact?: boolean;
+}) {
   const [loc] = useLocation();
-  const active = loc === href || loc.startsWith(href + "/");
+  const active = exact ? loc === href : loc === href || loc.startsWith(href + "/");
   return (
     <Link
       href={href}

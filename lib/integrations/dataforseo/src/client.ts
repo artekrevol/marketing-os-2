@@ -46,6 +46,11 @@ export class DataForSEOClient {
   private readonly cache: TtlCache;
 
   constructor(opts: DataForSEOClientOpts = {}) {
+    // Credentials come from DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD only.
+    // SEO-main also probed DATAFORSEO_API_LOGIN / DATAFORSEO_API_PASSWORD
+    // aliases; those were intentionally NOT adopted here — this repo's
+    // single secret pair is the source of truth. Do not reintroduce the
+    // aliases without updating the deployment secrets contract.
     const login = opts.login ?? process.env["DATAFORSEO_LOGIN"];
     const password = opts.password ?? process.env["DATAFORSEO_PASSWORD"];
     if (!login || !password) {

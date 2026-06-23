@@ -14,6 +14,10 @@ import {
 import { handleAiProposeBrief } from "./ai/propose-brief";
 import { handleAiResearchGenerate } from "./ai/research-generate";
 import { handleAiResearchRetryCard } from "./ai/research-retry-card";
+import { handleSeoCrawlRun } from "./seo/crawl-run";
+import { handleSeoRankCheckScheduled } from "./seo/rank-check-scheduled";
+import { handleSeoCompetitorDiscover } from "./seo/competitor-discover";
+import { handleSeoCompetitorInsightsCompute } from "./seo/competitor-insights-compute";
 
 type Handler<N extends JobName> = (data: JobData<N>, log: ReturnType<typeof jobLogger>) => Promise<unknown>;
 
@@ -28,6 +32,10 @@ export const HANDLERS: { [N in JobName]: Handler<N> } = {
   "ai.propose-brief": handleAiProposeBrief,
   "ai.research-generate": handleAiResearchGenerate,
   "ai.research-retry-card": handleAiResearchRetryCard,
+  "seo.crawl.run": handleSeoCrawlRun,
+  "seo.rank-check.scheduled": handleSeoRankCheckScheduled,
+  "seo.competitor.discover": handleSeoCompetitorDiscover,
+  "seo.competitor-insights.compute": handleSeoCompetitorInsightsCompute,
 };
 
 /**

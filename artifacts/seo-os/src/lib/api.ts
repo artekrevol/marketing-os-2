@@ -453,3 +453,352 @@ export const recovery = {
     URL.revokeObjectURL(url);
   },
 };
+
+// ---- SEO Intelligence ----
+// The api-server serialises Drizzle rows as-is (camelCase). Raw-SQL
+// endpoints (`rankings/current`, `dashboard/stats`) return snake_case
+// aliases; those shapes are typed explicitly below.
+
+export type SeoLocation = {
+  id: string;
+  brandId: string;
+  name: string;
+  countryCode: string | null;
+  region: string | null;
+  city: string | null;
+  dataforseoLocationCode: number;
+  languageCode: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SeoKeywordList = {
+  id: string;
+  brandId: string;
+  name: string;
+  parentListId: string | null;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SeoKeyword = {
+  id: string;
+  brandId: string;
+  keywordText: string;
+  listId: string | null;
+  locationId: string;
+  searchVolume: number | null;
+  cpc: string | null;
+  competition: string | null;
+  lastCheckedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SeoBlacklistedDomain = {
+  id: string;
+  brandId: string;
+  domain: string;
+  reason: string | null;
+  createdAt: string;
+};
+
+export type SeoCompetitorPage = {
+  id: string;
+  brandId: string;
+  competitorDomain: string;
+  url: string;
+  keywordId: string | null;
+  position: number | null;
+  capturedAt: string;
+};
+
+export type SeoCompetitorInsight = {
+  id: string;
+  brandId: string;
+  competitorDomain: string;
+  sharedKeywordCount: number;
+  averagePosition: string | null;
+  topKeywords: unknown;
+  lastComputedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SeoCrawlBatch = {
+  id: string;
+  brandId: string;
+  status: string;
+  keywordCount: number;
+  completedCount: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+};
+
+export type SeoRankSnapshot = {
+  id: string;
+  brandId: string;
+  keywordId: string;
+  locationId: string;
+  batchId: string | null;
+  position: number | null;
+  url: string | null;
+  foundAtPosition: boolean;
+  serpFeatures: unknown;
+  capturedAt: string;
+};
+
+export type SeoCrawlSchedule = {
+  id: string;
+  brandId: string;
+  listId: string | null;
+  cronExpression: string;
+  active: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SeoCurrentRanking = {
+  keyword_id: string;
+  keyword_text: string;
+  location_id: string;
+  position: number | null;
+  url: string | null;
+  found_at_position: boolean;
+  captured_at: string;
+};
+
+export type SeoDashboardStats = {
+  keyword_count: number;
+  location_count: number;
+  competitor_count: number;
+  active_schedule_count: number;
+  last_crawl_at: string | null;
+};
+
+const qs = (brandId: string, extra: Record<string, string | undefined> = {}) => {
+  const p = new URLSearchParams({ brandId });
+  for (const [k, v] of Object.entries(extra)) if (v != null) p.set(k, v);
+  return p.toString();
+};
+
+export const seo = {
+  // ----- Dashboard -----
+  dashboardStats: async (brandId: string): Promise<SeoDashboardStats | null> =>
+    (
+      await jsonOrThrow<{ stats: SeoDashboardStats | null }>(
+        await authedFetch(`/api/seo/dashboard/stats?${qs(brandId)}`),
+      )
+    ).stats,
+
+  // ----- Locations -----
+  listLocations: async (brandId: string): Promise<SeoLocation[]> =>
+    (
+      await jsonOrThrow<{ locations: SeoLocation[] }>(
+        await authedFetch(`/api/seo/locations?${qs(brandId)}`),
+      )
+    ).locations,
+  createLocation: async (input: {
+    brandId: string;
+    name: string;
+    dataforseoLocationCode: number;
+    countryCode?: string | null;
+    region?: string | null;
+    city?: string | null;
+    languageCode?: string;
+  }): Promise<SeoLocation> =>
+    (
+      await jsonOrThrow<{ location: SeoLocation }>(
+        await authedFetch(`/api/seo/locations`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        }),
+      )
+    ).location,
+  deleteLocation: async (brandId: string, id: string): Promise<void> => {
+    await jsonOrThrow(
+      await authedFetch(`/api/seo/locations/${encodeURIComponent(id)}?${qs(brandId)}`, {
+        method: "DELETE",
+      }),
+    );
+  },
+
+  // ----- Keyword lists -----
+  listKeywordLists: async (brandId: string): Promise<SeoKeywordList[]> =>
+    (
+      await jsonOrThrow<{ keywordLists: SeoKeywordList[] }>(
+        await authedFetch(`/api/seo/keyword-lists?${qs(brandId)}`),
+      )
+    ).keywordLists,
+  createKeywordList: async (input: {
+    brandId: string;
+    name: string;
+    parentListId?: string | null;
+    description?: string | null;
+  }): Promise<SeoKeywordList> =>
+    (
+      await jsonOrThrow<{ keywordList: SeoKeywordList }>(
+        await authedFetch(`/api/seo/keyword-lists`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        }),
+      )
+    ).keywordList,
+  deleteKeywordList: async (brandId: string, id: string): Promise<void> => {
+    await jsonOrThrow(
+      await authedFetch(`/api/seo/keyword-lists/${encodeURIComponent(id)}?${qs(brandId)}`, {
+        method: "DELETE",
+      }),
+    );
+  },
+
+  // ----- Keywords -----
+  listKeywords: async (brandId: string, listId?: string): Promise<SeoKeyword[]> =>
+    (
+      await jsonOrThrow<{ keywords: SeoKeyword[] }>(
+        await authedFetch(`/api/seo/keywords?${qs(brandId, { listId })}`),
+      )
+    ).keywords,
+  createKeyword: async (input: {
+    brandId: string;
+    keywordText: string;
+    locationId: string;
+    listId?: string | null;
+  }): Promise<SeoKeyword> =>
+    (
+      await jsonOrThrow<{ keyword: SeoKeyword }>(
+        await authedFetch(`/api/seo/keywords`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        }),
+      )
+    ).keyword,
+  bulkCreateKeywords: async (input: {
+    brandId: string;
+    keywords: Array<{ keywordText: string; locationId: string; listId?: string | null }>;
+  }): Promise<{ keywords: SeoKeyword[]; inserted: number }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/keywords/bulk`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    ),
+  deleteKeyword: async (brandId: string, id: string): Promise<void> => {
+    await jsonOrThrow(
+      await authedFetch(`/api/seo/keywords/${encodeURIComponent(id)}?${qs(brandId)}`, {
+        method: "DELETE",
+      }),
+    );
+  },
+
+  // ----- Crawls -----
+  createCrawl: async (input: {
+    brandId: string;
+    keywordIds?: string[];
+  }): Promise<{ batchId: string; keywordCount: number }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/crawls`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    ),
+  crawlStatus: async (brandId: string): Promise<SeoCrawlBatch[]> =>
+    (
+      await jsonOrThrow<{ batches: SeoCrawlBatch[] }>(
+        await authedFetch(`/api/seo/crawls/status?${qs(brandId)}`),
+      )
+    ).batches,
+
+  // ----- Rankings -----
+  currentRankings: async (brandId: string): Promise<SeoCurrentRanking[]> =>
+    (
+      await jsonOrThrow<{ rankings: SeoCurrentRanking[] }>(
+        await authedFetch(`/api/seo/rankings/current?${qs(brandId)}`),
+      )
+    ).rankings,
+  rankingHistory: async (brandId: string, keywordId: string): Promise<SeoRankSnapshot[]> =>
+    (
+      await jsonOrThrow<{ history: SeoRankSnapshot[] }>(
+        await authedFetch(`/api/seo/rankings/history?${qs(brandId, { keywordId })}`),
+      )
+    ).history,
+
+  // ----- Competitors -----
+  listCompetitorPages: async (brandId: string, domain?: string): Promise<SeoCompetitorPage[]> =>
+    (
+      await jsonOrThrow<{ competitorPages: SeoCompetitorPage[] }>(
+        await authedFetch(`/api/seo/competitor-pages?${qs(brandId, { domain })}`),
+      )
+    ).competitorPages,
+  discoverCompetitors: async (input: {
+    brandId: string;
+    keywordIds?: string[];
+  }): Promise<{ jobId: string }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/competitor-pages/discover`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    ),
+
+  // ----- Competitor insights -----
+  listCompetitorInsights: async (brandId: string): Promise<SeoCompetitorInsight[]> =>
+    (
+      await jsonOrThrow<{ competitorInsights: SeoCompetitorInsight[] }>(
+        await authedFetch(`/api/seo/competitor-insights?${qs(brandId)}`),
+      )
+    ).competitorInsights,
+  computeCompetitorInsights: async (brandId: string): Promise<{ jobId: string }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/competitor-insights/compute`, {
+        method: "POST",
+        body: JSON.stringify({ brandId }),
+      }),
+    ),
+
+  // ----- Schedules -----
+  listSchedules: async (brandId: string): Promise<SeoCrawlSchedule[]> =>
+    (
+      await jsonOrThrow<{ schedules: SeoCrawlSchedule[] }>(
+        await authedFetch(`/api/seo/schedules?${qs(brandId)}`),
+      )
+    ).schedules,
+  createSchedule: async (input: {
+    brandId: string;
+    cronExpression: string;
+    listId?: string | null;
+    active?: boolean;
+  }): Promise<SeoCrawlSchedule> =>
+    (
+      await jsonOrThrow<{ schedule: SeoCrawlSchedule }>(
+        await authedFetch(`/api/seo/schedules`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        }),
+      )
+    ).schedule,
+  updateSchedule: async (
+    id: string,
+    input: { brandId: string; cronExpression?: string; listId?: string | null; active?: boolean },
+  ): Promise<SeoCrawlSchedule> =>
+    (
+      await jsonOrThrow<{ schedule: SeoCrawlSchedule }>(
+        await authedFetch(`/api/seo/schedules/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          body: JSON.stringify(input),
+        }),
+      )
+    ).schedule,
+  deleteSchedule: async (brandId: string, id: string): Promise<void> => {
+    await jsonOrThrow(
+      await authedFetch(`/api/seo/schedules/${encodeURIComponent(id)}?${qs(brandId)}`, {
+        method: "DELETE",
+      }),
+    );
+  },
+};

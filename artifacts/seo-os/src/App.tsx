@@ -7,6 +7,14 @@ import Auth from "@/pages/Auth";
 import QualityGateQueue from "@/pages/QualityGateQueue";
 import QualityGateReview from "@/pages/QualityGateReview";
 import Recovery from "@/pages/Recovery";
+import SeoDashboard from "@/pages/seo/Dashboard";
+import SeoKeywords from "@/pages/seo/Keywords";
+import SeoLocations from "@/pages/seo/Locations";
+import SeoKeywordLists from "@/pages/seo/KeywordLists";
+import SeoRankings from "@/pages/seo/Rankings";
+import SeoCompetitors from "@/pages/seo/Competitors";
+import SeoCompetitorInsights from "@/pages/seo/CompetitorInsights";
+import SeoSchedule from "@/pages/seo/Schedule";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -22,6 +30,14 @@ function Routed() {
         {(params) => <QualityGateReview id={params.id} />}
       </Route>
       <Route path="/recovery" component={Recovery} />
+      <Route path="/seo" component={SeoDashboard} />
+      <Route path="/seo/keywords" component={SeoKeywords} />
+      <Route path="/seo/locations" component={SeoLocations} />
+      <Route path="/seo/keyword-lists" component={SeoKeywordLists} />
+      <Route path="/seo/rankings" component={SeoRankings} />
+      <Route path="/seo/competitors" component={SeoCompetitors} />
+      <Route path="/seo/insights" component={SeoCompetitorInsights} />
+      <Route path="/seo/schedules" component={SeoSchedule} />
       <Route path="/">{() => <Redirect to="/quality-gate" />}</Route>
       <Route component={NotFound} />
     </Switch>

@@ -13,6 +13,7 @@ import { initSentry, captureJobError } from "./sentry";
 import { dispatch } from "./jobs";
 import { recordDeadJob } from "./jobs/dead-letter";
 import { recordTerminalIntegrationFailure } from "./jobs/terminal-failure";
+import { registerActiveCrawlSchedules } from "./jobs/seo/schedules";
 import { startHealthServer } from "./health";
 
 const startedAt = Date.now();
@@ -96,6 +97,14 @@ async function main(): Promise<void> {
     );
   } catch (err) {
     logger.error({ err }, "worker: failed to register recovery-snapshot-nightly cron");
+  }
+
+  // SEO Intelligence — reconcile repeatable rank-check schedules from
+  // active `crawl_schedules` rows on every boot.
+  try {
+    await registerActiveCrawlSchedules(logger);
+  } catch (err) {
+    logger.error({ err }, "worker: failed to register active crawl schedules");
   }
 
   const health = startHealthServer(env.PORT, startedAt);

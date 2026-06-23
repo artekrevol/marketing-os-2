@@ -21,6 +21,7 @@ import { logger } from "./logger";
 import { dispatch } from "./jobs";
 import { recordDeadJob } from "./jobs/dead-letter";
 import { recordTerminalIntegrationFailure } from "./jobs/terminal-failure";
+import { registerActiveCrawlSchedules } from "./jobs/seo/schedules";
 import { captureJobError } from "./sentry";
 
 export interface EmbeddedWorkerHandle {
@@ -104,6 +105,15 @@ export async function startEmbeddedWorkers(): Promise<EmbeddedWorkerHandle> {
     logger.error(
       { err },
       "embedded-worker: failed to register recovery-snapshot-nightly cron",
+    );
+  }
+
+  try {
+    await registerActiveCrawlSchedules(logger);
+  } catch (err) {
+    logger.error(
+      { err },
+      "embedded-worker: failed to register active crawl schedules",
     );
   }
 

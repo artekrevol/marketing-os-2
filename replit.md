@@ -83,6 +83,7 @@ A unified platform with a single login hub at `/` that routes users into two mod
 - **PDF Export Dependencies**: `artifacts/api-server`'s `tsconfig.json` needs `"jsx": "react-jsx"` for `@react-pdf/renderer` components.
 - **Clerk Cookie Auth**: All API calls from frontends must use `credentials: "include"` — the Clerk session is cookie-based, not Bearer token.
 - **Admin Check**: `requireAdmin` middleware checks `user_profiles.role === 'admin'`. Seed at least one admin user in `user_profiles` after first login.
+- **BullMQ jobId colons**: `enqueue()` builds the BullMQ custom jobId as `${name}:${idempotencyKey}`. BullMQ (>=5) rejects a custom id containing `:` unless it splits into exactly 3 parts, so every `idempotencyKey` must contain **exactly one** colon. Use a non-colon separator (e.g. `-`) for extra segments like `:${Date.now()}`. `buildJobId()` now fails fast with an actionable error. The AI routes (`research-generate`, `research-retry-card`) and `recovery-snapshot` jobs still use the old multi-colon pattern and will throw at enqueue — fix when touched.
 
 ## Pointers
 

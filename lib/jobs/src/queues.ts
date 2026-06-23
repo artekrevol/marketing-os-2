@@ -78,3 +78,66 @@ export async function addRepeatable(
     removeOnFail: { count: 100 },
   });
 }
+
+/**
+ * SEO crawl schedules. A `crawl_schedules` row maps 1:1 to a repeatable
+ * `seo.rank-check.scheduled` job on the `integrations` queue, keyed by
+ * the schedule's id so the cron pattern can be replaced without leaking
+ * orphan schedulers.
+ *
+ * This is the shared primitive both the worker (boot-time reconciliation
+ * from active rows) and the API (on schedule create/update/deactivate)
+ * call — there is no separate event bus; the BullMQ queue IS the shared
+ * channel between the two processes.
+ */
+const RANK_CHECK_JOB = "seo.rank-check.scheduled";
+
+/**
+ * Register (or refresh) the repeatable rank-check for a schedule. Any
+ * existing repeatable for the same `scheduleId` is removed first so a
+ * changed cron pattern fully replaces the old one (BullMQ keys
+ * repeatables by pattern, so a naive re-add would leave the old
+ * schedule firing).
+ */
+export async function registerCrawlSchedule(opts: {
+  scheduleId: string;
+  brandId: string;
+  listId: string | null;
+  cron: string;
+}): Promise<void> {
+  const queue = getQueue("integrations");
+  await removeCrawlSchedule(opts.scheduleId);
+  await queue.add(
+    RANK_CHECK_JOB,
+    {
+      brandId: opts.brandId,
+      scheduleId: opts.scheduleId,
+      listId: opts.listId,
+      idempotencyKey: `${RANK_CHECK_JOB}:${opts.scheduleId}`,
+    },
+    {
+      repeat: { pattern: opts.cron },
+      // The repeatable identity. Removal/refresh matches on this id.
+      jobId: opts.scheduleId,
+      attempts: 1,
+      removeOnComplete: { count: 100 },
+      removeOnFail: { count: 100 },
+    },
+  );
+}
+
+/**
+ * Remove the repeatable rank-check for a schedule (deactivation/delete,
+ * or as the first half of a refresh). No-op if none is registered. We
+ * match by `jobId` because the cron pattern may have changed since the
+ * schedule was registered, so we cannot reconstruct the repeat key.
+ */
+export async function removeCrawlSchedule(scheduleId: string): Promise<void> {
+  const queue = getQueue("integrations");
+  const repeatables = await queue.getRepeatableJobs();
+  await Promise.all(
+    repeatables
+      .filter((j) => j.name === RANK_CHECK_JOB && j.id === scheduleId)
+      .map((j) => queue.removeRepeatableByKey(j.key)),
+  );
+}

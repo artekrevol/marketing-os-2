@@ -1,2 +1,1 @@
-- [Drizzle push drift hazard](drizzle-push-drift.md) — blanket `drizzle-kit push` here offers to DROP drifted tables; apply scoped DDL for additive changes.
-- [Integration call logging table](integration-call-logging.md) — log outbound vendor API calls to `integration_call_log`, NOT `usage_logs` (which is LLM-token-shaped).
+- [BullMQ jobId colons](bullmq-jobid-colons.md) — enqueue() prefixes `${name}:`, so every idempotencyKey must contain exactly one colon; use `-` for extra segments.

@@ -96,6 +96,50 @@ export const AiResearchRetryCardPayload = BasePayload.extend({
   stage: AI_STAGE_KEY,
 });
 
+/* -------------------------------------------------------------------------- */
+/* SEO Intelligence — keyword research, rank tracking, competitor discovery   */
+/* -------------------------------------------------------------------------- */
+
+// Execute one crawl batch: for each keyword in the batch, run a SERP
+// query, compute the brand's TRUE-organic position (ads / local pack
+// excluded — math lives in the handler), and write a `rank_snapshots`
+// row. `batchId` is a pre-created `crawl_batches` row the handler drives
+// through running → complete/failed. When `keywordIds` is omitted the
+// handler runs every keyword for the brand.
+// Idempotency: `idempotencyKey` is `seo-crawl:<batchId>`; the handler
+// additionally resumes by skipping keywords that already have a snapshot
+// for this batch, so a retry never re-bills a keyword already crawled.
+export const SeoCrawlRunPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  batchId: z.string().uuid(),
+  keywordIds: z.array(z.string().uuid()).optional(),
+});
+
+// Fired by a `crawl_schedules` repeatable. Resolves the schedule's
+// keyword set (its `listId`, or all brand keywords when null), creates a
+// fresh `crawl_batches` row, and enqueues a `seo.crawl.run` for it. Each
+// cron tick mints a new batch (unique id → unique downstream idem key).
+export const SeoRankCheckScheduledPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  scheduleId: z.string().uuid(),
+  // null = all keywords for the brand.
+  listId: z.string().uuid().nullable().optional(),
+});
+
+// For a keyword set, pull SERP data and record competitor URLs into
+// `competitor_pages` (excluding the brand's own primary domain and any
+// blacklisted domains). Costs money per keyword — callers bound the set.
+export const SeoCompetitorDiscoverPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  keywordIds: z.array(z.string().uuid()).optional(),
+});
+
+// Recompute `competitor_insights` for a brand from the accumulated
+// `competitor_pages` rows. Pure DB aggregation — no external API cost.
+export const SeoCompetitorInsightsComputePayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -136,6 +180,22 @@ export const JOB_REGISTRY = {
   "ai.research-retry-card": {
     queue: "ai" as QueueName,
     schema: AiResearchRetryCardPayload,
+  },
+  "seo.crawl.run": {
+    queue: "integrations" as QueueName,
+    schema: SeoCrawlRunPayload,
+  },
+  "seo.rank-check.scheduled": {
+    queue: "integrations" as QueueName,
+    schema: SeoRankCheckScheduledPayload,
+  },
+  "seo.competitor.discover": {
+    queue: "integrations" as QueueName,
+    schema: SeoCompetitorDiscoverPayload,
+  },
+  "seo.competitor-insights.compute": {
+    queue: "integrations" as QueueName,
+    schema: SeoCompetitorInsightsComputePayload,
   },
 } as const;
 
