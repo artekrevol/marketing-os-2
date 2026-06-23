@@ -51,12 +51,11 @@ async function ensureRead(
 }
 
 /**
- * Write gate for recovery initiatives. The pack's "admin or lead"
- * wording maps to the existing role enum: `lead` doesn't exist, pod
- * leads carry the `editor` role on `user_profiles`. RLS already
- * enforces this at the DB layer (see `is_admin_or_editor_for_brand`
- * in 0009_recovery.sql); this server-side check returns a 403 with a
- * clean error message before the DB transaction fires.
+ * Write gate for recovery initiatives: "admin or lead". Authority lives
+ * in `user_profiles.role` (now split from `department` craft). Pod leads
+ * carry the `lead` role; admins are short-circuited above. RLS still
+ * enforces tenancy at the DB layer; this server-side check returns a 403
+ * with a clean error message before the DB transaction fires.
  */
 async function callerCanWriteInitiative(
   userId: string,
@@ -68,7 +67,7 @@ async function callerCanWriteInitiative(
     const result = (await db.execute(
       sql`select 1 from public.user_profiles
           where user_id = ${userId}
-            and role = 'editor'::public.app_user_role
+            and role in ('admin'::public.app_user_role, 'lead'::public.app_user_role)
             and ${brandId}::uuid = any(brand_access)
           limit 1`,
     )) as unknown as { rows?: unknown[] } | unknown[];
@@ -184,7 +183,7 @@ router.post("/initiatives", async (req, res) => {
   }
   const isAdmin = req.auth?.isAdmin === true;
   if (!(await callerCanWriteInitiative(guard.userId, guard.brandId, isAdmin))) {
-    res.status(403).json({ error: "admin or editor role required" });
+    res.status(403).json({ error: "admin or lead role required" });
     return;
   }
   if (!body.name || typeof body.name !== "string") {
@@ -263,7 +262,7 @@ router.put("/initiatives/:id", async (req, res) => {
   }
   const isAdmin = req.auth?.isAdmin === true;
   if (!(await callerCanWriteInitiative(guard.userId, guard.brandId, isAdmin))) {
-    res.status(403).json({ error: "admin or editor role required" });
+    res.status(403).json({ error: "admin or lead role required" });
     return;
   }
   if (
@@ -339,7 +338,7 @@ router.post("/initiatives/:id/complete", async (req, res) => {
   }
   const isAdmin = req.auth?.isAdmin === true;
   if (!(await callerCanWriteInitiative(guard.userId, guard.brandId, isAdmin))) {
-    res.status(403).json({ error: "admin or editor role required" });
+    res.status(403).json({ error: "admin or lead role required" });
     return;
   }
   if (
@@ -366,8 +365,8 @@ router.post("/initiatives/:id/complete", async (req, res) => {
 
 /**
  * POST /api/recovery/initiatives/:id/abandon — admin-only. The UI
- * hides the affordance for non-admins, but a writer/editor hitting
- * this endpoint directly must get a 403 (not just a hidden button).
+ * hides the affordance for non-admins, but any non-admin (lead/member)
+ * hitting this endpoint directly must get a 403 (not just a hidden button).
  */
 router.post("/initiatives/:id/abandon", async (req, res) => {
   const initiativeId = req.params["id"];
