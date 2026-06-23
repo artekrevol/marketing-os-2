@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deployment Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+        }
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        h1 {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>Deployment Test Page</h1>
+    <div id="tests">
+        <h2>Testing API Endpoints</h2>
+        <div id="status" class="test-result">Checking deployment status...</div>
+        <div id="api-test" class="test-result">Testing API connectivity...</div>
+        <div id="dataforseo-test" class="test-result">Testing DataForSEO credentials...</div>
+        <div id="database-test" class="test-result">Testing database connectivity...</div>
+    </div>
+
+    <script>
+        // Helper function to update test results
+        function updateTest(id, message, isSuccess) {
+            const element = document.getElementById(id);
+            element.textContent = message;
+            element.className = isSuccess ? 'test-result success' : 'test-result error';
+        }
+
+        // Test 1: Basic deployment status
+        updateTest('status', 'Deployment accessible ✓', true);
+
+        // Test 2: API connectivity
+        fetch('/api/dashboard/stats')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                updateTest('api-test', `API connectivity successful ✓ (Found ${data.keywordCount} keywords)`, true);
+            })
+            .catch(error => {
+                updateTest('api-test', `API Error: ${error.message}`, false);
+                console.error('API Error:', error);
+            });
+
+        // Test 3: DataForSEO credentials
+        fetch('/api/current-rankings?resultType=organic')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                updateTest('dataforseo-test', `DataForSEO API connected ✓ (${data.length} rankings found)`, true);
+            })
+            .catch(error => {
+                updateTest('dataforseo-test', `DataForSEO Error: ${error.message}`, false);
+                console.error('DataForSEO Error:', error);
+            });
+
+        // Test 4: Database connectivity
+        fetch('/api/keywords')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                updateTest('database-test', `Database connectivity successful ✓ (${data.length} keywords retrieved)`, true);
+            })
+            .catch(error => {
+                updateTest('database-test', `Database Error: ${error.message}`, false);
+                console.error('Database Error:', error);
+            });
+    </script>
+</body>
+</html>

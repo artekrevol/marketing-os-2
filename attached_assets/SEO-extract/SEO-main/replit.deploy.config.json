@@ -1,0 +1,23 @@
+{
+  "build": {
+    "command": "chmod +x deploy-build.sh && ./deploy-build.sh",
+    "directory": "dist"
+  },
+  "run": {
+    "command": "NODE_ENV=production node production.js",
+    "workingDirectory": ""
+  },
+  "healthcheck": {
+    "enabled": true,
+    "path": "/api/health",
+    "port": 3000
+  },
+  "deployment": {
+    "deploymentId": "seo-rank-tracker",
+    "run": {
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}

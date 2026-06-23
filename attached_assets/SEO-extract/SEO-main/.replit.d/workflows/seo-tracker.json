@@ -1,0 +1,16 @@
+{
+  "name": "seo-tracker",
+  "persistent": true,
+  "command": "node seo-tracker-server.cjs",
+  "ports": [
+    {
+      "port": 3000,
+      "name": "SEO Tracker",
+      "description": "SEO Ranking Tracker Application",
+      "protocol": "http"
+    }
+  ],
+  "restartOn": {
+    "files": ["server/**/*", "client/**/*"]
+  }
+}

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SEO Project Export Instructions</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #2563eb;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #4b5563;
+            margin-top: 30px;
+        }
+        code {
+            background-color: #f1f5f9;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        pre {
+            background-color: #f1f5f9;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .file-list {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .file-list a {
+            display: block;
+            color: #3b82f6;
+            text-decoration: none;
+            padding: 5px 0;
+        }
+        .file-list a:hover {
+            text-decoration: underline;
+        }
+        .note {
+            background-color: #fffbeb;
+            border-left: 4px solid #f59e0b;
+            padding: 10px 15px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>SEO Project Export Instructions</h1>
+    
+    <p>The project has been exported and split into 10 smaller chunks for easier downloading. Follow the instructions below to download and reassemble the project files.</p>
+    
+    <h2>Step 1: Download All Chunks</h2>
+    
+    <p>Click on each link below to download all the chunks:</p>
+    
+    <div class="file-list">
+        <a href="/zip-chunks/chunk-000.bin" download>Download chunk-000.bin</a>
+        <a href="/zip-chunks/chunk-001.bin" download>Download chunk-001.bin</a>
+        <a href="/zip-chunks/chunk-002.bin" download>Download chunk-002.bin</a>
+        <a href="/zip-chunks/chunk-003.bin" download>Download chunk-003.bin</a>
+        <a href="/zip-chunks/chunk-004.bin" download>Download chunk-004.bin</a>
+        <a href="/zip-chunks/chunk-005.bin" download>Download chunk-005.bin</a>
+        <a href="/zip-chunks/chunk-006.bin" download>Download chunk-006.bin</a>
+        <a href="/zip-chunks/chunk-007.bin" download>Download chunk-007.bin</a>
+        <a href="/zip-chunks/chunk-008.bin" download>Download chunk-008.bin</a>
+        <a href="/zip-chunks/chunk-009.bin" download>Download chunk-009.bin</a>
+        <a href="/zip-chunks/README.md" download>Download README.md</a>
+    </div>
+    
+    <div class="note">
+        <strong>Note:</strong> Make sure to download ALL chunks. The project cannot be reassembled if any chunk is missing.
+    </div>
+    
+    <h2>Step 2: Reassemble the Files</h2>
+    
+    <p>Once you have downloaded all chunks, you need to reassemble them into a single ZIP file. Here's how:</p>
+    
+    <h3>Option 1: Using Command Line (macOS/Linux)</h3>
+    
+    <pre>cat chunk-000.bin chunk-001.bin chunk-002.bin chunk-003.bin chunk-004.bin chunk-005.bin chunk-006.bin chunk-007.bin chunk-008.bin chunk-009.bin > project-export.zip</pre>
+    
+    <h3>Option 2: Using Command Line (Windows)</h3>
+    
+    <pre>copy /b chunk-000.bin + chunk-001.bin + chunk-002.bin + chunk-003.bin + chunk-004.bin + chunk-005.bin + chunk-006.bin + chunk-007.bin + chunk-008.bin + chunk-009.bin project-export.zip</pre>
+    
+    <h3>Option 3: Using Python</h3>
+    
+    <p>Save the following code as <code>reassemble.py</code> in the same directory as your downloaded chunks:</p>
+    
+    <pre>
+def reassemble():
+    with open('project-export.zip', 'wb') as outfile:
+        for i in range(10):  # Adjust if you have a different number of chunks
+            chunk_filename = f'chunk-{i:03d}.bin'
+            with open(chunk_filename, 'rb') as infile:
+                outfile.write(infile.read())
+    print("Reassembly complete! File saved as project-export.zip")
+
+if __name__ == "__main__":
+    reassemble()
+    </pre>
+    
+    <p>Then run it with Python:</p>
+    <pre>python reassemble.py</pre>
+    
+    <h2>Step 3: Extract the ZIP file</h2>
+    
+    <p>Once you have reassembled the project-export.zip file, you can extract it using any ZIP extraction tool (like 7-Zip, WinRAR, or the built-in tools in your operating system).</p>
+    
+    <h2>Project Setup Instructions</h2>
+    
+    <p>After extracting the files, follow these steps to set up the project:</p>
+    
+    <ol>
+        <li>Install Node.js dependencies with <code>npm install</code></li>
+        <li>Set up your PostgreSQL database and update the .env file with your database connection string</li>
+        <li>Initialize the database with <code>npm run db:push</code></li>
+        <li>Start the development server with <code>npm run dev</code></li>
+    </ol>
+    
+    <div class="note">
+        <strong>Important:</strong> If you encounter any issues during setup, please consult the project documentation or reach out for support.
+    </div>
+</body>
+</html>

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -93,9 +94,9 @@ export const keywordsTable = pgTable(
     listId: uuid("list_id").references(() => keywordListsTable.id, {
       onDelete: "set null",
     }),
-    locationId: uuid("location_id").references(() => locationsTable.id, {
-      onDelete: "set null",
-    }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locationsTable.id, { onDelete: "restrict" }),
     searchVolume: integer("search_volume"),
     cpc: numeric("cpc", { precision: 12, scale: 4 }),
     competition: numeric("competition", { precision: 6, scale: 4 }),
@@ -107,6 +108,11 @@ export const keywordsTable = pgTable(
     index("keywords_brand_id_idx").on(t.brandId),
     index("keywords_brand_list_idx").on(t.brandId, t.listId),
     index("keywords_location_idx").on(t.locationId),
+    unique("keywords_brand_text_location_uq").on(
+      t.brandId,
+      t.keywordText,
+      t.locationId,
+    ),
   ],
 );
 
@@ -177,6 +183,9 @@ export const crawlSchedulesTable = pgTable(
   (t) => [
     index("crawl_schedules_brand_active_idx").on(t.brandId, t.active),
     index("crawl_schedules_list_idx").on(t.listId),
+    index("crawl_schedules_next_run_idx")
+      .on(t.nextRunAt)
+      .where(sql`active = true`),
   ],
 );
 
@@ -196,9 +205,9 @@ export const rankSnapshotsTable = pgTable(
     keywordId: uuid("keyword_id")
       .notNull()
       .references(() => keywordsTable.id, { onDelete: "cascade" }),
-    locationId: uuid("location_id").references(() => locationsTable.id, {
-      onDelete: "set null",
-    }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locationsTable.id, { onDelete: "restrict" }),
     batchId: uuid("batch_id").references(() => crawlBatchesTable.id, {
       onDelete: "set null",
     }),

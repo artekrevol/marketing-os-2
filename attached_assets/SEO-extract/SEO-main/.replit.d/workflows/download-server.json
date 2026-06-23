@@ -1,0 +1,16 @@
+{
+  "name": "download-server",
+  "persistent": true,
+  "command": "node download-server.js",
+  "ports": [
+    {
+      "port": 3333,
+      "name": "Download Server",
+      "description": "Project Export Download Server",
+      "protocol": "http"
+    }
+  ],
+  "restartOn": {
+    "files": ["download-server.js", "zip-chunks/**/*"]
+  }
+}

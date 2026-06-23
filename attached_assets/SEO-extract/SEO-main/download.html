@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Export Download</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            background-color: #f9f9f9;
+        }
+        .download-btn {
+            display: inline-block;
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Project Export Download</h1>
+    
+    <div class="card">
+        <h2>Download Files</h2>
+        <p>Click the link below to download the complete project export zip file:</p>
+        
+        <a href="/download" class="download-btn" style="background-color: #2980b9;" download>Download Project Export (Mac Compatible)</a>
+        
+        <p style="margin-top: 20px;"><strong>Alternative Downloads (if main download doesn't work):</strong></p>
+        <a href="/zip-chunks/README.md" class="download-btn" download>Download README.md</a>
+        <a href="/zip-chunks/chunk-000.bin" class="download-btn" download>Download chunk-000.bin</a>
+        <a href="/zip-chunks/chunk-001.bin" class="download-btn" download>Download chunk-001.bin</a>
+        <a href="/zip-chunks/chunk-002.bin" class="download-btn" download>Download chunk-002.bin</a>
+        <a href="/zip-chunks/chunk-003.bin" class="download-btn" download>Download chunk-003.bin</a>
+        <a href="/zip-chunks/chunk-004.bin" class="download-btn" download>Download chunk-004.bin</a>
+        <a href="/zip-chunks/chunk-005.bin" class="download-btn" download>Download chunk-005.bin</a>
+    </div>
+    
+    <div class="card">
+        <h2>Instructions</h2>
+        <p>Follow these steps to combine the downloaded chunks into a single zip file:</p>
+        
+        <h3>On Linux/Mac:</h3>
+        <pre><code>cat chunk-*.bin > project-export.zip</code></pre>
+        
+        <h3>On Windows (PowerShell):</h3>
+        <pre><code>Get-ChildItem -Path "chunk-*.bin" | Sort-Object Name | Get-Content -Encoding Byte -ReadCount 0 | Set-Content -Encoding Byte -Path "project-export.zip"</code></pre>
+        
+        <h3>On Windows (Command Prompt):</h3>
+        <pre><code>copy /b chunk-*.bin project-export.zip</code></pre>
+        
+        <p>After combining, extract the zip file to get your project files.</p>
+    </div>
+    
+    <div class="card">
+        <h2>Project Contents</h2>
+        <p>The exported zip file contains the complete source code for your Google keyword ranking crawler project, including:</p>
+        <ul>
+            <li>Frontend React.js components and pages</li>
+            <li>Backend TypeScript server and API code</li>
+            <li>Database schema and migration files</li>
+            <li>Configuration files and dependencies</li>
+            <li>Documentation and utilities</li>
+        </ul>
+    </div>
+</body>
+</html>
