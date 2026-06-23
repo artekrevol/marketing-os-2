@@ -1,0 +1,228 @@
+# Marketing OS — Role Gating Fix Dispatch
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Source of the problem:** During the SEO Module Integration Dispatch (Phase 7), the agent discovered that `artifacts/seo-os` gates module entry behind roles `admin | lead | reviewer | outreach` — but the user database doesn't actually populate those values. In practice only the `isAdmin` boolean works. Writers get redirected to ContentForge; everyone else hits "access denied."
+
+**Effect on the business:** The SEO module is live but unreachable for anyone who isn't an admin. This dispatch makes the role system real so the right people on the content team can use it without being made admins.
+
+**Dispatch type:** Single sequential change. Schema → backfill → backend → frontend → smoke tests. Smaller scope than the SEO integration dispatch (~5 phases instead of 8); aim for one focused session.
+
+---
+
+## Goal
+
+After this dispatch, an admin can assign one of five roles to any user via the existing admin UI — `admin | lead | reviewer | outreach | writer` — and the `artifacts/seo-os` entry gate honors those values correctly. Writers continue to be redirected to ContentForge by default. The Hub landing page only surfaces the SEO OS module tile to users whose role permits entry.
+
+This is the minimum work needed to make the SEO module usable by the team. Within-module permissions (e.g., "reviewers can view rankings but not trigger crawls") are explicitly out of scope and deferred to a future dispatch when usage patterns clarify what granular permissions are actually needed.
+
+---
+
+## Architectural decision baked into this dispatch
+
+There are three reasonable ways to fix this:
+
+1. **Remove the role gate entirely** — anyone with brand access sees every module. Simplest but loses the writer/admin UX separation that the gate exists for.
+2. **Use brand_access as the gate** — has brand access → can see SEO OS. Doesn't work in practice because writers need brand_access to write; the gate would let everyone in again.
+3. **Implement the role system the gate already expects.** Add a `role` column to `user_profiles` with values `admin | lead | reviewer | outreach | writer`. Backfill from `is_admin`. Expose in `/api/me`. Add an admin endpoint and UI to change role.
+
+**This dispatch goes with option 3.** It honors the intent that's already in the codebase, requires the least invention, and produces a role system that scales as the team grows. If you want one of the other options instead, override before Phase 1 begins.
+
+---
+
+## Phase 0 — Pre-flight (read-only, report before continuing)
+
+Confirm the current state. Same survey-only contract as previous dispatches: no code, no schema changes, no installations.
+
+1. **Where does role come from today?** Inspect `user_profiles` table definition in `lib/db/src/schema/`. Show every column. Identify whether a `role` column exists. If yes, show its type and default. If no, confirm role is computed somewhere (likely in `/api/me` or auth middleware) and show the logic.
+2. **Where is the seo-os gate?** Locate the exact file and line in `artifacts/seo-os/src/` that enforces the `admin | lead | reviewer | outreach` check. Show the relevant code.
+3. **What does `/api/me` return today?** Locate the route handler (likely `artifacts/api-server/src/routes/me.ts`). Show the response shape. Specifically: does it include a `role` field? An `is_admin` boolean? Both?
+4. **How is `is_admin` populated today?** Show the seeding mechanism (`SEED_ADMIN_EMAILS` / `SEED_ADMIN_USER_IDS` env vars per the prior survey) and any code that flips users to admin elsewhere.
+5. **How many users exist?** Count rows in `user_profiles`. List user emails (or count) and current admin status. This is the population that gets backfilled.
+6. **Existing user-admin UI.** ContentForge has an admin area with "users & access" per the prior survey. Locate that page. Show the user list component and any role-related UI already there.
+7. **Hub landing page.** Locate the Hub component (per the prior survey, the landing at `/` shows a module picker for ContentForge or SEO OS). Show how it currently decides whether to display the SEO OS tile.
+
+Report findings before any code is written.
+
+---
+
+## Phase 1 — Schema: add `role` to `user_profiles`
+
+Add a single column to `user_profiles`. No new tables.
+
+### 1.1 Column definition
+
+```typescript
+// In the existing user_profiles table definition
+role: text("role").notNull().default("writer"),
+```
+
+Validation in the service layer via an exported const array, matching the platform convention used for `crawl_batches.status` and the Recovery tables:
+
+```typescript
+export const USER_ROLES = ["admin", "lead", "reviewer", "outreach", "writer"] as const;
+export type UserRole = typeof USER_ROLES[number];
+```
+
+No CHECK constraint at the database level — same pattern as the rest of the platform.
+
+### 1.2 Migration approach
+
+The platform uses `drizzle-kit push` without committed migration files, and Phase 1 of the SEO dispatch surfaced schema drift (`user_roles`, `page_events`, `playbook_sections` tables exist in the DB but not in the schema). **Do not run a blanket `drizzle-kit push`** — it would offer to drop those unrelated tables.
+
+Apply the column via scoped DDL in a single transaction (same approach the SEO dispatch used for its 9 tables):
+
+```sql
+ALTER TABLE "user_profiles"
+ADD COLUMN "role" text NOT NULL DEFAULT 'writer';
+```
+
+Report the DDL before applying. Pause for approval before running. The schema drift remains untouched — out of scope for this dispatch.
+
+### 1.3 Index
+
+No index needed. `role` will be read on every `/api/me` request but the table is small (Phase 0 will confirm exact count, but realistically dozens of users at most). Sequential reads are fine.
+
+---
+
+## Phase 2 — Backfill existing users
+
+Set the right role for every existing user before the application starts reading the new column.
+
+### 2.1 Backfill rule
+
+Single SQL pass, run in the same transaction as the ALTER if possible:
+
+```sql
+UPDATE "user_profiles"
+SET "role" = 'admin'
+WHERE "is_admin" = true;
+-- All other rows already have role = 'writer' from the column default
+```
+
+Report the row counts before and after. The numbers should match exactly: every user previously marked `is_admin = true` becomes role `admin`; everyone else stays `writer`.
+
+### 2.2 Verification query
+
+After backfill, run and report:
+
+```sql
+SELECT "role", COUNT(*) FROM "user_profiles" GROUP BY "role";
+```
+
+The output is the source-of-truth count for the smoke tests in Phase 5.
+
+### 2.3 What this dispatch does NOT change
+
+- `is_admin` boolean stays on `user_profiles`. Backend authorization continues to check it. (Deprecating it cleanly is a follow-up dispatch.)
+- Admins from `SEED_ADMIN_EMAILS` / `SEED_ADMIN_USER_IDS` continue to seed as admin on first login — they need their role set to `admin` at seed time too. Update the seed logic (likely in `requireAuth` JIT provisioning) to set `role: 'admin'` when `is_admin` is being set.
+
+---
+
+## Phase 3 — Backend
+
+### 3.1 Expose role in `/api/me`
+
+Update `/api/me` to include `role` in the response. Phase 0 will have located this; the change is additive.
+
+```typescript
+// Response shape additions
+{
+  userId: string,
+  email: string,
+  isAdmin: boolean,           // keep, used by existing code
+  role: UserRole,             // NEW
+  brands: BrandSummary[],
+  // ...existing fields
+}
+```
+
+### 3.2 Admin endpoint to update role
+
+Add `PATCH /api/admin/users/:userId/role` (or whichever pattern matches existing admin user-management routes — Phase 0 will surface this). The route:
+
+- Requires admin authentication (existing `requireAdmin` middleware per Phase 0 findings).
+- Validates `role` against `USER_ROLES`.
+- Updates `user_profiles.role` for the target user.
+- If the new role is `admin`, also flip `is_admin = true`. If the new role is anything other than admin, set `is_admin = false`. Keep the two fields in sync until `is_admin` is deprecated in a follow-up.
+- Logs to the audit log table (per the platform's existing pattern — Phase 0 should locate the audit logger).
+
+### 3.3 Authorization for non-admin SEO access
+
+The SEO module's API routes (`/api/seo/*`, built in the SEO Integration Dispatch) currently only check `requireAuth + assertBrandAccess`. That's correct and doesn't need to change. The frontend role gate is the only layer that enforces "writers stay out of SEO OS" — API-layer protection is brand-access, which is independent.
+
+---
+
+## Phase 4 — Frontend
+
+Two surfaces.
+
+### 4.1 Admin role-assignment UI
+
+In the existing ContentForge admin area's "users & access" page (per Phase 0), add a role dropdown to each user row. Five options matching `USER_ROLES`. Saving fires `PATCH /api/admin/users/:userId/role` from Phase 3.2.
+
+Page should display the current role for every user. Sort by role for visibility — admins on top, then lead/reviewer/outreach, then writers.
+
+### 4.2 Hub module gating
+
+The Hub landing page (the `/` route in `insight-forge`) currently shows tiles for ContentForge and SEO OS. Update the Hub to only show the SEO OS tile if the user's role permits entry: `admin | lead | reviewer | outreach`. Writers see only the ContentForge tile.
+
+This change is purely cosmetic — the role gate in `seo-os` still enforces if a writer tries to navigate directly to `/seo-os/*`. But hiding the tile in the Hub is the right UX: don't show users options they can't use.
+
+### 4.3 seo-os gate — verification only
+
+The gate in `artifacts/seo-os/src/components/AppShell.tsx` (or wherever Phase 0 locates it) doesn't need code changes. It already checks for `admin | lead | reviewer | outreach`. What this dispatch changes is that the role values are now real — the gate's allow-list will match actual users.
+
+Read the gate code and confirm. If the gate checks `isAdmin` separately, leave it; if it derives admin from `role === 'admin'`, leave that too. The only change is making the values populated downstream.
+
+---
+
+## Phase 5 — Smoke tests
+
+Each must pass before declaring complete.
+
+1. `role` column exists on `user_profiles` with `NOT NULL DEFAULT 'writer'`.
+2. Backfill verified: every user with `is_admin = true` now has `role = 'admin'`; everyone else has `role = 'writer'`. Row counts match.
+3. `/api/me` returns `role` for an authenticated user.
+4. As admin, `PATCH /api/admin/users/:userId/role` with body `{ role: "reviewer" }` updates the target user's role and syncs `is_admin = false`.
+5. As admin, the same endpoint with `{ role: "admin" }` syncs `is_admin = true`.
+6. As non-admin, `PATCH /api/admin/users/:userId/role` returns 403.
+7. Invalid role value (e.g. `{ role: "superuser" }`) returns 400.
+8. Audit log records the role change.
+9. Admin user-management UI displays current role for every user and persists changes correctly.
+10. A user with role `writer` logging into the Hub sees only the ContentForge tile (no SEO OS tile).
+11. A user with role `reviewer` logging into the Hub sees both tiles.
+12. A user with role `reviewer` clicking the SEO OS tile lands successfully on the SEO Dashboard (not access-denied).
+13. A user with role `writer` navigating directly to `/seo-os/seo` is redirected to ContentForge (existing gate behavior, verified).
+14. `pnpm typecheck` passes across libs and artifacts.
+
+### Cost-free testing note
+
+This dispatch involves no third-party API calls. All smoke tests can be exercised with seeded test users — same pattern the SEO dispatch used (seed users via SQL with bcrypt password hashes), no real cost.
+
+---
+
+## Phase 6 — Architect / validator notes
+
+Same as prior dispatches: run `git show --stat HEAD` before reporting completion so the validator sees the actual diff. Treat any architect feedback as authoritative — fix in-task rather than deferring.
+
+Note that this dispatch touches `user_profiles`, which is in the brand-scope allow-list. Verify that adding the `role` column doesn't break any existing brand-scoped query. (It shouldn't — adding columns is additive — but worth confirming the typecheck and any existing user-profile tests still pass.)
+
+---
+
+## Operational notes
+
+- **Order of operations.** Phase 1 (schema) → Phase 2 (backfill) → Phase 3 (backend) → Phase 4 (frontend). Don't reorder. If `/api/me` returns `role` before the backfill is run, every user will appear as `writer` (the default) regardless of admin status — that breaks the Hub gating immediately.
+
+- **Coexistence with `is_admin`.** Both `role` and `is_admin` live on `user_profiles` after this dispatch. They're kept in sync by Phase 3.2. A follow-up dispatch can deprecate `is_admin` once every consumer has migrated to checking `role === 'admin'`. Don't deprecate as part of this dispatch — too much surface area in one change.
+
+- **Within-SEO permissions deferred.** This dispatch doesn't differentiate between what an `admin` can do vs. what a `reviewer` can do inside the SEO module. Anyone who passes the entry gate has full access to keywords, crawls, schedules, competitors. If usage patterns reveal a need for granular permissions (e.g., reviewers can view but not trigger crawls), that's a separate dispatch with its own scope.
+
+- **Brand-specific roles deferred.** A user is currently one role globally, not different roles per brand. If you eventually want "admin of TekRevol but writer for ClaimShield," that's a more invasive schema change (role moves from `user_profiles` to a `user_brand_roles` junction table). Out of scope here.
+
+- **Default role for new users.** New users created via `requireAuth` JIT provisioning land at `role = 'writer'` (the column default). Seeded admins (per `SEED_ADMIN_EMAILS` / `SEED_ADMIN_USER_IDS`) get `role = 'admin'` at seed time per Phase 2.3. There's no self-service signup, so no other role-assignment paths exist.
+
+- **Reverting if needed.** If something breaks in production after this ships, the immediate rollback is `ALTER TABLE user_profiles DROP COLUMN role;`. The `is_admin` boolean keeps working; the seo-os gate falls back to its existing admin-only behavior; writers stay out of SEO OS (correct fail-safe). No data loss.
+
+---
+
+**Begin Phase 0 read-only. Report findings before any code is written. Single sequential dispatch — pause after Phase 1 (DDL review), pause after Phase 2 (row count verification), then run Phases 3–4 straight through. Phase 5's 14 smoke tests gate completion.**
