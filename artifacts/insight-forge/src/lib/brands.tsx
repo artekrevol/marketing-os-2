@@ -14,6 +14,7 @@ type MeResponse = {
   email: string | null;
   isAdmin: boolean;
   role: string;
+  department: string;
   brands: Array<{
     id: string;
     slug: string;

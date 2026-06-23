@@ -11,10 +11,11 @@ import dashboardRouter from "./dashboard.js";
 import schedulesRouter from "./schedules.js";
 
 /**
- * SEO Intelligence API — mounted at `/api/seo`. One sub-router per
- * resource. Every route runs `requireAuth` and resolves brand access
- * via `guardBrand` (see `_shared.ts`); all multi-row DB work goes
- * through `withBrandScope()` for tenant isolation.
+ * SEO Intelligence API — mounted at `/api/seo` behind `requireSeoRole`
+ * (role ∈ {admin, lead, reviewer}). One sub-router per resource. Every
+ * route runs `requireAuth` and resolves brand access via `guardBrand`
+ * (see `_shared.ts`); all multi-row DB work goes through `withBrandScope()`
+ * for tenant isolation.
  */
 const router: IRouter = Router();
 

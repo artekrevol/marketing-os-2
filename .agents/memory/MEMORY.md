@@ -1,1 +1,1 @@
-- [BullMQ jobId colons](bullmq-jobid-colons.md) — enqueue() prefixes `${name}:`, so every idempotencyKey must contain exactly one colon; use `-` for extra segments.
+- [Auth role/department model](auth-role-department-model.md) — user_profiles has two axes: role (authority) + department (craft); SEO OS gate must be server-enforced via requireSeoRole on /api/seo, not client-only.

@@ -5,7 +5,15 @@ import { Navigate } from "react-router-dom";
 import { recordAudit } from "@/lib/audit";
 import type { Brand } from "@/lib/brands";
 
-type RoleEnum = "admin" | "editor" | "writer" | "strategist" | "analyst";
+type RoleEnum = "admin" | "lead" | "reviewer" | "member";
+type DepartmentEnum =
+  | "writer"
+  | "editor"
+  | "strategist"
+  | "analyst"
+  | "outreach"
+  | "engineering"
+  | "operations";
 type PodEnum = "content" | "technical" | "growth" | "";
 
 type AppUser = {
@@ -17,11 +25,22 @@ type AppUser = {
   is_tekrevol: boolean;
   project_count: number;
   role: RoleEnum;
+  department: DepartmentEnum;
   pod: PodEnum | null;
   brand_access: string[];
 };
 
-const ROLES: RoleEnum[] = ["admin", "editor", "writer", "strategist", "analyst"];
+const ROLES: RoleEnum[] = ["admin", "lead", "reviewer", "member"];
+const DEPARTMENTS: DepartmentEnum[] = [
+  "writer",
+  "editor",
+  "strategist",
+  "analyst",
+  "outreach",
+  "engineering",
+  "operations",
+];
+const ROLE_RANK: Record<string, number> = { admin: 0, lead: 1, reviewer: 2, member: 3 };
 const PODS: PodEnum[] = ["", "content", "technical", "growth"];
 
 export default function AdminUsers() {
@@ -31,7 +50,7 @@ export default function AdminUsers() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ role: RoleEnum; pod: PodEnum; brand_access: string[] } | null>(null);
+  const [draft, setDraft] = useState<{ role: RoleEnum; department: DepartmentEnum; pod: PodEnum; brand_access: string[] } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newUser, setNewUser] = useState<{
@@ -39,12 +58,13 @@ export default function AdminUsers() {
     password: string;
     display_name: string;
     role: RoleEnum;
+    department: DepartmentEnum;
     pod: PodEnum;
     brand_access: string[];
-  }>({ email: "", password: "", display_name: "", role: "writer", pod: "", brand_access: [] });
+  }>({ email: "", password: "", display_name: "", role: "member", department: "writer", pod: "", brand_access: [] });
 
   const openCreate = () => {
-    setNewUser({ email: "", password: "", display_name: "", role: "writer", pod: "", brand_access: [] });
+    setNewUser({ email: "", password: "", display_name: "", role: "member", department: "writer", pod: "", brand_access: [] });
     setCreateOpen(true);
   };
   const closeCreate = () => {
@@ -75,6 +95,7 @@ export default function AdminUsers() {
       const audit = await recordAudit("user.create", "user", email, `Created account for ${email}`, {
         email,
         role: newUser.role,
+        department: newUser.department,
         pod: newUser.pod || null,
         brand_access: newUser.brand_access,
       });
@@ -92,6 +113,7 @@ export default function AdminUsers() {
           password: newUser.password,
           display_name: newUser.display_name.trim() || null,
           role: newUser.role,
+          department: newUser.department,
           pod: newUser.pod || null,
           brand_access: newUser.brand_access,
         }),
@@ -122,7 +144,13 @@ export default function AdminUsers() {
       setLoading(false);
       return;
     }
-    setUsers(usersResp.ok ? await usersResp.json() : []);
+    const userRows: AppUser[] = usersResp.ok ? await usersResp.json() : [];
+    userRows.sort(
+      (a, b) =>
+        (ROLE_RANK[a.role] ?? 9) - (ROLE_RANK[b.role] ?? 9) ||
+        (a.department || "").localeCompare(b.department || ""),
+    );
+    setUsers(userRows);
     setBrands(brandsResp.ok ? await brandsResp.json() : []);
     setAuthorized(usersResp.ok);
     setLoading(false);
@@ -136,6 +164,7 @@ export default function AdminUsers() {
     setEditingId(u.user_id);
     setDraft({
       role: u.role,
+      department: u.department,
       pod: (u.pod || "") as PodEnum,
       brand_access: [...(u.brand_access || [])],
     });
@@ -163,8 +192,8 @@ export default function AdminUsers() {
         justification,
         {
           email: u.email,
-          before: { role: u.role, pod: u.pod, brand_access: u.brand_access },
-          after: { role: draft.role, pod: draft.pod || null, brand_access: draft.brand_access },
+          before: { role: u.role, department: u.department, pod: u.pod, brand_access: u.brand_access },
+          after: { role: draft.role, department: draft.department, pod: draft.pod || null, brand_access: draft.brand_access },
         },
       );
       if (!audit.ok) {
@@ -177,7 +206,7 @@ export default function AdminUsers() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ role: draft.role, pod: draft.pod || null, brand_access: draft.brand_access }),
+        body: JSON.stringify({ role: draft.role, department: draft.department, pod: draft.pod || null, brand_access: draft.brand_access }),
       });
       if (!resp.ok) {
         const j = (await resp.json().catch(() => ({}))) as { error?: string };
@@ -215,8 +244,8 @@ export default function AdminUsers() {
             <Users className="h-6 w-6 text-accent" /> Users & access
           </h1>
           <p className="text-sm text-ink-muted mt-2 max-w-2xl">
-            Assign role, pod, and brand access. Every change is written to the audit log with a
-            required justification.
+            Assign role, department, pod, and brand access. Every change is written to the audit log
+            with a required justification.
           </p>
         </div>
         <button
@@ -238,6 +267,7 @@ export default function AdminUsers() {
               <tr>
                 <th className="text-left px-4 py-3 font-medium">Email</th>
                 <th className="text-left px-4 py-3 font-medium">Role</th>
+                <th className="text-left px-4 py-3 font-medium">Department</th>
                 <th className="text-left px-4 py-3 font-medium">Pod</th>
                 <th className="text-left px-4 py-3 font-medium">Brand access</th>
                 <th className="text-left px-4 py-3 font-medium">Projects</th>
@@ -274,6 +304,21 @@ export default function AdminUsers() {
                         <span className={`text-xs ${u.role === "admin" ? "text-accent font-medium" : ""}`}>
                           {u.role}
                         </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {isEditing && draft ? (
+                        <select
+                          value={draft.department}
+                          onChange={(e) => setDraft({ ...draft, department: e.target.value as DepartmentEnum })}
+                          className="text-xs px-2 py-1 border border-rule rounded-sm bg-background"
+                        >
+                          {DEPARTMENTS.map((d) => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-xs text-ink-muted">{u.department}</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -354,7 +399,7 @@ export default function AdminUsers() {
                 );
               })}
               {users.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-ink-muted text-sm">No users yet.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-ink-muted text-sm">No users yet.</td></tr>
               )}
             </tbody>
           </table>
@@ -431,6 +476,18 @@ export default function AdminUsers() {
                   >
                     {ROLES.map((r) => (
                       <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-widest text-ink-muted">Department</label>
+                  <select
+                    value={newUser.department}
+                    onChange={(e) => setNewUser({ ...newUser, department: e.target.value as DepartmentEnum })}
+                    className="mt-1 w-full px-2 py-1.5 text-sm border border-rule rounded-sm bg-background"
+                  >
+                    {DEPARTMENTS.map((d) => (
+                      <option key={d} value={d}>{d}</option>
                     ))}
                   </select>
                 </div>

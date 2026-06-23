@@ -20,6 +20,7 @@ type MeResponse = {
   email: string | null;
   isAdmin: boolean;
   role: string;
+  department: string;
   brands: Brand[];
 };
 

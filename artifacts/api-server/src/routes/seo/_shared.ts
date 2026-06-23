@@ -16,8 +16,9 @@ export type BrandGuard =
  * in `user_profiles.brand_access`). Translates `BrandAccessError` into a
  * `{ ok:false, status }` tuple the caller writes as the HTTP response.
  *
- * Every SEO route runs `requireAuth` at the router level first, so
- * `req.auth` is always populated here.
+ * The `/api/seo` parent mounts `requireSeoRole` first (gating on
+ * role ∈ {admin, lead, reviewer}), and each subrouter runs `requireAuth`,
+ * so `req.auth` is always populated here.
  */
 export async function guardBrand(
   req: Request,

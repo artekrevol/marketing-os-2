@@ -11,6 +11,9 @@ import {
   usageLogsTable,
   playbookTable,
   playbookSectionsTable,
+  USER_ROLES,
+  USER_DEPARTMENTS,
+  type UserDepartment,
 } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth.js";
 import { eq, desc, gte, sql, and, count, sum, inArray, asc } from "drizzle-orm";
@@ -44,6 +47,7 @@ router.get("/users", async (_req, res, next) => {
         user_id: p.userId,
         email: p.email,
         role: p.role,
+        department: p.department,
         pod: p.pod,
         brand_access: p.brandAccess || [],
         project_count: countMap[p.userId] ?? 0,
@@ -72,13 +76,15 @@ router.post("/users", async (req, res, next) => {
       email?: unknown;
       password?: unknown;
       role?: unknown;
+      department?: unknown;
       pod?: unknown;
       brand_access?: unknown;
       display_name?: unknown;
     };
     const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
     const password = typeof body.password === "string" ? body.password : "";
-    const role = typeof body.role === "string" ? body.role : "writer";
+    const role = typeof body.role === "string" ? body.role : "member";
+    const department = typeof body.department === "string" ? body.department : "writer";
     const pod = typeof body.pod === "string" && body.pod ? body.pod : null;
     const brandAccess = Array.isArray(body.brand_access)
       ? (body.brand_access.filter((x) => typeof x === "string") as string[])
@@ -96,9 +102,14 @@ router.post("/users", async (req, res, next) => {
       res.status(400).json({ error: "password must be at least 8 characters" });
       return;
     }
-    const allowedRoles = new Set(["admin", "editor", "writer", "strategist", "analyst"]);
+    const allowedRoles = new Set<string>(USER_ROLES);
     if (!allowedRoles.has(role)) {
       res.status(400).json({ error: "invalid role" });
+      return;
+    }
+    const allowedDepartments = new Set<string>(USER_DEPARTMENTS);
+    if (!allowedDepartments.has(department)) {
+      res.status(400).json({ error: "invalid department" });
       return;
     }
 
@@ -121,6 +132,7 @@ router.post("/users", async (req, res, next) => {
       passwordHash,
       displayName,
       role,
+      department: department as UserDepartment,
       pod,
       brandAccess: brandAccess as unknown as string[],
     });
@@ -129,6 +141,7 @@ router.post("/users", async (req, res, next) => {
       user_id: userId,
       email,
       role,
+      department,
       pod,
       brand_access: brandAccess,
       display_name: displayName,
@@ -142,17 +155,28 @@ router.post("/users", async (req, res, next) => {
 router.patch("/users/:userId", async (req, res, next) => {
   try {
     const { userId } = req.params;
-    const { role, pod, brand_access } = req.body as {
+    const { role, department, pod, brand_access } = req.body as {
       role?: string;
+      department?: string;
       pod?: string | null;
       brand_access?: string[];
     };
+
+    if (role !== undefined && !new Set<string>(USER_ROLES).has(role)) {
+      res.status(400).json({ error: "invalid role" });
+      return;
+    }
+    if (department !== undefined && !new Set<string>(USER_DEPARTMENTS).has(department)) {
+      res.status(400).json({ error: "invalid department" });
+      return;
+    }
 
     await db
       .insert(userProfilesTable)
       .values({
         userId,
-        role: role || "writer",
+        role: role || "member",
+        ...(department !== undefined ? { department: department as UserDepartment } : {}),
         pod: pod || null,
         brandAccess: (brand_access as unknown as string[]) || [],
         updatedAt: new Date(),
@@ -161,6 +185,7 @@ router.patch("/users/:userId", async (req, res, next) => {
         target: userProfilesTable.userId,
         set: {
           ...(role !== undefined ? { role } : {}),
+          ...(department !== undefined ? { department: department as UserDepartment } : {}),
           ...(pod !== undefined ? { pod } : {}),
           ...(brand_access !== undefined ? { brandAccess: brand_access as unknown as string[] } : {}),
           updatedAt: new Date(),

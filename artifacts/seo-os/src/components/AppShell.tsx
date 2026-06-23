@@ -5,9 +5,9 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/useAuth";
 import { BrandProvider, useActiveBrand } from "@/lib/brands";
 
-type AuthState = "loading" | "in" | "out" | "blocked" | "writer";
+type AuthState = "loading" | "in" | "out" | "blocked" | "member";
 
-const SEO_OS_ROLES = new Set(["admin", "lead", "reviewer", "outreach"]);
+const SEO_OS_ROLES = new Set(["admin", "lead", "reviewer"]);
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const { user, isLoaded, isSignedIn, signOut: authSignOut } = useAuth();
@@ -27,8 +27,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
     const role = user!.role;
     if (user!.isAdmin || SEO_OS_ROLES.has(role)) {
       setAuthState("in");
-    } else if (role === "writer") {
-      setAuthState("writer");
+    } else if (role === "member") {
+      setAuthState("member");
     } else {
       setAuthState("blocked");
     }
@@ -77,7 +77,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
-  if (authState === "writer") {
+  if (authState === "member") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-paper text-ink px-6">
         <div className="max-w-md border border-rule rounded-md bg-background p-8 text-center">
@@ -86,7 +86,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <span className="font-mono">{email}</span> isn't a reviewer or admin.
           </p>
           <p className="text-sm text-ink-muted mb-6">
-            Writers stay in ContentForge — submitted drafts surface there with
+            Members stay in ContentForge — submitted drafts surface there with
             their QA status. Ask an admin if you need the reviewer role.
           </p>
           <div className="flex items-center justify-center gap-2">

@@ -1,12 +1,29 @@
 import type { Request, RequestHandler } from "express";
 import { db } from "@workspace/db";
-import { userProfilesTable, projectsTable } from "@workspace/db";
+import { userProfilesTable, projectsTable, USER_ROLES } from "@workspace/db";
+import type { UserRole } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 export interface AuthContext {
   userId: string;
   email: string | null;
   isAdmin: boolean;
+  role: UserRole;
+}
+
+/**
+ * Roles permitted to enter the SEO OS module. "outreach" is a DEPARTMENT,
+ * not a role, and is intentionally excluded. Kept in sync with the SEO OS
+ * frontend gate (`AppShell` SEO_OS_ROLES) and the Hub SEO tile gate.
+ */
+export const SEO_OS_ROLES: ReadonlySet<UserRole> = new Set<UserRole>([
+  "admin",
+  "lead",
+  "reviewer",
+]);
+
+function isUserRole(value: string): value is UserRole {
+  return (USER_ROLES as readonly string[]).includes(value);
 }
 
 declare global {
@@ -42,7 +59,7 @@ function seedAdminUserIds(): Set<string> {
 async function ensureUserProfile(
   userId: string,
   email: string | null,
-): Promise<{ isAdmin: boolean }> {
+): Promise<{ isAdmin: boolean; role: UserRole }> {
   const admins = seedAdminEmails();
   const adminIds = seedAdminUserIds();
   const isSeedAdmin =
@@ -70,16 +87,22 @@ async function ensureUserProfile(
         .where(eq(userProfilesTable.userId, userId));
     }
 
-    return { isAdmin: existing.role === "admin" || isSeedAdmin };
+    const isAdmin = existing.role === "admin" || isSeedAdmin;
+    const role: UserRole = isAdmin
+      ? "admin"
+      : isUserRole(existing.role)
+        ? existing.role
+        : "member";
+    return { isAdmin, role };
   }
 
-  const role = isSeedAdmin ? "admin" : "writer";
+  const role: UserRole = isSeedAdmin ? "admin" : "member";
   await db
     .insert(userProfilesTable)
     .values({ userId, email, role, brandAccess: [] })
     .onConflictDoNothing();
 
-  return { isAdmin: isSeedAdmin };
+  return { isAdmin: isSeedAdmin, role };
 }
 
 export const requireAuth: RequestHandler = async (req, res, next) => {
@@ -95,8 +118,43 @@ export const requireAuth: RequestHandler = async (req, res, next) => {
       .where(eq(userProfilesTable.userId, userId))
       .limit(1);
     const email = rows[0]?.email ?? null;
-    const { isAdmin } = await ensureUserProfile(userId, email);
-    req.auth = { userId, email, isAdmin };
+    const { isAdmin, role } = await ensureUserProfile(userId, email);
+    req.auth = { userId, email, isAdmin, role };
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Express middleware: gate the SEO OS module to roles in `SEO_OS_ROLES`
+ * (admin, lead, reviewer). Self-contained — resolves the session and
+ * profile like `requireAdmin`, so it can be mounted directly on the
+ * `/api/seo` router without depending on an upstream `requireAuth`.
+ * Members (and any non-listed role) get 403; the SEO OS frontend
+ * redirects them to ContentForge.
+ */
+export const requireSeoRole: RequestHandler = async (req, res, next) => {
+  const userId = req.session?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "unauthenticated" });
+    return;
+  }
+  try {
+    const rows = await db
+      .select({ email: userProfilesTable.email })
+      .from(userProfilesTable)
+      .where(eq(userProfilesTable.userId, userId))
+      .limit(1);
+    const email = rows[0]?.email ?? null;
+    const { isAdmin, role } = await ensureUserProfile(userId, email);
+    req.auth = { userId, email, isAdmin, role };
+    if (!SEO_OS_ROLES.has(role)) {
+      res
+        .status(403)
+        .json({ error: "SEO OS access requires admin, lead, or reviewer role" });
+      return;
+    }
     next();
   } catch (err) {
     next(err);
@@ -211,8 +269,8 @@ export const requireAdmin: RequestHandler = async (req, res, next) => {
       .where(eq(userProfilesTable.userId, userId))
       .limit(1);
     const email = rows[0]?.email ?? null;
-    const { isAdmin } = await ensureUserProfile(userId, email);
-    req.auth = { userId, email, isAdmin };
+    const { isAdmin, role } = await ensureUserProfile(userId, email);
+    req.auth = { userId, email, isAdmin, role };
     if (!isAdmin) {
       res.status(403).json({ error: "admin required" });
       return;

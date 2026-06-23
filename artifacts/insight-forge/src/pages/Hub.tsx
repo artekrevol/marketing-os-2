@@ -29,6 +29,9 @@ export default function Hub() {
 
   if (!user) return null;
 
+  const canEnterSeo =
+    user.isAdmin || ["admin", "lead", "reviewer"].includes(user.role);
+
   return (
     <div className="min-h-screen bg-paper text-ink flex flex-col">
       <header className="px-10 py-6 border-b border-rule flex items-center justify-between">
@@ -75,23 +78,25 @@ export default function Hub() {
             </span>
           </a>
 
-          <a
-            href="/seo-os/"
-            className="group relative border border-rule rounded-md bg-background p-8 hover:border-ink transition-all hover:shadow-sm"
-          >
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-9 h-9 rounded bg-ink flex items-center justify-center shrink-0">
-                <ShieldCheck className="h-4 w-4 text-paper" strokeWidth={1.75} />
+          {canEnterSeo && (
+            <a
+              href="/seo-os/"
+              className="group relative border border-rule rounded-md bg-background p-8 hover:border-ink transition-all hover:shadow-sm"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-9 h-9 rounded bg-ink flex items-center justify-center shrink-0">
+                  <ShieldCheck className="h-4 w-4 text-paper" strokeWidth={1.75} />
+                </div>
+                <span className="font-serif text-xl">SEO OS</span>
               </div>
-              <span className="font-serif text-xl">SEO OS</span>
-            </div>
-            <p className="text-sm text-ink-muted leading-relaxed mb-6">
-              Quality gate and SEO recovery. Review submitted drafts, run automated checks, track ranking recovery initiatives.
-            </p>
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-accent group-hover:gap-2.5 transition-all">
-              Open SEO OS <ArrowRight className="h-3.5 w-3.5" />
-            </span>
-          </a>
+              <p className="text-sm text-ink-muted leading-relaxed mb-6">
+                Quality gate and SEO recovery. Review submitted drafts, run automated checks, track ranking recovery initiatives.
+              </p>
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-accent group-hover:gap-2.5 transition-all">
+                Open SEO OS <ArrowRight className="h-3.5 w-3.5" />
+              </span>
+            </a>
+          )}
         </div>
       </main>
 

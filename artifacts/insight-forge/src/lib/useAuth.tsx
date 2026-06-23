@@ -21,6 +21,7 @@ export interface AuthUser {
   email: string | null;
   isAdmin: boolean;
   role: string;
+  department: string;
   brands: AuthBrand[];
 }
 
@@ -53,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: string | null;
           isAdmin: boolean;
           role: string;
+          department: string;
           brands: AuthBrand[];
         };
         setUser({
@@ -60,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: data.email,
           isAdmin: data.isAdmin,
           role: data.role,
+          department: data.department,
           brands: data.brands,
         });
       } else {

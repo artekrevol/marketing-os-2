@@ -22,7 +22,8 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     const profile = profiles[0];
     const brandAccess = (profile?.brandAccess ?? []) as string[];
-    const role = profile?.role ?? "writer";
+    const role = profile?.role ?? "member";
+    const department = profile?.department ?? "writer";
     const effectiveAdmin = isAdmin || role === "admin";
 
     let brands: (typeof brandsTable.$inferSelect)[];
@@ -37,7 +38,7 @@ router.get("/", requireAuth, async (req, res, next) => {
       brands = [];
     }
 
-    res.json({ userId, email, isAdmin: effectiveAdmin, role, brands });
+    res.json({ userId, email, isAdmin: effectiveAdmin, role, department, brands });
   } catch (err) {
     next(err);
   }
