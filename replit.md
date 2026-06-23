@@ -1,6 +1,6 @@
-# TekRevol Content Platform
+# TekRevol Marketing OS
 
-A unified platform with a single login hub at `/` that routes users into two modules: **ContentForge** (research-led content drafting) and **SEO OS** (quality gate & recovery). Both share the same Clerk auth session.
+A unified Marketing OS with a single login hub at `/` that routes users into modules: **ContentForge** (research-led content drafting) and **SEO OS** (quality gate & recovery), with more modules planned. All share the same Clerk auth session.
 
 ## Run & Operate
 

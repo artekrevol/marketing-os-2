@@ -47,7 +47,7 @@ export default function Auth() {
             <span className="font-serif text-2xl tracking-tight">TekRevol</span>
           </div>
           <span className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">
-            Content Platform
+            Marketing OS
           </span>
         </div>
 

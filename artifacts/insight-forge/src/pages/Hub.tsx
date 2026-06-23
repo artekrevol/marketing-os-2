@@ -154,7 +154,7 @@ export default function Hub() {
           <div>
             <span className="font-serif text-lg tracking-tight">TekRevol</span>
             <span className="ml-2 text-[11px] uppercase tracking-[0.15em] text-ink-muted">
-              Content Platform
+              Marketing OS
             </span>
           </div>
         </div>
@@ -189,7 +189,7 @@ export default function Hub() {
             One workspace for research-led content and SEO recovery.
           </h1>
           <p className="text-ink-muted mt-5 max-w-2xl leading-relaxed">
-            TekRevol Content Platform unifies your editorial pipeline and
+            TekRevol Marketing OS unifies your editorial pipeline and
             search-quality operations. Draft with research depth in{" "}
             <span className="text-ink">ContentForge</span>, then protect and
             recover rankings in <span className="text-ink">SEO OS</span> — one
