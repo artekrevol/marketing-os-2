@@ -1,0 +1,537 @@
+# Marketing OS — Shared Data Layer Dispatch
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Scope:** Connect ContentForge and SEO OS via a shared data layer so context flows between them in both directions, with graceful degradation and source attribution as design principles, not afterthoughts.
+**Dispatch type:** Single sequential change. Schema → query helpers → worker jobs → UI surfaces → smoke tests.
+
+**Sequencing note:** This dispatch ships *before* the Content Quality Fix dispatch. The Content Quality Fix has already been drafted; once this data layer is live and verified, the quality fix dispatch picks up with the asset library (Playbook, Reviews Bank, Internal Linking File) reading from database tables this dispatch creates, rather than file-based loaders.
+
+---
+
+## Why this exists
+
+ContentForge and SEO OS currently share a database but don't share knowledge. A writer drafting a blog about "Houston app development cost" can't see — from inside ContentForge — that the keyword has 480 monthly searches, TekRevol currently ranks #34, and three competitors hold positions 1–3. A pod lead reviewing rankings in SEO OS can't see — from inside SEO OS — that two drafts in flight are targeting the same keyword.
+
+The value of Marketing OS being a *platform* rather than two adjacent tools depends on these cross-module reads working. This dispatch builds the data layer that makes them work.
+
+---
+
+## Design philosophy — four rules that govern every wire crossing modules
+
+These rules apply uniformly across every query, every UI surface, every worker job in this dispatch. They are not "nice-to-have" — they're the architectural backbone.
+
+### Rule 1 — Never throw on missing data; return a typed empty state
+
+Every cross-module query function returns a result with both data and a source descriptor. If data exists:
+
+```typescript
+{
+  data: [...],
+  source: { module: 'seo-os', generatedAt: '2026-06-22T10:00:00Z', isFresh: true },
+  reason: null
+}
+```
+
+If data doesn't exist:
+
+```typescript
+{
+  data: [],
+  source: null,
+  reason: 'not-yet-tracked'  // or 'stale', 'never-crawled', 'not-published', etc.
+}
+```
+
+The consumer always receives a usable shape. Throwing on missing data is forbidden — silent missing data is the failure mode that erodes platform trust.
+
+### Rule 2 — Consumers must handle empty states explicitly
+
+No silent fallthrough. When ContentForge's Intake page queries `getKeywordContext()` and receives `data: []`, the UI must render an empty state with explicit action. Example:
+
+> *"This keyword isn't tracked in SEO OS yet.* [Track it now] [Continue without context]"
+
+The user understands what's missing, where it would have come from, and what their options are.
+
+### Rule 3 — Attribution is mandatory on every cross-module read
+
+When ContentForge displays SEO data, the UI tags it with source and freshness:
+
+> *"Volume from SEO OS · last updated 6 hours ago"*
+> *"Ranking from SEO OS · last checked 3 days ago"* [refresh]
+
+Same in reverse — SEO OS displaying content metadata tags it: *"From ContentForge · published 2 weeks ago by Rabia."*
+
+Attribution serves two purposes: trust (the user knows the data is real) and remediation (the user knows where to fix it when it's wrong).
+
+### Rule 4 — Staleness is data, not error
+
+Every cross-module read includes a `generatedAt` or `lastChecked` timestamp. Data older than a threshold is visually marked stale but still displayed. UI says *"6 weeks old — [refresh]"* rather than hiding the data. Stale data is usually directionally correct and far more useful than no data.
+
+**Thresholds (dispatcher-approved):**
+
+- Search volume / CPC / competition: **30 days**
+- Rank snapshots: **7 days**
+- Competitor pages: **14 days**
+
+Beyond threshold: mark stale in UI, still display. Provide refresh action where applicable.
+
+---
+
+## Phase 0 — Pre-flight (read-only, report before continuing)
+
+Standard survey-only contract. No code, no schema changes, no installs.
+
+1. **Existing ContentForge → SEO OS reads.** Search the codebase for any current code paths where ContentForge fetches data from SEO OS tables (keywords, rank_snapshots, etc.). Expected: none. Confirm or surface what exists.
+
+2. **Existing SEO OS → ContentForge reads.** Same in reverse — any current code where SEO OS reads from drafts, projects, outlines. Expected: none.
+
+3. **The `drafts` table schema.** Show every column. We'll be adding `target_keyword_text` and `target_location_id`; confirm no name collisions.
+
+4. **Draft status / lifecycle field.** Show how a draft's published status is represented today (likely a `status` enum or column). This is the trigger condition for the publish-link worker.
+
+5. **ContentForge Intake page location.** Per recent verification: at `/new`, labeled "Step 1 · Intake." Confirm the exact file path so Phase 4 can modify it.
+
+6. **The `keywords` table.** Show the schema again (already known from prior dispatch, just confirming). We'll add a `linked_content_count` denormalized counter.
+
+7. **Worker job registration pattern.** Show `lib/jobs/src/types.ts` and confirm how new job types get added. Same pattern as previous dispatches.
+
+8. **The shared component library location.** Where do shared React components live across both frontends (insight-forge and seo-os)? The `DataSourceTag` component needs to be reusable by both.
+
+Report findings before any code is written.
+
+---
+
+## Phase 1 — Schema additions
+
+Three new tables, two new columns, one new denormalized counter. Scoped transactional DDL only — no blanket `drizzle-kit push` (per the schema-drift hazard documented in prior dispatches).
+
+### 1.1 `content_url_keyword_link` — the core bridge
+
+Joins drafts to keywords. Created when a draft is published.
+
+```sql
+CREATE TABLE "content_url_keyword_link" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "brand_id" uuid NOT NULL REFERENCES "brands"("id") ON DELETE restrict,
+  "draft_id" uuid NOT NULL REFERENCES "drafts"("id") ON DELETE cascade,
+  "keyword_id" uuid NOT NULL REFERENCES "keywords"("id") ON DELETE restrict,
+  "published_url" text,
+  "attached_at" timestamptz NOT NULL DEFAULT now(),
+  "attached_by" text NOT NULL,  -- 'auto' | userId on manual override
+  "is_canonical" boolean NOT NULL DEFAULT true,
+  CONSTRAINT "content_url_keyword_link_draft_keyword_uq"
+    UNIQUE ("draft_id", "keyword_id")
+);
+CREATE INDEX "cukl_brand_idx" ON "content_url_keyword_link" ("brand_id");
+CREATE INDEX "cukl_keyword_idx" ON "content_url_keyword_link" ("keyword_id");
+CREATE INDEX "cukl_draft_idx" ON "content_url_keyword_link" ("draft_id");
+```
+
+`is_canonical = true` lets multiple keywords link to one draft while marking one as the primary target. Default behavior assumes the first attached keyword is canonical; subsequent ones are secondary.
+
+### 1.2 `keyword_research_briefs` — context snapshots
+
+Captures *what context the writer actually saw* when they wrote the piece. Critical for retrospective debugging when a ranking outcome surprises us — we can see whether the writer had stale or fresh data at the time.
+
+```sql
+CREATE TABLE "keyword_research_briefs" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "brand_id" uuid NOT NULL REFERENCES "brands"("id") ON DELETE restrict,
+  "project_id" uuid REFERENCES "projects"("id") ON DELETE set null,
+  "keyword_text" text NOT NULL,
+  "location_id" uuid REFERENCES "locations"("id") ON DELETE set null,
+  "requested_at" timestamptz NOT NULL DEFAULT now(),
+  "context_snapshot" jsonb NOT NULL DEFAULT '{}'::jsonb,
+  "requested_by" uuid REFERENCES "user_profiles"("id") ON DELETE set null
+);
+CREATE INDEX "krb_brand_keyword_idx"
+  ON "keyword_research_briefs" ("brand_id", "keyword_text");
+CREATE INDEX "krb_project_idx" ON "keyword_research_briefs" ("project_id");
+```
+
+`context_snapshot` stores the result of `getKeywordContext()` at the moment the Intake step ran. Includes volume, current ranking, top 10 competitors, related keywords. Even when underlying data changes, this snapshot stays intact — provenance for the brief.
+
+### 1.3 `module_data_provenance` — attribution telemetry
+
+Generic table tagging where any cross-module-visible data came from. Powers the attribution UI.
+
+```sql
+CREATE TABLE "module_data_provenance" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "brand_id" uuid NOT NULL REFERENCES "brands"("id") ON DELETE restrict,
+  "entity_type" text NOT NULL,    -- 'keyword' | 'rank_snapshot' | 'draft' | etc.
+  "entity_id" uuid NOT NULL,
+  "source_module" text NOT NULL,  -- 'content-forge' | 'seo-os' | 'system'
+  "source_user_id" uuid REFERENCES "user_profiles"("id") ON DELETE set null,
+  "generated_at" timestamptz NOT NULL DEFAULT now(),
+  "generation_method" text NOT NULL,  -- 'manual' | 'crawl' | 'auto-link' | etc.
+  "metadata" jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX "mdp_entity_idx" ON "module_data_provenance" ("entity_type", "entity_id");
+CREATE INDEX "mdp_brand_idx" ON "module_data_provenance" ("brand_id");
+```
+
+Every cross-module write should emit a row here. The attribution component reads from it.
+
+### 1.4 Column additions to `drafts`
+
+```sql
+ALTER TABLE "drafts"
+ADD COLUMN "target_keyword_text" text,
+ADD COLUMN "target_location_id" uuid REFERENCES "locations"("id") ON DELETE set null;
+CREATE INDEX "drafts_target_keyword_idx"
+  ON "drafts" ("brand_id", "target_keyword_text")
+  WHERE "target_keyword_text" IS NOT NULL;
+```
+
+Populated at Intake. Nullable because legacy drafts don't have these.
+
+### 1.5 Counter on `keywords`
+
+```sql
+ALTER TABLE "keywords"
+ADD COLUMN "linked_content_count" integer NOT NULL DEFAULT 0;
+```
+
+Denormalized counter. Incremented when a link is created in `content_url_keyword_link`, decremented on delete. Maintained via Phase 3's worker jobs and database triggers. Used by SEO OS Keywords page to show "Linked content" at a glance without a join.
+
+### 1.6 Allow-list updates
+
+Add to `BRAND_SCOPED_TABLES`:
+- `content_url_keyword_link`
+- `keyword_research_briefs`
+- `module_data_provenance`
+
+All three are tenant-scoped.
+
+### 1.7 Migration approach
+
+Same as prior dispatches: scoped transactional DDL, report SQL before applying, pause for review. The schema-drift items (`user_roles`, `page_events`, `playbook_sections`) remain untouched.
+
+---
+
+## Phase 2 — Query helpers
+
+All cross-module reads go through typed functions in `lib/db/queries/` (create the directory if absent). These functions enforce Rules 1 and 4 — always return the result shape, always tag freshness.
+
+### 2.1 The standard result shape
+
+Define once, used everywhere:
+
+```typescript
+// lib/db/queries/types.ts
+
+export type DataSource = {
+  module: 'content-forge' | 'seo-os' | 'system';
+  generatedAt: Date;
+  isFresh: boolean;
+  staleAfterDays: number;
+  refreshAction?: 'crawl' | 'manual' | null;
+};
+
+export type QueryResult<T> = {
+  data: T;
+  source: DataSource | null;
+  reason: null | 'not-yet-tracked' | 'never-crawled' | 'not-published'
+        | 'no-rankings' | 'no-competitors' | 'stale';
+};
+```
+
+### 2.2 Four primary query helpers
+
+```typescript
+// lib/db/queries/cross-module.ts
+
+// Used by ContentForge Intake page
+getKeywordContext(
+  brandId: string,
+  keywordText: string,
+  locationId?: string
+): Promise<QueryResult<{
+  volume: number | null;
+  cpc: number | null;
+  competition: number | null;
+  currentRanking: number | null;
+  currentUrl: string | null;
+  topCompetitors: Array<{ domain: string; position: number; url: string }>;
+}>>
+
+// Used by SEO OS Keywords page (popover)
+getContentForKeyword(
+  brandId: string,
+  keywordId: string
+): Promise<QueryResult<Array<{
+  draftId: string;
+  title: string;
+  status: string;
+  publishedUrl: string | null;
+  attachedAt: Date;
+  isCanonical: boolean;
+}>>>
+
+// Used by ContentForge Draft page (linked keyword indicator)
+getKeywordsForContent(
+  brandId: string,
+  draftId: string
+): Promise<QueryResult<Array<{
+  keywordId: string;
+  keywordText: string;
+  currentRanking: number | null;
+  volume: number | null;
+  isCanonical: boolean;
+}>>>
+
+// Used by publish-link worker job and manual override action
+attachKeywordToContent(
+  brandId: string,
+  draftId: string,
+  keywordText: string,
+  locationId: string | null,
+  attachedBy: 'auto' | string,
+  isCanonical: boolean
+): Promise<{ keywordId: string; linkId: string }>
+```
+
+### 2.3 Freshness computation
+
+Each helper computes `isFresh` against the threshold table:
+
+| Entity | Threshold |
+|---|---|
+| Search volume, CPC, competition | 30 days |
+| Rank snapshots | 7 days |
+| Competitor pages | 14 days |
+
+If any underlying data is past threshold, `isFresh = false` and `reason = 'stale'`. The data still returns; the UI handles the staleness display.
+
+### 2.4 Error handling
+
+If the underlying query fails (DB error, malformed input), the helper logs and returns the empty shape with `reason: 'system-error'`. Never throws to the caller. The platform stays responsive even when one query path is broken.
+
+### 2.5 Brand-scoping
+
+Every helper accepts `brandId` as first arg and filters every underlying query by it. Use `withBrandScope()` — same pattern as the rest of the platform. Calling these functions without a `brandId` is a type error.
+
+---
+
+## Phase 3 — Worker jobs
+
+Two new job types on the existing `integrations` queue.
+
+### 3.1 `content.publish-link-keyword`
+
+**Trigger:** A draft's status changes to "published" (mechanism: a database-level trigger or application-level hook in the route that updates draft status — pick whichever matches the platform's existing pattern; survey in Phase 0).
+
+**Payload:**
+```typescript
+{
+  brandId: string;
+  draftId: string;
+  idempotencyKey: string;  // 'publish-link-${draftId}'
+}
+```
+
+**Behavior:**
+1. Read the draft. If `target_keyword_text` is null → no-op, log, exit.
+2. Call `attachKeywordToContent(brandId, draftId, target_keyword_text, target_location_id, 'auto', isCanonical=true)`.
+3. If a keyword row didn't exist, create it (volume/CPC/competition null until SEO OS crawls it).
+4. Increment `keywords.linked_content_count`.
+5. Insert a `module_data_provenance` row (entity_type='content_url_keyword_link', source_module='content-forge', generation_method='auto-link').
+6. Enqueue a one-time `seo.crawl.run` for this single keyword to baseline rankings.
+7. Log + emit event for the activity feed.
+
+**Idempotency:** jobId `content-publish-link:${draftId}`. Multi-colon-safe per the buildJobId guard added in earlier dispatches.
+
+**Manual override surface:** The draft's "published" state UI gains a small "Wrong target keyword?" link that opens an inline editor. Submitting updates the link (sets `attached_by` to the user ID, sets old link `is_canonical = false`, creates new link with `is_canonical = true`).
+
+### 3.2 `seo.refresh-content-context`
+
+**Trigger:** Repeatable, runs nightly. Iterates over `keyword_research_briefs` where the associated project is still in-flight (not yet published) and the snapshot is older than 7 days.
+
+**Payload:**
+```typescript
+{
+  brandId: string;
+  briefId: string;
+  idempotencyKey: string;  // 'refresh-context-${briefId}-${YYYY-MM-DD}'
+}
+```
+
+**Behavior:**
+1. Re-run `getKeywordContext()` for the brief's keyword + location.
+2. If the new snapshot differs meaningfully from the stored one (volume shifted >20%, ranking moved >5 positions, new top competitor entered top 5), update the stored snapshot AND emit a notification to the writer ("SEO context for your in-flight project has changed significantly").
+3. If unchanged, refresh the `generated_at` timestamp only.
+4. Insert provenance row.
+
+**Why this matters:** A writer who starts a piece based on "we rank #34" should know mid-draft if the ranking jumps to #8 (now a refresh-and-defend job, not a new piece) or drops to #82 (now a much harder job). Stale context produces wrong work.
+
+### 3.3 Queue assignment
+
+Both jobs go on the existing `integrations` queue. No new queue needed.
+
+### 3.4 BullMQ jobId hygiene
+
+Both jobs use the `buildJobId()` guard added in earlier dispatches. Exactly one colon in `idempotencyKey`. Verified by typecheck.
+
+---
+
+## Phase 4 — UI surfaces
+
+Three changes plus one shared component.
+
+### 4.1 Shared `<DataSourceTag>` component
+
+Lives in the cross-frontend shared components location identified in Phase 0. Both `insight-forge` and `seo-os` import it.
+
+**Props:**
+```typescript
+{
+  source: DataSource | null;
+  reason: QueryResult<any>['reason'];
+  onRefresh?: () => void;
+  variant?: 'inline' | 'tooltip' | 'badge';
+}
+```
+
+**Visual rules:**
+- Fresh data: small muted label *"From SEO OS · 6 hours ago"*
+- Stale data: same label with warning color and a *[refresh]* affordance
+- Missing data (`source: null`): the component is NOT used by the parent — the parent renders an empty-state UI instead per Rule 2
+
+The component never shows raw timestamps; it formats relative ("6 hours ago," "3 days ago," "6 weeks ago — stale"). Uses platform's existing date library.
+
+### 4.2 ContentForge Intake page — SEO context panel
+
+Page: `artifacts/insight-forge/src/pages/projects/new.tsx` (confirm via Phase 0).
+
+Below the existing intake fields, add a new panel: **"SEO context"**.
+
+**Behavior:**
+- When the user enters a target keyword and selects a brand, fire `getKeywordContext()`.
+- If `source.module = 'seo-os'`: render volume, CPC, current ranking, top 5 competitors. Tag with `<DataSourceTag>`.
+- If `data: []` and `reason: 'not-yet-tracked'`: render the empty state per Rule 2:
+
+> *"This keyword isn't tracked in SEO OS yet."*
+> *Default-on checkbox: ✓ Track this keyword in SEO OS when I submit the brief*
+> *[Continue]*
+
+The default-on checkbox means writers get keywords auto-tracked without conscious effort, but can opt out for one-off exploratory drafts. Honors the dispatcher's "explicit click, default-on checkbox" decision.
+
+- If `data: []` and `reason: 'no-rankings'` (keyword tracked but no SERP data yet): render volume + CPC + competition only, with a note: *"Ranking data not yet collected — [run rank check]"*
+
+**On Intake submission:**
+- Write `target_keyword_text` and `target_location_id` to the new draft.
+- Capture the current SEO context snapshot to `keyword_research_briefs`.
+- If the user kept "Track this keyword" checked AND the keyword isn't yet in `keywords`, create it (volume/etc. null, will populate on first crawl). Enqueue a `seo.crawl.run` for it.
+
+### 4.3 ContentForge Draft page — linked keyword indicator
+
+Page: wherever the in-pipeline draft view lives (confirm via Phase 0).
+
+Add a small "Linked keyword" badge near the draft title:
+
+> *Targeting: "Houston app development cost" · ranking #34 · 480 vol/mo · [Open in SEO OS]*
+
+Tag with `<DataSourceTag>`. Click-through opens that keyword's page in SEO OS.
+
+If `data: []`, the badge reads *"No target keyword set"* with a [set it now] action that pops an inline editor.
+
+### 4.4 SEO OS Keywords page — linked content column
+
+Page: `artifacts/seo-os/src/pages/seo/Keywords.tsx`.
+
+Add a column to the keyword table: **"Linked content"** — shows the value of `keywords.linked_content_count` (the denormalized counter).
+
+When > 0: clicking opens a popover listing each linked draft (title, status, published URL, attached date). Each row tagged with `<DataSourceTag>` showing source as ContentForge.
+
+When = 0: cell shows "—" (no popover).
+
+This is the inverse view of the ContentForge linked-keyword badge — same data, different lens.
+
+### 4.5 Attribution coverage
+
+Every place in Phase 4.2, 4.3, and 4.4 where cross-module data appears must have `<DataSourceTag>` adjacent. The component is small and unobtrusive but mandatory. Reviewers should reject any UI in this dispatch that displays cross-module data without it.
+
+---
+
+## Phase 5 — Smoke tests
+
+Each must pass before declaring complete.
+
+1. Three new tables created with correct FKs and indexes; two new columns on `drafts`; one new counter on `keywords`. Allow-list updated.
+
+2. `getKeywordContext(brandId, "nonexistent keyword", null)` returns `{ data: { volume: null, ..., topCompetitors: [] }, source: null, reason: 'not-yet-tracked' }` — no throw.
+
+3. `getKeywordContext(brandId, "houston app development cost", houstonLocId)` for a tracked keyword returns full context with `source.module = 'seo-os'`, `source.isFresh = true`.
+
+4. Same query against a keyword whose rank snapshot is 10 days old returns the data with `source.isFresh = false`, `reason = 'stale'`.
+
+5. `getKeywordContext` for a different brand than the keyword belongs to returns empty result (cross-brand isolation).
+
+6. `attachKeywordToContent` creates a `content_url_keyword_link` row, increments `keywords.linked_content_count`, inserts `module_data_provenance` row.
+
+7. Calling `attachKeywordToContent` twice for the same (draft_id, keyword_id) doesn't create a duplicate (UNIQUE constraint).
+
+8. Publishing a draft (status → 'published') fires `content.publish-link-keyword`. Job completes successfully. Link row exists.
+
+9. Publishing a draft with `target_keyword_text = null` doesn't error — job runs, logs no-op, exits cleanly.
+
+10. The "Wrong target keyword?" override on a published draft creates a new canonical link and demotes the old one to `is_canonical = false`.
+
+11. ContentForge Intake page: entering a keyword fires `getKeywordContext` and renders the SEO context panel with `<DataSourceTag>` when data exists.
+
+12. ContentForge Intake page: entering a not-yet-tracked keyword renders the empty state with the default-on checkbox.
+
+13. Submitting Intake with the checkbox checked creates a keyword row, enqueues a crawl job, writes a `keyword_research_briefs` row with the snapshot.
+
+14. Submitting Intake with the checkbox unchecked does NOT create a keyword row but does write the brief (with empty context_snapshot).
+
+15. ContentForge Draft page renders the linked-keyword badge for drafts with `target_keyword_text` set.
+
+16. SEO OS Keywords page renders the "Linked content" column with correct counts. Popover renders for keywords with >0 linked drafts.
+
+17. `<DataSourceTag>` renders correctly in all three states: fresh, stale, missing.
+
+18. `seo.refresh-content-context` repeatable job runs successfully on a single in-flight brief; updates the snapshot timestamp; emits notification only when context changed meaningfully.
+
+19. Cross-brand isolation: a member with brand access to ClaimShield cannot read TekRevol's keyword context via `getKeywordContext` even with the correct keyword text.
+
+20. `pnpm typecheck` passes across libs, api-server, and both frontends.
+
+---
+
+## Phase 6 — Architect / validator notes
+
+Same as prior dispatches: `git show --stat HEAD` before declaring complete. Treat architect feedback as authoritative.
+
+Two specific areas to scrutinize during architect review:
+
+**The denormalized `linked_content_count` counter.** Denormalized counters drift if not maintained correctly. The architect should look for: every code path that creates a `content_url_keyword_link` increments the counter; every delete decrements it; an integrity check job exists or is queued to verify counter accuracy periodically. If the counter can get out of sync silently, recommend either a database trigger or a periodic reconciliation job.
+
+**The Rule 2 enforcement.** Every consumer of the cross-module query functions should handle the empty-data case explicitly. The architect should check that no consumer renders `data.length === 0 ? null : <something>` without an explicit empty state — that's silent fallthrough, the failure mode Rule 2 exists to prevent.
+
+---
+
+## Operational notes
+
+- **Order strict:** Phase 1 (schema) → Phase 2 (queries) → Phase 3 (workers) → Phase 4 (UI). Don't reorder. UI without queries is broken; queries without schema are uncallable.
+
+- **Default-on tracking checkbox** at Intake is the dispatcher's chosen friction model. If real usage reveals it produces too many junk keywords (writers adding speculative keywords they don't pursue), the default can flip to off in a small UI change — no architecture change.
+
+- **The `keyword_research_briefs` snapshot is immutable in practice.** Once written, it should never be updated in place — even by the refresh worker. The refresh worker writes a *new* row tied to the same project, preserving the original. This means a single in-flight brief may have multiple snapshot rows; the UI shows the latest, debugging can compare across them. Implementation detail — but worth documenting.
+
+- **No data migration for existing drafts.** Drafts created before this dispatch ships have `target_keyword_text = null`. They don't auto-link to keywords on publish (the worker correctly no-ops). If you want historical drafts linked, that's a separate backfill dispatch with manual review.
+
+- **Stale-data thresholds are tunable.** Hard-coded in this dispatch (30/7/14 days). If real usage suggests different windows are better, change the const values in one place. No DB migration.
+
+- **Attribution coverage is non-negotiable.** Any future dispatch that adds new cross-module reads must use `<DataSourceTag>` on the display surface. Reviewers should reject UI work that displays cross-module data without it.
+
+- **The publish-link worker enqueues a crawl** to baseline rankings for newly-tracked keywords. This costs DataForSEO money. At single-keyword scale per publish event, this is sub-cent — well within budget. But if a future workflow publishes many drafts in batch, the costs add up; worth monitoring in `usage_logs`.
+
+- **Provenance table grows fast.** Every cross-module write creates a row. At early scale this is fine. If row count becomes a concern, the table is a candidate for periodic archival (move rows older than 1 year to a cold storage table). Defer until needed.
+
+- **Out of scope for this dispatch, queued for the Content Quality Fix:** the asset library (Playbook, Reviews Bank, Internal Linking File) moving from file-based loading to database-backed tables that this data layer can attribute and freshness-tag. That's the natural next consumer of this infrastructure.
+
+---
+
+**Begin Phase 0 read-only. Report findings before any code is written. Pause after Phase 1 DDL is generated for review before applying. Phases 2 through 4 run straight through after Phase 1 sign-off. Phase 5's 20 smoke tests gate completion.**
