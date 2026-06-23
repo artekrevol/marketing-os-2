@@ -26,3 +26,5 @@ export * from "./outlines";
 export * from "./draft-scores";
 export * from "./voice-library";
 export * from "./interview-answers";
+// SEO Intelligence — keyword research, rank tracking, competitor discovery
+export * from "./seo";

@@ -28,6 +28,13 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "competitor_pages",
   "keyword_lists",
   "rank_snapshots",
+  // SEO Intelligence — keyword/rank/competitor module
+  "locations",
+  "keywords",
+  "crawl_batches",
+  "crawl_schedules",
+  "competitor_insights",
+  "blacklisted_domains",
   // Sprint 3 — Quality Gate
   "content_objects",
   "qa_runs",
