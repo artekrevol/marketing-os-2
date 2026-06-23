@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { NotebookPen, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/useAuth";
 
 export default function Auth() {
@@ -39,9 +39,16 @@ export default function Auth() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-paper text-ink px-6">
       <div className="w-full max-w-sm">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <NotebookPen className="h-5 w-5 text-accent" strokeWidth={1.75} />
-          <span className="font-serif text-2xl tracking-tight">ContentForge</span>
+        <div className="flex flex-col items-center gap-3 mb-8">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded bg-ink flex items-center justify-center">
+              <span className="text-[#FF3C00] font-bold text-sm leading-none">T</span>
+            </div>
+            <span className="font-serif text-2xl tracking-tight">TekRevol</span>
+          </div>
+          <span className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">
+            Content Platform
+          </span>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
