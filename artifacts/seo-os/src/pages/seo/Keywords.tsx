@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { Trash2, FileText, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import { seo } from "@/lib/api";
+import { seo, crossModule } from "@/lib/api";
+import { DataSourceTag } from "@workspace/ui-shared";
 import { SeoShell, withBrand, StateBox } from "./_shell";
 
 function KeywordsInner({ brandId }: { brandId: string }) {
@@ -155,6 +156,7 @@ function KeywordsInner({ brandId }: { brandId: string }) {
                 <th className="text-left font-medium px-4 py-2">Keyword</th>
                 <th className="text-left font-medium px-4 py-2">Location</th>
                 <th className="text-left font-medium px-4 py-2">Volume</th>
+                <th className="text-left font-medium px-4 py-2">Linked content</th>
                 <th className="px-4 py-2"> </th>
               </tr>
             </thead>
@@ -164,6 +166,13 @@ function KeywordsInner({ brandId }: { brandId: string }) {
                   <td className="px-4 py-2 font-medium">{k.keywordText}</td>
                   <td className="px-4 py-2">{locName(k.locationId)}</td>
                   <td className="px-4 py-2">{k.searchVolume ?? "—"}</td>
+                  <td className="px-4 py-2">
+                    <LinkedContentCell
+                      brandId={brandId}
+                      keywordId={k.id}
+                      count={k.linkedContentCount}
+                    />
+                  </td>
                   <td className="px-4 py-2 text-right">
                     <button
                       onClick={() => deleteM.mutate(k.id)}
@@ -180,6 +189,121 @@ function KeywordsInner({ brandId }: { brandId: string }) {
         </div>
       )}
     </SeoShell>
+  );
+}
+
+/**
+ * Cross-module read: shows how many ContentForge articles target this keyword.
+ * "—" when none. When >0 it opens a popover that lazily fetches the linked
+ * articles (with a <DataSourceTag> attributing them to ContentForge).
+ */
+function LinkedContentCell({
+  brandId,
+  keywordId,
+  count,
+}: {
+  brandId: string;
+  keywordId: string;
+  count: number;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const linkedQ = useQuery({
+    queryKey: ["cross-module", "content-for-keyword", brandId, keywordId],
+    queryFn: () => crossModule.contentForKeyword(brandId, keywordId),
+    enabled: open && count > 0,
+  });
+
+  if (count <= 0) {
+    return <span className="text-ink-muted">—</span>;
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 text-sm hover:text-accent transition-colors"
+        title="View linked articles"
+      >
+        <FileText className="h-3.5 w-3.5 text-ink-muted" />
+        <span className="font-medium">{count}</span>
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 w-80 bg-background border border-rule rounded-md shadow-md z-50 p-3">
+          {linkedQ.isLoading ? (
+            <p className="text-xs text-ink-muted">Loading linked articles…</p>
+          ) : linkedQ.isError || (linkedQ.data && linkedQ.data.reason === "system-error") ? (
+            // Rule 1/3: the fetch itself failed (network/throw) OR the helper
+            // reported a system error. Either way this is NOT "no content" —
+            // say so explicitly, tag the (failed) source, and offer a retry.
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs text-ink-muted">Couldn’t load linked content.</span>
+                <DataSourceTag
+                  source={linkedQ.data?.source ?? null}
+                  reason={linkedQ.data?.reason ?? "system-error"}
+                />
+              </div>
+              <button
+                onClick={() => void linkedQ.refetch()}
+                className="text-xs text-accent hover:underline"
+              >
+                retry
+              </button>
+            </div>
+          ) : linkedQ.data && linkedQ.data.data.length > 0 ? (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] uppercase tracking-wide text-ink-muted">
+                  Linked content
+                </span>
+                <DataSourceTag source={linkedQ.data.source} reason={linkedQ.data.reason} />
+              </div>
+              <ul className="space-y-1.5">
+                {linkedQ.data.data.map((item) => (
+                  <li key={item.projectId} className="flex items-start gap-2">
+                    <FileText className="h-3.5 w-3.5 text-ink-muted mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">
+                        {item.title}
+                        {item.isCanonical && (
+                          <span className="ml-1.5 text-[10px] uppercase tracking-wide text-accent">
+                            target
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-[11px] text-ink-muted">
+                        {item.status}
+                        {item.publishedUrl && (
+                          <>
+                            {" · "}
+                            <a
+                              href={item.publishedUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-0.5 hover:text-accent"
+                            >
+                              live <ExternalLink className="h-3 w-3" />
+                            </a>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-ink-muted">No linked content.</span>
+              {linkedQ.data && (
+                <DataSourceTag source={linkedQ.data.source} reason={linkedQ.data.reason} />
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

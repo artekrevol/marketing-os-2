@@ -2,6 +2,7 @@ import { Outlet, useParams, Navigate } from "react-router-dom";
 import { useEffect, useState, useCallback } from "react";
 import StageNav from "@/components/StageNav";
 import type { Project } from "@/lib/types";
+import { DraftKeywordBadge } from "@/components/DraftKeywordBadge";
 
 export default function ProjectLayout() {
   const { id } = useParams();
@@ -35,6 +36,15 @@ export default function ProjectLayout() {
           {project.content_type} · {project.funnel_stage || "intake"} · {project.pod || "no pod"}
         </p>
         <h1 className="font-serif text-2xl mt-1">{project.topic}</h1>
+        {project.brand_id && (
+          <div className="mt-2">
+            <DraftKeywordBadge
+              brandId={project.brand_id}
+              projectId={project.id}
+              fallbackKeyword={project.keyword ?? null}
+            />
+          </div>
+        )}
       </header>
       <StageNav projectId={project.id} current={project.current_stage} />
       <div className="flex-1 min-h-0">

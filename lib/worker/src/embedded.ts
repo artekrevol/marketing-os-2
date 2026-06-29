@@ -109,6 +109,24 @@ export async function startEmbeddedWorkers(): Promise<EmbeddedWorkerHandle> {
   }
 
   try {
+    await addRepeatable(
+      "integrations",
+      "seo.refresh-content-context-nightly",
+      { idempotencyKey: "seo.refresh-content-context-nightly:cron" },
+      "0 3 * * *",
+    );
+    logger.info(
+      { pattern: "0 3 * * *" },
+      "embedded-worker: refresh-content-context-nightly repeatable registered",
+    );
+  } catch (err) {
+    logger.error(
+      { err },
+      "embedded-worker: failed to register refresh-content-context-nightly cron",
+    );
+  }
+
+  try {
     await registerActiveCrawlSchedules(logger);
   } catch (err) {
     logger.error(

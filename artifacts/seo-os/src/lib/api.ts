@@ -491,6 +491,7 @@ export type SeoKeyword = {
   searchVolume: number | null;
   cpc: string | null;
   competition: string | null;
+  linkedContentCount: number;
   lastCheckedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -801,4 +802,50 @@ export const seo = {
       }),
     );
   },
+};
+
+// ---- Cross-module reads (Shared Data Layer) ----
+
+export type CrossDataSource = {
+  module: "content-forge" | "seo-os" | "system";
+  generatedAt: string;
+  isFresh: boolean;
+  staleAfterDays: number;
+  refreshAction?: "crawl" | "manual" | null;
+};
+
+export type CrossResult<T> = {
+  data: T;
+  source: CrossDataSource | null;
+  reason:
+    | null
+    | "not-yet-tracked"
+    | "never-crawled"
+    | "not-published"
+    | "no-rankings"
+    | "no-competitors"
+    | "stale"
+    | "system-error";
+};
+
+export type LinkedContentItem = {
+  projectId: string;
+  title: string;
+  status: string;
+  publishedUrl: string | null;
+  attachedAt: string;
+  isCanonical: boolean;
+};
+
+export const crossModule = {
+  /** Articles (ContentForge) linked to a given SEO keyword. */
+  contentForKeyword: async (
+    brandId: string,
+    keywordId: string,
+  ): Promise<CrossResult<LinkedContentItem[]>> =>
+    jsonOrThrow<CrossResult<LinkedContentItem[]>>(
+      await authedFetch(
+        `/api/cross-module/content-for-keyword?${qs(brandId, { keywordId })}`,
+      ),
+    ),
 };

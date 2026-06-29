@@ -101,6 +101,9 @@ export const keywordsTable = pgTable(
     cpc: numeric("cpc", { precision: 12, scale: 4 }),
     competition: numeric("competition", { precision: 6, scale: 4 }),
     lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    // Shared Data Layer: denormalized count of content_url_keyword_link
+    // rows pointing at this keyword. Maintained by the publish-link worker.
+    linkedContentCount: integer("linked_content_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

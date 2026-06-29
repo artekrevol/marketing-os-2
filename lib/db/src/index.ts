@@ -16,6 +16,8 @@ export const db = drizzle(pool, { schema });
 export * from "./schema";
 export * from "./brand-scope";
 export * from "./middleware";
+export * from "./queries/types";
+export * from "./queries/cross-module";
 
 import { createGuardedDb } from "./middleware";
 

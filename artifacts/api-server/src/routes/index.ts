@@ -14,6 +14,7 @@ import voiceLibraryRouter from "./voice-library.js";
 import pageEventsRouter from "./page-events.js";
 import authRouter from "./auth.js";
 import seoRouter from "./seo/index.js";
+import crossModuleRouter from "./cross-module.js";
 import dashboardRouter from "./dashboard.js";
 import { requireSeoRole } from "../middlewares/auth.js";
 
@@ -26,6 +27,7 @@ router.use("/admin", adminRouter);
 router.use("/quality-gate", qualityGateRouter);
 router.use("/recovery", recoveryRouter);
 router.use("/seo", requireSeoRole, seoRouter);
+router.use("/cross-module", crossModuleRouter);
 router.use("/ai", aiRouter);
 router.use("/me", meRouter);
 router.use("/dashboard", dashboardRouter);

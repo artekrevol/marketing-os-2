@@ -46,6 +46,10 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "recovery_baselines",
   "recovery_initiatives",
   "recovery_snapshots",
+  // Shared Data Layer — cross-module bridge tables
+  "content_url_keyword_link",
+  "keyword_research_briefs",
+  "module_data_provenance",
 ]);
 
 /** Brand context attached to a scoped transaction. */

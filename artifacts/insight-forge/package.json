@@ -47,6 +47,7 @@
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "catalog:",
+    "@workspace/ui-shared": "workspace:*",
     "autoprefixer": "^10.4.21",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",

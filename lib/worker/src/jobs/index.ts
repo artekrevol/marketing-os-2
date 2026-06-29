@@ -18,6 +18,11 @@ import { handleSeoCrawlRun } from "./seo/crawl-run";
 import { handleSeoRankCheckScheduled } from "./seo/rank-check-scheduled";
 import { handleSeoCompetitorDiscover } from "./seo/competitor-discover";
 import { handleSeoCompetitorInsightsCompute } from "./seo/competitor-insights-compute";
+import { handlePublishLinkKeyword } from "./content/publish-link-keyword";
+import {
+  handleSeoRefreshContentContext,
+  handleSeoRefreshContentContextNightly,
+} from "./seo/refresh-content-context";
 
 type Handler<N extends JobName> = (data: JobData<N>, log: ReturnType<typeof jobLogger>) => Promise<unknown>;
 
@@ -36,6 +41,9 @@ export const HANDLERS: { [N in JobName]: Handler<N> } = {
   "seo.rank-check.scheduled": handleSeoRankCheckScheduled,
   "seo.competitor.discover": handleSeoCompetitorDiscover,
   "seo.competitor-insights.compute": handleSeoCompetitorInsightsCompute,
+  "content.publish-link-keyword": handlePublishLinkKeyword,
+  "seo.refresh-content-context": handleSeoRefreshContentContext,
+  "seo.refresh-content-context-nightly": handleSeoRefreshContentContextNightly,
 };
 
 /**

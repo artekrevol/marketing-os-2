@@ -1,1 +1,2 @@
-- [Auth role/department model](auth-role-department-model.md) — user_profiles has two axes: role (authority) + department (craft); SEO OS gate must be server-enforced via requireSeoRole on /api/seo, not client-only.
+- [Cross-module brand isolation](cross-module-isolation.md) — raw-UUID FKs (projectId, target_location_id, locationId) bypass brand scope; every cross-module write must verify ownership via scoped.select.
+- [linked_content_count drift](linked-content-count-drift.md) — counter is increment-only (no in-app unlink); out-of-band deletes drift it; nightly reconcile recomputes from link rows.

@@ -99,6 +99,26 @@ async function main(): Promise<void> {
     logger.error({ err }, "worker: failed to register recovery-snapshot-nightly cron");
   }
 
+  // Shared Data Layer — nightly refresh of in-flight keyword research
+  // briefs whose SEO context snapshot has gone stale (>7 days).
+  try {
+    await addRepeatable(
+      "integrations",
+      "seo.refresh-content-context-nightly",
+      { idempotencyKey: "seo.refresh-content-context-nightly:cron" },
+      "0 3 * * *",
+    );
+    logger.info(
+      { name: "seo.refresh-content-context-nightly", pattern: "0 3 * * *" },
+      "worker: repeatable job registered",
+    );
+  } catch (err) {
+    logger.error(
+      { err },
+      "worker: failed to register refresh-content-context-nightly cron",
+    );
+  }
+
   // SEO Intelligence — reconcile repeatable rank-check schedules from
   // active `crawl_schedules` rows on every boot.
   try {

@@ -5,6 +5,7 @@
   "references": [
     { "path": "./lib/db" },
     { "path": "./lib/api-client-react" },
+    { "path": "./lib/ui-shared" },
     { "path": "./lib/api-zod" },
     { "path": "./lib/jobs" },
     { "path": "./lib/integrations/dataforseo" },

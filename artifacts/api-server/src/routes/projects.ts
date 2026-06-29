@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import {
   db,
   projectsTable,
+  locationsTable,
   researchBriefsTable,
   proofPointsTable,
   outlinesTable,
@@ -10,6 +11,7 @@ import {
   interviewAnswersTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
+import { enqueue } from "@workspace/jobs";
 import {
   requireAuth,
   assertBrandAccess,
@@ -29,6 +31,23 @@ function handleRouteError(err: unknown, res: Response, next: NextFunction): void
     return;
   }
   next(err);
+}
+
+/**
+ * Tenant isolation for the `target_location_id` raw-UUID FK: a location may
+ * only be attached to a project if it belongs to the same brand. Throws a
+ * BrandAccessError (→ 404) when the location is missing or owned by another
+ * brand, so a caller can never bind a foreign location to their project.
+ */
+async function assertLocationInBrand(locationId: string, brandId: string): Promise<void> {
+  const rows = await db
+    .select({ id: locationsTable.id })
+    .from(locationsTable)
+    .where(and(eq(locationsTable.id, locationId), eq(locationsTable.brandId, brandId)))
+    .limit(1);
+  if (!rows[0]) {
+    throw new BrandAccessError(404, "target location not found in this brand");
+  }
 }
 
 function projectToSnake(p: typeof projectsTable.$inferSelect) {
@@ -56,6 +75,9 @@ function projectToSnake(p: typeof projectsTable.$inferSelect) {
     icps: p.icps,
     writer_id: p.writerId,
     created_by: p.createdBy,
+    target_location_id: p.targetLocationId,
+    published_url: p.publishedUrl,
+    published_at: p.publishedAt,
     created_at: p.createdAt,
     updated_at: p.updatedAt,
   };
@@ -91,20 +113,30 @@ router.get("/", requireAuth, async (req: Request, res: Response, next: NextFunct
  */
 router.post("/", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { topic, url, user_notes, brand_id } = req.body as {
-      topic?: string; url?: string; user_notes?: string; brand_id?: string;
+    const { topic, url, user_notes, brand_id, keyword, target_location_id } = req.body as {
+      topic?: string;
+      url?: string;
+      user_notes?: string;
+      brand_id?: string;
+      keyword?: string | null;
+      target_location_id?: string | null;
     };
     if (!topic || !brand_id) {
       res.status(400).json({ error: "topic and brand_id are required" });
       return;
     }
     await assertBrandAccess(req, brand_id);
+    if (target_location_id) {
+      await assertLocationInBrand(target_location_id, brand_id);
+    }
     const [project] = await db
       .insert(projectsTable)
       .values({
         topic,
         url: url || null,
         userNotes: user_notes || null,
+        keyword: keyword || null,
+        targetLocationId: target_location_id || null,
         contentType: "blog",
         mode: "research",
         status: "proposing_brief",
@@ -159,13 +191,44 @@ router.patch("/:id", requireAuth, async (req: Request, res: Response, next: Next
     if (body["pod"] !== undefined) allowed.pod = body["pod"] as string | null;
     if (body["writer_id"] !== undefined) allowed.writerId = body["writer_id"] as string | null;
     if (body["user_notes"] !== undefined) allowed.userNotes = body["user_notes"] as string | null;
+    if (body["target_location_id"] !== undefined) allowed.targetLocationId = body["target_location_id"] as string | null;
+    if (body["published_url"] !== undefined) allowed.publishedUrl = body["published_url"] as string | null;
+    if (body["published_at"] !== undefined) {
+      allowed.publishedAt = body["published_at"] ? new Date(body["published_at"] as string) : null;
+    }
     if (Object.keys(allowed).length === 0) {
       res.status(400).json({ error: "No updatable fields provided" });
       return;
     }
+    // Read the pre-update state so we can detect a publish transition
+    // (published_at null -> non-null) and fire the publish-link worker.
+    const [before] = await db
+      .select({ publishedAt: projectsTable.publishedAt, brandId: projectsTable.brandId })
+      .from(projectsTable)
+      .where(eq(projectsTable.id, id))
+      .limit(1);
+    if (!before) { res.status(404).json({ error: "project not found" }); return; }
+    // Tenant isolation: a re-targeted location must belong to the project's brand.
+    if (allowed.targetLocationId) {
+      await assertLocationInBrand(allowed.targetLocationId, before.brandId);
+    }
     allowed.updatedAt = new Date();
     const [updated] = await db.update(projectsTable).set(allowed).where(eq(projectsTable.id, id)).returning();
     if (!updated) { res.status(404).json({ error: "project not found" }); return; }
+
+    // Publish trigger: enqueue the cross-module link job exactly on the
+    // null -> non-null transition. Enqueue failures must not fail the PATCH.
+    if (before && before.publishedAt == null && updated.publishedAt != null) {
+      try {
+        await enqueue("content.publish-link-keyword", {
+          brandId: updated.brandId,
+          projectId: updated.id,
+          idempotencyKey: `publish-link:${updated.id}`,
+        });
+      } catch (enqueueErr) {
+        req.log.error({ err: enqueueErr, projectId: updated.id }, "failed to enqueue content.publish-link-keyword");
+      }
+    }
     res.json(projectToSnake(updated));
   } catch (err) {
     handleRouteError(err, res, next);

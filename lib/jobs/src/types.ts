@@ -140,6 +140,34 @@ export const SeoCompetitorInsightsComputePayload = BasePayload.extend({
   brandId: z.string().uuid(),
 });
 
+/* -------------------------------------------------------------------------- */
+/* Shared Data Layer — cross-module linking & context refresh                  */
+/* -------------------------------------------------------------------------- */
+
+// Fired when a project transitions published_at null -> non-null. Auto-links
+// the project's primary keyword (projects.keyword) to the project via
+// content_url_keyword_link and baselines rankings for a newly-tracked keyword.
+// Idempotent on the link's unique (project_id, keyword_id) and on jobId
+// `content.publish-link-keyword:publish-link:<projectId>`.
+export const ContentPublishLinkKeywordPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  projectId: z.string().uuid(),
+});
+
+// Per-brief refresh: re-runs getKeywordContext for an in-flight brief and
+// writes a NEW keyword_research_briefs snapshot row (the table is immutable in
+// practice — never updated in place). Notifies the writer only on a
+// meaningful change (volume >20%, ranking >5 positions, new top-5 competitor).
+export const SeoRefreshContentContextPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  briefId: z.string().uuid(),
+});
+
+// Nightly fan-out (BullMQ repeatable, 0 3 * * *). Enqueues one
+// seo.refresh-content-context per in-flight (unpublished) brief whose latest
+// snapshot is older than 7 days.
+export const SeoRefreshContentContextNightlyPayload = BasePayload.extend({});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -196,6 +224,18 @@ export const JOB_REGISTRY = {
   "seo.competitor-insights.compute": {
     queue: "integrations" as QueueName,
     schema: SeoCompetitorInsightsComputePayload,
+  },
+  "content.publish-link-keyword": {
+    queue: "integrations" as QueueName,
+    schema: ContentPublishLinkKeywordPayload,
+  },
+  "seo.refresh-content-context": {
+    queue: "integrations" as QueueName,
+    schema: SeoRefreshContentContextPayload,
+  },
+  "seo.refresh-content-context-nightly": {
+    queue: "integrations" as QueueName,
+    schema: SeoRefreshContentContextNightlyPayload,
   },
 } as const;
 
