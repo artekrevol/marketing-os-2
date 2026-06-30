@@ -1,3 +1,3 @@
-- [Cross-module brand isolation](cross-module-isolation.md) — raw-UUID FKs (projectId, target_location_id, locationId) bypass brand scope; every cross-module write must verify ownership via scoped.select.
-- [linked_content_count drift](linked-content-count-drift.md) — counter is increment-only (no in-app unlink); out-of-band deletes drift it; nightly reconcile recomputes from link rows.
-- [Express body limit](express-body-limit.md) — api-server uses express.json limit 2mb; asset-import endpoints ingest whole corpus files (~285KB+) that the 100KB default silently rejects.
+- [Case-study money suppression](contentforge-case-study-no-money.md) — case_studies_cited carries NO contract_value/dollar figure; defense-in-depth across schema + sanitizer + validator.
+- [Validator purity & strip contract](contentforge-validator-contract.md) — runAllValidators clones the article, applies HARD strips to the clone, returns sanitizedArticle to persist; never mutate the input.
+- [Validator URL fetch SSRF guard](contentforge-validator-ssrf.md) — model-extracted source_url fetches must resolve to public IPs only; guard every redirect hop.

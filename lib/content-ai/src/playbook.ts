@@ -466,3 +466,37 @@ export async function getCredentialBlock(_brandId?: string): Promise<string> {
   );
   return body ?? "";
 }
+
+/**
+ * Named projects from the playbook's portfolio / case-study / named-project
+ * section. Backs the case-study narrative validator (dispatch §6.6): a case
+ * study's `project_name` must appear here OR in the reviews bank. Returns the
+ * list of project names (deduped, [] if no portfolio section). Fails closed.
+ */
+export async function getPlaybookProjectNames(
+  _brandId?: string,
+): Promise<string[]> {
+  const content = await getActivePlaybookContent();
+  if (!content) return [];
+  const sections = parsePlaybookSections(content);
+  const body = findSectionBody(
+    sections,
+    /portfolio|named\s*projects?|case\s*stud|client\s*work|projects?\s*(we|we've)\s*(built|shipped|delivered)|our\s*work/i,
+  );
+  if (!body) return [];
+  const items = extractListItems(body);
+  // Portfolio list items often read "Project Name — one-line description" or
+  // "Project Name: result". Take the leading name segment before the first
+  // dash/colon so the validator matches the model's `project_name` cleanly.
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const raw of items) {
+    const name = raw.split(/\s+[—–-]\s+|:\s+/)[0]?.trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}

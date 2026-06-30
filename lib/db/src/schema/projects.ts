@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, uuid, text, timestamp, integer, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, jsonb, numeric, index } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 import { locationsTable } from "./seo";
 
@@ -39,6 +39,18 @@ export const projectsTable = pgTable(
     icps: integer("icps").array(),
     writerId: text("writer_id"),
     createdBy: text("created_by"),
+    // --- Quality Fix Dispatch v2 (Phase 3) ---
+    // SERP-driven required-content flags computed after the SERP Live
+    // Advanced call (Phase 3.1). Shape: { requires_cost_table: boolean, ... }.
+    serpSignals: jsonb("serp_signals"),
+    // LSI terms (with search volumes) returned by Keyword Ideas (Phase 3.2).
+    // Shape: Array<{ term: string, volume: number }>.
+    lsiRetrieved: jsonb("lsi_retrieved"),
+    // LSI terms actually found in the drafted body, computed at final-stitch.
+    // Shape: string[].
+    lsiUsed: jsonb("lsi_used"),
+    // used / retrieved (Phase 3.2 / Rule 5.15). Target >= 0.60.
+    lsiCoverageRatio: numeric("lsi_coverage_ratio"),
     // --- Shared Data Layer: cross-module SEO targeting + publish ---
     // The SEO location this article's primary keyword is tracked against.
     // Required at Intake when "Track this keyword in SEO OS" is checked;

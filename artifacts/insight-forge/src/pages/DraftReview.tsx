@@ -11,6 +11,7 @@ import { toMarkdown, toHtml, toPlainText, buildHtmlDocument } from "@/lib/export
 import { buildExportSchemas, exportFilename, isoDate } from "@/lib/exportSchema";
 import { emit } from "@/lib/events";
 import { aiClient } from "@/lib/ai-client";
+import { DataSourceTag } from "@workspace/ui-shared";
 
 /**
  * Stage 4 — Final review & export.
@@ -40,7 +41,7 @@ export default function DraftReview() {
   const [loading, setLoading] = useState(true);
   const [stitching, setStitching] = useState(false);
   const [autoStitched, setAutoStitched] = useState(false);
-  const [rightTab, setRightTab] = useState<"citations" | "schema">("citations");
+  const [rightTab, setRightTab] = useState<"citations" | "schema" | "validation">("citations");
 
   const sections: OutlineSection[] = (outline?.sections as OutlineSection[]) || [];
 
@@ -340,6 +341,29 @@ export default function DraftReview() {
     ? `Draft is ${actualWordCount} words; reviewer brief requires ${wcLow}–${wcHigh} (target ${targetWordCount}, ±20%). Tighten or expand before submitting.`
     : null;
 
+  // ----- Phase 6 validation gates -----------------------------------------
+  // `scores.validation` is the persisted runAllValidators() summary. Hard-gate
+  // failures (severity 'hard') block submit-for-review; soft failures warn only.
+  const validation = (scores.validation as any) || null;
+  const validationChecks: Array<{ key: string; passes: boolean; severity: "hard" | "soft"; reason: string }> =
+    Array.isArray(validation?.checks) ? validation.checks : [];
+  const hardFailures = validationChecks.filter((c) => c.severity === "hard" && !c.passes);
+  const softFailures = validationChecks.filter((c) => c.severity === "soft" && !c.passes);
+  const validationShippable = validation ? validation.shippable !== false : true;
+  const validationGateBlocked = !!validation && !validationShippable;
+  const validationGateMessage = validationGateBlocked
+    ? `${hardFailures.length} hard validation gate(s) failing: ${hardFailures.map((c) => c.key).join(", ")}. Fix before submitting.`
+    : null;
+
+  const articleSchema = (scores.article_schema as any) || {};
+  const assetSource = (mod: "content-forge" = "content-forge") => ({
+    module: mod,
+    generatedAt: scores.updated_at || new Date().toISOString(),
+    isFresh: true,
+    staleAfterDays: 30,
+    refreshAction: null,
+  });
+
   // ----- Citation summary --------------------------------------------------
   const verifiedCount = cites.filter((c) => citationStatus(c[2], whitelistHosts) === "verified").length;
   const unverifiedCount = cites.length - verifiedCount;
@@ -387,6 +411,17 @@ export default function DraftReview() {
               }`}
             >
               JSON-LD <span className="text-ink-muted">({schemas.length})</span>
+            </button>
+            <button
+              onClick={() => setRightTab("validation")}
+              className={`flex-1 px-4 py-3 text-[11px] uppercase tracking-widest transition-colors border-l border-rule ${
+                rightTab === "validation" ? "bg-secondary text-ink" : "text-ink-muted hover:text-ink"
+              }`}
+            >
+              Gates{" "}
+              <span className={hardFailures.length > 0 ? "text-danger" : "text-verified"}>
+                ({validationChecks.length ? `${validationChecks.length - hardFailures.length - softFailures.length}/${validationChecks.length}` : "—"})
+              </span>
             </button>
           </div>
 
@@ -472,6 +507,88 @@ export default function DraftReview() {
               ))}
             </div>
           )}
+
+          {rightTab === "validation" && (
+            <div className="p-3 space-y-4">
+              {!validation && (
+                <p className="text-xs text-ink-muted italic px-1">
+                  No validation run yet. Re-stitch to evaluate the Phase 6 gates.
+                </p>
+              )}
+              {validation && (
+                <>
+                  <div
+                    className={`text-xs px-3 py-2 rounded-sm border inline-flex items-center gap-1.5 ${
+                      validationShippable
+                        ? "border-verified text-verified"
+                        : "border-danger text-danger"
+                    }`}
+                  >
+                    {validationShippable ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                    {validationShippable ? "All hard gates pass — shippable" : `${hardFailures.length} hard gate(s) failing`}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {validationChecks.map((c) => (
+                      <div key={c.key} className="flex items-start gap-2 text-[11px]">
+                        {c.passes ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 text-verified shrink-0 mt-0.5" />
+                        ) : c.severity === "hard" ? (
+                          <AlertCircle className="h-3.5 w-3.5 text-danger shrink-0 mt-0.5" />
+                        ) : (
+                          <Circle className="h-3.5 w-3.5 text-unverified shrink-0 mt-0.5" />
+                        )}
+                        <div className="min-w-0">
+                          <span className="font-mono text-ink">{c.key}</span>
+                          {!c.passes && c.reason && (
+                            <span className="block text-ink-muted">{c.reason}</span>
+                          )}
+                          {c.severity === "soft" && !c.passes && (
+                            <span className="text-[10px] uppercase tracking-widest text-unverified"> soft</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* §4.3 — attribution on every asset-derived field */}
+                  {Array.isArray(articleSchema.testimonials_used) && articleSchema.testimonials_used.length > 0 && (
+                    <div className="border-t border-rule pt-3 space-y-2">
+                      <p className="text-[10px] uppercase tracking-widest text-ink-muted">Testimonials used</p>
+                      {articleSchema.testimonials_used.map((t: any, i: number) => (
+                        <div key={i} className="text-[11px] border border-rule rounded-sm p-2 space-y-1">
+                          <span className="text-ink">{t.reviewer_name} — {t.company}</span>
+                          <DataSourceTag source={assetSource()} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {Array.isArray(articleSchema.internal_links) && articleSchema.internal_links.length > 0 && (
+                    <div className="border-t border-rule pt-3 space-y-2">
+                      <p className="text-[10px] uppercase tracking-widest text-ink-muted">Internal links</p>
+                      {articleSchema.internal_links.map((l: any, i: number) => (
+                        <div key={i} className="text-[11px] border border-rule rounded-sm p-2 space-y-1">
+                          <span className="text-ink">{l.anchor_text} → {l.target_url}</span>
+                          <DataSourceTag source={assetSource()} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {Array.isArray(articleSchema.case_studies_cited) && articleSchema.case_studies_cited.length > 0 && (
+                    <div className="border-t border-rule pt-3 space-y-2">
+                      <p className="text-[10px] uppercase tracking-widest text-ink-muted">Case studies cited</p>
+                      {articleSchema.case_studies_cited.map((c: any, i: number) => (
+                        <div key={i} className="text-[11px] border border-rule rounded-sm p-2 space-y-1">
+                          <span className="text-ink">{c.project_name}</span>
+                          <DataSourceTag source={assetSource()} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </aside>
       </div>
 
@@ -500,10 +617,12 @@ export default function DraftReview() {
           </button>
           <button
             onClick={submitForReview}
-            disabled={submittingQg || wordCountSubmitBlocked}
+            disabled={submittingQg || wordCountSubmitBlocked || validationGateBlocked}
             className="text-xs px-3 py-2 bg-accent text-accent-foreground rounded-sm hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5"
             title={
-              wordCountSubmitBlocked
+              validationGateBlocked
+                ? validationGateMessage ?? "Validation gates are failing."
+                : wordCountSubmitBlocked
                 ? wordCountSubmitMessage ?? "Word count is outside the target band."
                 : "Hand the approved draft to SEO OS for automated checks + reviewer sign-off"
             }

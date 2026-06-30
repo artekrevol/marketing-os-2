@@ -154,6 +154,33 @@ export async function getConfidentialCompanies(
   }
 }
 
+/**
+ * Distinct `project_name` values present in the reviews bank for a brand.
+ * Backs the case-study narrative validator (dispatch §6.6): a case study's
+ * `project_name` must exist in either the playbook portfolio or this list.
+ * Confidential rows still count — provenance, not publishability. Fails closed
+ * (returns [] on error) so an unknown project name is re-flagged, not passed.
+ */
+export async function getReviewsBankProjectNames(
+  brandId: string,
+): Promise<string[]> {
+  try {
+    return await withBrandScope(brandId, async ({ scoped }) => {
+      const rows = (await scoped.select(reviewsBankEntriesTable, {
+        where: sql`${reviewsBankEntriesTable.projectName} is not null`,
+      })) as ReviewsBankEntry[];
+      const set = new Set<string>();
+      for (const r of rows) {
+        const n = (r.projectName || "").trim();
+        if (n) set.add(n);
+      }
+      return Array.from(set).sort();
+    });
+  } catch {
+    return [];
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Link targets — always require is_active = true                             */
 /* -------------------------------------------------------------------------- */

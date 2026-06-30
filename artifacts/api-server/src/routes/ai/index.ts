@@ -9,7 +9,12 @@ import {
   STAGE_KEYS,
   parsePlaybookSections,
   ALWAYS_INCLUDE,
+  runAllValidators,
+  getPlaybookProjectNames,
+  computeLsiCoverage,
   type StageKey,
+  type ValidatorDeps,
+  type ArticleSchema,
 } from "@workspace/content-ai";
 import {
   db,
@@ -23,10 +28,62 @@ import {
   interviewAnswersTable,
   playbookTable,
   playbookSectionsTable,
+  moduleDataProvenanceTable,
+  isReviewInBank,
+  getConfidentialCompanies,
+  isUrlInLinkTargets,
+  getAnchorVariations,
+  getReviewsBankProjectNames,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
+import { isIP } from "node:net";
+import { lookup as dnsLookup } from "node:dns/promises";
 
 const router = Router();
+
+/** True for loopback / private / link-local / unique-local / CGNAT addresses. */
+function isPrivateIp(ip: string): boolean {
+  const v4 = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const a = Number(v4[1]);
+    const b = Number(v4[2]);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local incl. cloud metadata 169.254.169.254
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    return false;
+  }
+  const lower = ip.toLowerCase();
+  if (lower === "::1" || lower === "::") return true;
+  if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique local
+  if (lower.startsWith("fe80")) return true; // link-local
+  const mapped = lower.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateIp(mapped[1]!);
+  return false;
+}
+
+/** SSRF guard: only allow http(s) URLs that resolve to public addresses. */
+async function isSafePublicUrl(raw: string): Promise<boolean> {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) {
+    return false;
+  }
+  if (isIP(host)) return !isPrivateIp(host);
+  try {
+    const addrs = await dnsLookup(host, { all: true });
+    return addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address));
+  } catch {
+    return false;
+  }
+}
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const SONNET = "claude-sonnet-4-5-20250929";
@@ -756,13 +813,308 @@ const BANNED_PHRASES = [
   "delve", "navigate the landscape", "game-changer", "unlock the power",
 ];
 
+/* ── Phase 4: article-level structured output schema ─────────────────────────
+ * ARTICLE_TOOL is extracted at final-stitch from the stitched article + brief
+ * and validated by the Phase 5/6 validators. The case-study item schema has NO
+ * contract_value field and `additionalProperties: false`, so a per-project
+ * dollar amount is unconstructible at the schema layer (dispatch §4.1 / §6.6).
+ */
+const ARTICLE_TOOL = {
+  name: "submit_article_schema",
+  input_schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      title_tag: { type: "string" },
+      h1: { type: "string" },
+      meta_description: { type: "string" },
+      opening_block: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          first_100_words: { type: "string" },
+          direct_answer: { type: "string" },
+        },
+        required: ["first_100_words", "direct_answer"],
+      },
+      closing_block: {
+        type: "object",
+        additionalProperties: false,
+        properties: { summary: { type: "string" } },
+        required: ["summary"],
+      },
+      headings: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          h2: { type: "array", items: { type: "string" } },
+          h3: { type: "array", items: { type: "string" } },
+        },
+      },
+      list_blocks: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            section: { type: "string" },
+            type: { type: "string", enum: ["ordered", "unordered"] },
+            items: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+      cost_table: { type: "object" },
+      timeline_table: { type: "object" },
+      regional_rate_comparison: { type: "object" },
+      hourly_rate_comparison: { type: "object" },
+      team_model_comparison: { type: "object" },
+      maintenance_cost_breakdown: { type: "object" },
+      competitor_teardown: { type: "object" },
+      case_studies_cited: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            project_name: { type: "string" },
+            technical_narrative: { type: "string" },
+            outcome: { type: "string" },
+            in_playbook_or_bank: { type: "boolean" },
+          },
+          required: ["project_name", "technical_narrative"],
+        },
+      },
+      local_entity_grounding: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          city: { type: "string" },
+          local_context_sentences: { type: "array", items: { type: "string" } },
+        },
+      },
+      author_byline: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          credentials: { type: "string" },
+          bio_link: { type: "string" },
+        },
+        required: ["name", "credentials", "bio_link"],
+      },
+      statistics_used: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            claim: { type: "string" },
+            source_url: { type: "string" },
+            source_name: { type: "string" },
+            year: { type: "number" },
+            verified_live: { type: "boolean" },
+            flagged_as_stale: { type: "boolean" },
+          },
+          required: ["claim"],
+        },
+      },
+      external_authority_citations: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            domain: { type: "string" },
+            url: { type: "string" },
+            purpose: { type: "string" },
+          },
+          required: ["domain", "url"],
+        },
+      },
+      testimonials_used: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            reviewer_name: { type: "string" },
+            company: { type: "string" },
+            quote_excerpt: { type: "string" },
+            source_url: { type: "string" },
+            in_bank: { type: "boolean" },
+          },
+          required: ["reviewer_name", "company", "quote_excerpt"],
+        },
+      },
+      internal_links: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            target_url: { type: "string" },
+            anchor_text: { type: "string" },
+            section: { type: "string" },
+            in_link_targets: { type: "boolean" },
+          },
+          required: ["target_url", "anchor_text"],
+        },
+      },
+      faq_schema: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            question: { type: "string" },
+            answer: { type: "string" },
+          },
+          required: ["question", "answer"],
+        },
+      },
+      cta_block: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          placement: { type: "string" },
+          anchor_text: { type: "string" },
+          target_url: { type: "string" },
+        },
+      },
+      lsi_used_in_body: { type: "array", items: { type: "string" } },
+    },
+    required: [
+      "title_tag",
+      "h1",
+      "meta_description",
+      "opening_block",
+      "closing_block",
+      "author_byline",
+      "faq_schema",
+    ],
+  },
+};
+
+/** Money-bearing keys that may never ride on a case study (defense in depth). */
+const CASE_STUDY_MONEY_KEYS = [
+  "contract_value", "deal_value", "revenue", "budget", "price", "cost",
+  "amount", "value_usd", "billing", "billed",
+];
+
+/** Decode escaped literals + strip control chars (mirrors sanitizeVoiceFlags). */
+function safeText(s: unknown): string {
+  if (typeof s !== "string") return "";
+  return s
+    .replace(/\\r\\n|\\n|\\r|\\t/g, " ")
+    .replace(/\\"/g, '"')
+    .replace(/[\u0000-\u001F\u007F]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const asArray = (v: unknown): any[] => (Array.isArray(v) ? v : []);
+
+/**
+ * Phase 4.2 layer-2 sanitization for the extracted article schema. Coerces
+ * shapes, decodes escape soup, and — critically — strips any money-bearing key
+ * from each case study so a per-project dollar amount can never be persisted.
+ */
+function sanitizeArticleSchema(raw: any): ArticleSchema {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const out: ArticleSchema = { ...r };
+
+  out.case_studies_cited = asArray(r.case_studies_cited).map((cs: any) => {
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(cs || {})) {
+      if (CASE_STUDY_MONEY_KEYS.includes(k.toLowerCase().replace(/[^a-z_]/g, ""))) continue;
+      clean[k] = v;
+    }
+    return {
+      project_name: safeText((clean as any).project_name),
+      technical_narrative: safeText((clean as any).technical_narrative),
+      ...((clean as any).outcome != null ? { outcome: safeText((clean as any).outcome) } : {}),
+      ...((clean as any).in_playbook_or_bank != null ? { in_playbook_or_bank: !!(clean as any).in_playbook_or_bank } : {}),
+    };
+  });
+
+  out.testimonials_used = asArray(r.testimonials_used).map((t: any) => ({
+    reviewer_name: safeText(t?.reviewer_name),
+    company: safeText(t?.company),
+    quote_excerpt: safeText(t?.quote_excerpt),
+    ...(t?.source_url ? { source_url: safeText(t.source_url) } : {}),
+  }));
+
+  out.internal_links = asArray(r.internal_links).map((l: any) => ({
+    target_url: safeText(l?.target_url),
+    anchor_text: safeText(l?.anchor_text),
+    ...(l?.section ? { section: safeText(l.section) } : {}),
+  }));
+
+  out.statistics_used = asArray(r.statistics_used).map((s: any) => ({
+    claim: safeText(s?.claim),
+    ...(s?.source_url ? { source_url: safeText(s.source_url) } : {}),
+    ...(s?.source_name ? { source_name: safeText(s.source_name) } : {}),
+    ...(typeof s?.year === "number" ? { year: s.year } : {}),
+  }));
+
+  out.external_authority_citations = asArray(r.external_authority_citations).map((c: any) => ({
+    domain: safeText(c?.domain),
+    url: safeText(c?.url),
+    ...(c?.purpose ? { purpose: safeText(c.purpose) } : {}),
+  }));
+
+  out.faq_schema = asArray(r.faq_schema).map((f: any) => ({
+    question: safeText(f?.question),
+    answer: safeText(f?.answer),
+  }));
+
+  return out;
+}
+
+/** Build brand-bound validator deps. Confidentiality loads FRESH per call (§6.4). */
+function buildValidatorDeps(brandId: string): ValidatorDeps {
+  return {
+    isReviewInBank: (reviewer, company, quote) => isReviewInBank(brandId, reviewer, company, quote),
+    getConfidentialCompanies: () => getConfidentialCompanies(brandId),
+    isUrlInLinkTargets: (url) => isUrlInLinkTargets(brandId, url),
+    getAnchorVariations: (url) => getAnchorVariations(brandId, url),
+    getPlaybookProjectNames: () => getPlaybookProjectNames(brandId),
+    getReviewsBankProjectNames: () => getReviewsBankProjectNames(brandId),
+    fetchUrl: async (url: string) => {
+      // SSRF guard: validate every hop (manual redirects) against the public-IP
+      // allowlist so a model-extracted source_url can't probe internal hosts.
+      try {
+        let current = url;
+        for (let hop = 0; hop < 4; hop++) {
+          if (!(await isSafePublicUrl(current))) return { ok: false, status: 0, text: "" };
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 8000);
+          const resp = await fetch(current, { signal: ctrl.signal, redirect: "manual" });
+          clearTimeout(timer);
+          if (resp.status >= 300 && resp.status < 400) {
+            const loc = resp.headers.get("location");
+            if (!loc) return { ok: false, status: resp.status, text: "" };
+            current = new URL(loc, current).toString();
+            continue;
+          }
+          const text = resp.ok ? (await resp.text()).slice(0, 200000) : "";
+          return { ok: resp.ok, status: resp.status, text };
+        }
+        return { ok: false, status: 0, text: "" };
+      } catch {
+        return { ok: false, status: 0, text: "" };
+      }
+    },
+  };
+}
+
 router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
     const [projectRows, outlineRows, draftRows, briefRows] = await Promise.all([
-      db.select({ id: projectsTable.id, brandId: projectsTable.brandId }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
+      db.select({ id: projectsTable.id, brandId: projectsTable.brandId, keyword: projectsTable.keyword, contentType: projectsTable.contentType, funnelStage: projectsTable.funnelStage, serpSignals: projectsTable.serpSignals, lsiRetrieved: projectsTable.lsiRetrieved }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
       db.select().from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
       db.select().from(draftsTable).where(eq(draftsTable.projectId, project_id)),
       db.select({ atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, aiCitationLandscape: researchBriefsTable.aiCitationLandscape }).from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
@@ -829,6 +1181,82 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
       }
     }
 
+    /* ── Phase 4/6: extract the article schema, then validate & gate ─────── */
+    const primaryKeyword = String((project as any).keyword || "");
+    const lsiRetrieved: string[] = Array.isArray((project as any).lsiRetrieved)
+      ? ((project as any).lsiRetrieved as any[]).map((t: any) => (typeof t === "string" ? t : t?.keyword || t?.term || "")).filter(Boolean)
+      : [];
+    const lsiCov = computeLsiCoverage(lsiRetrieved, stitched);
+
+    let articleSchema: ArticleSchema | null = null;
+    let validation: any = null;
+    let extraction_failed = false;
+    try {
+      const t0 = Date.now();
+      const extractSystem = `You extract a structured publishing schema from a finished article. Return ONLY a submit_article_schema tool call. Use the exact primary keyword "${primaryKeyword}" where required. Never invent dollar amounts. For case_studies_cited, describe what was built and the measurable outcome — never a contract value or any dollar figure.`;
+      const extractUser = `PRIMARY KEYWORD: ${primaryKeyword}\n\nARTICLE (Markdown):\n${stitched.slice(0, 60000)}`;
+      const exData = await callAnthropicRaw({
+        model: SONNET,
+        max_tokens: 8000,
+        system: extractSystem,
+        tools: [ARTICLE_TOOL],
+        tool_choice: { type: "tool", name: "submit_article_schema" },
+        messages: [{ role: "user", content: extractUser }],
+      });
+      await logUsage({ project_id, stage: "final-stitch", sub_stage: "article-schema-extract", model: SONNET, metadata_user_id: buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: "article-schema-extract", writer_id: (project as any).writerId }), usage: exData.usage, duration_ms: Date.now() - t0, ok: true });
+      const exTool = (exData.content || []).find((b: any) => b.type === "tool_use");
+      if (exTool?.input) {
+        const sanitized = sanitizeArticleSchema(exTool.input);
+        sanitized.lsi_retrieved = lsiRetrieved;
+        sanitized.lsi_used_in_body = lsiCov.used;
+        sanitized.lsi_coverage_ratio = lsiCov.ratio;
+
+        const deps = buildValidatorDeps(project.brandId);
+        const result = await runAllValidators({
+          article: sanitized,
+          fullText: stitched,
+          primaryKeyword,
+          funnelStage: String((project as any).funnelStage || "") || null,
+          contentType: String((project as any).contentType || "") || null,
+          serpSignals: ((project as any).serpSignals as any) || null,
+          lsiRetrieved,
+          currentYear: new Date().getFullYear(),
+          deps,
+        });
+        // Persist the validator-sanitized copy (HARD-stripped items removed,
+        // verified_live / flagged_as_stale flags applied) — never the raw extract.
+        articleSchema = result.sanitizedArticle;
+        validation = result;
+
+        /* Provenance: one row per validator strip (reason 'validator-stripped'). */
+        const provRows = result.checks.flatMap((c: any) =>
+          (c.stripped || []).map((item: any) => ({
+            brandId: project.brandId,
+            entityType: "draft_score",
+            entityId: project_id,
+            sourceModule: "content-forge",
+            generationMethod: "validator-stripped",
+            metadata: { check: c.key, reason: c.reason, severity: c.severity, item },
+          })),
+        );
+        if (provRows.length > 0) {
+          try {
+            await db.insert(moduleDataProvenanceTable).values(provRows);
+          } catch (e) {
+            req.log.warn({ err: e }, "final-stitch: provenance insert failed (non-fatal)");
+          }
+        }
+      } else {
+        extraction_failed = true;
+      }
+    } catch (e) {
+      extraction_failed = true;
+      req.log.error({ err: e }, "final-stitch: article-schema extraction failed");
+    }
+    if (extraction_failed && !validation) {
+      validation = { shippable: false, extraction_failed: true, checks: [] };
+    }
+
     await db
       .insert(draftScoresTable)
       .values({
@@ -844,6 +1272,8 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
         atomicChunksCount: atomic_chunks_count,
         atomicQuestionsCount: atomic_questions_count,
         schemaMarkupRecommendations: schema_markup_recommendations,
+        articleSchema: articleSchema as any,
+        validation,
       })
       .onConflictDoUpdate({
         target: draftScoresTable.projectId,
@@ -858,13 +1288,23 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
           atomicChunksCount: atomic_chunks_count,
           atomicQuestionsCount: atomic_questions_count,
           schemaMarkupRecommendations: schema_markup_recommendations,
+          articleSchema: articleSchema as any,
+          validation,
           updatedAt: new Date(),
         },
       });
 
-    await db.update(projectsTable).set({ currentStage: 4, status: "review" }).where(eq(projectsTable.id, project_id));
+    await db
+      .update(projectsTable)
+      .set({
+        currentStage: 4,
+        status: "review",
+        lsiUsed: lsiCov.used as any,
+        lsiCoverageRatio: String(lsiCov.ratio),
+      })
+      .where(eq(projectsTable.id, project_id));
 
-    res.json({ ok: true, word_count, voice_match_score, originality_score, banned_phrase_count, citation_completeness, ai_citation_readiness_score, atomic_chunks_count, atomic_questions_count, schema_markup_recommendations });
+    res.json({ ok: true, word_count, voice_match_score, originality_score, banned_phrase_count, citation_completeness, ai_citation_readiness_score, atomic_chunks_count, atomic_questions_count, schema_markup_recommendations, validation, lsi_coverage_ratio: lsiCov.ratio });
   } catch (e) {
     req.log.error({ err: e }, "final-stitch route error");
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });

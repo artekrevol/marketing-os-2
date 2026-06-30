@@ -499,6 +499,8 @@ router.get("/:id/draft-scores", requireAuth, async (req: Request, res: Response,
       banned_phrase_count: s.bannedPhraseCount,
       word_count: s.wordCount,
       schema_markup_recommendations: s.schemaMarkupRecommendations,
+      article_schema: s.articleSchema,
+      validation: s.validation,
       created_at: s.createdAt,
       updated_at: s.updatedAt,
     });

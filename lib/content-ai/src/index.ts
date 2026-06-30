@@ -4,6 +4,7 @@ export {
   parsePlaybookSections,
   getActivePlaybook,
   getPlaybookSections,
+  getPlaybookProjectNames,
   getRoutedPlaybook,
   buildCachedSystem,
   buildCachedSystemWithProject,
@@ -29,3 +30,12 @@ export {
   type PageFetchResult,
   type PrefetchSummary,
 } from "./research-stages.js";
+export * from "./validators/index.js";
+export {
+  computeSerpSignals,
+  computeLsiCoverage,
+  DEFAULT_KNOWN_CITIES,
+  type SerpResultLite,
+  type SerpSignalInput,
+  type LsiCoverageResult,
+} from "./serp-signals.js";
