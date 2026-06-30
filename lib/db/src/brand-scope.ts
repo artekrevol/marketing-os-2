@@ -50,6 +50,10 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "content_url_keyword_link",
   "keyword_research_briefs",
   "module_data_provenance",
+  // ContentForge Quality Fix — asset corpora
+  "reviews_bank_entries",
+  "link_targets",
+  "linking_rules",
 ]);
 
 /** Brand context attached to a scoped transaction. */

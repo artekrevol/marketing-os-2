@@ -30,3 +30,5 @@ export * from "./interview-answers";
 export * from "./seo";
 // Shared Data Layer — cross-module bridge tables (ContentForge <-> SEO OS)
 export * from "./cross-module";
+// ContentForge Quality Fix — asset corpora (reviews bank, link targets, rules)
+export * from "./assets";
