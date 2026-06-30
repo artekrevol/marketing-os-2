@@ -20,6 +20,8 @@ import AdminBrands from "./pages/AdminBrands.tsx";
 import AdminActivity from "./pages/AdminActivity.tsx";
 import AdminUsage from "./pages/AdminUsage.tsx";
 import AdminSystem from "./pages/AdminSystem.tsx";
+import AdminReviewsBank from "./pages/AdminReviewsBank.tsx";
+import AdminLinkTargets from "./pages/AdminLinkTargets.tsx";
 import Auth from "./pages/Auth.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -46,6 +48,8 @@ const App = () => (
               <Route path="/admin/activity" element={<AdminActivity />} />
               <Route path="/admin/usage" element={<AdminUsage />} />
               <Route path="/admin/system" element={<AdminSystem />} />
+              <Route path="/admin/reviews-bank" element={<AdminReviewsBank />} />
+              <Route path="/admin/link-targets" element={<AdminLinkTargets />} />
               <Route path="/project/:id" element={<ProjectLayout />}>
                 <Route index element={<Navigate to="brief" replace />} />
                 <Route path="brief" element={<BriefProposal />} />

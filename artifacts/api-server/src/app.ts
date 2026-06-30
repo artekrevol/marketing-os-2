@@ -47,8 +47,8 @@ app.use(
 );
 
 app.use(cors({ credentials: true, origin: true }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 // Health check is registered before the session middleware so it always
 // responds 200 regardless of session-store availability. This prevents

@@ -371,3 +371,98 @@ export async function buildRoutedSystem(
   const system = buildCachedSystem(routed.content, routed.version, stageInstructions, stage);
   return { system, version: routed.version, included: routed.included };
 }
+
+/* ───────────────────────────────────────────────────────────────────
+ * ContentForge Quality Fix (v2) — playbook-derived asset queries (§2.3)
+ *
+ * The dispatch lists getActivePlaybook / getBannedPhrases / getDiscardList /
+ * getCredentialBlock under `lib/db/queries/assets.ts`, but parsing the
+ * playbook markdown is content-ai's job and `lib/db` importing content-ai
+ * would create a dependency cycle (content-ai already imports `@workspace/db`).
+ * So these live here, beside parsePlaybookSections; the asset-corpus queries
+ * (reviews / links / rules) live in lib/db/src/queries/assets.ts.
+ *
+ * The playbook table is currently GLOBAL (one active version, not brand-scoped
+ * — see admin GET /api/admin/playbook). The optional `brandId` parameter is
+ * accepted for signature parity with the dispatch and forward-compatibility,
+ * but does not filter yet. Section-header matching is intentionally tolerant;
+ * the exact headers are validated against playbook v2.5 when the Phase 5/6
+ * validators that consume these are wired.
+ * ─────────────────────────────────────────────────────────────────── */
+
+/** Find the body of the first section whose title matches `re` (or null). */
+function findSectionBody(sections: PlaybookSection[], re: RegExp): string | null {
+  const hit = sections.find((s) => re.test(s.section_title));
+  return hit ? hit.section_content : null;
+}
+
+/**
+ * Extract phrase-like list items from a section body. Recognises markdown
+ * bullets (-, *, •), numbered lists, and quoted lines; strips markdown,
+ * surrounding quotes, and trailing rationale after an em-dash/colon. Falls
+ * back to empty when nothing list-shaped is present.
+ */
+function extractListItems(body: string): string[] {
+  if (!body) return [];
+  const out: string[] = [];
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const m = line.match(/^(?:[-*•]|\d{1,3}[.)])\s+(.*)$/);
+    if (!m) continue;
+    let item = m[1]!.trim();
+    item = item.replace(/[*_`]/g, "");
+    // strip a leading/trailing wrapping quote pair
+    item = item.replace(/^["'“”‘’]+/, "").replace(/["'“”‘’]+$/, "");
+    // drop trailing rationale ("phrase — why" / "phrase: why")
+    item = item.replace(/\s*[—–:]\s+.*$/, "");
+    item = item.trim();
+    if (item) out.push(item);
+  }
+  // de-dupe, preserve order
+  return Array.from(new Set(out));
+}
+
+/** Latest playbook markdown as a plain string (null when none uploaded). */
+export async function getActivePlaybookContent(
+  _brandId?: string,
+): Promise<string | null> {
+  const { content } = await getActivePlaybook();
+  return content && content.trim() ? content : null;
+}
+
+/** Banned/forbidden phrases from the playbook (empty if none/section absent). */
+export async function getBannedPhrases(_brandId?: string): Promise<string[]> {
+  const content = await getActivePlaybookContent();
+  if (!content) return [];
+  const sections = parsePlaybookSections(content);
+  const body = findSectionBody(
+    sections,
+    /banned\s*phrase|forbidden\s*phrase|do\s*not\s*use|phrases?\s*to\s*avoid|blacklist/i,
+  );
+  return body ? extractListItems(body) : [];
+}
+
+/** The discard list (words/clichés to strip) from the playbook. */
+export async function getDiscardList(_brandId?: string): Promise<string[]> {
+  const content = await getActivePlaybookContent();
+  if (!content) return [];
+  const sections = parsePlaybookSections(content);
+  const body = findSectionBody(
+    sections,
+    /discard\s*list|kill\s*list|avoid\s*list|words?\s*to\s*avoid|clich[eé]/i,
+  );
+  return body ? extractListItems(body) : [];
+}
+
+/** The credential / proof-point block (raw section text, "" if absent). */
+export async function getCredentialBlock(_brandId?: string): Promise<string> {
+  const content = await getActivePlaybookContent();
+  if (!content) return "";
+  const sections = parsePlaybookSections(content);
+  const body = findSectionBody(
+    sections,
+    /credential|proof\s*point|company\s*facts?|trust\s*signal|about\s*the\s*company/i,
+  );
+  return body ?? "";
+}

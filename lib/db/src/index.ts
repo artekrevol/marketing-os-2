@@ -18,6 +18,7 @@ export * from "./brand-scope";
 export * from "./middleware";
 export * from "./queries/types";
 export * from "./queries/cross-module";
+export * from "./queries/assets";
 
 import { createGuardedDb } from "./middleware";
 

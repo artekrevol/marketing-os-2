@@ -1,2 +1,3 @@
 - [Cross-module brand isolation](cross-module-isolation.md) — raw-UUID FKs (projectId, target_location_id, locationId) bypass brand scope; every cross-module write must verify ownership via scoped.select.
 - [linked_content_count drift](linked-content-count-drift.md) — counter is increment-only (no in-app unlink); out-of-band deletes drift it; nightly reconcile recomputes from link rows.
+- [Express body limit](express-body-limit.md) — api-server uses express.json limit 2mb; asset-import endpoints ingest whole corpus files (~285KB+) that the 100KB default silently rejects.

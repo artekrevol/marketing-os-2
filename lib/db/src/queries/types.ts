@@ -32,7 +32,10 @@ export type QueryReason =
   | "no-rankings"
   | "no-competitors"
   | "stale"
-  | "system-error";
+  | "system-error"
+  // ContentForge Quality Fix (v2) — asset-corpus empty states
+  | "not-tracked"
+  | "no-active-playbook";
 
 export type QueryResult<T> = {
   data: T;
