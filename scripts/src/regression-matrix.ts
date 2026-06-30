@@ -21,8 +21,17 @@ interface Row {
   reason: string;
 }
 
-/** Each matrix row maps to a validation key (or a custom evaluator). */
-const KEY_MAP: Array<{ n: number; check: string; key?: string; table?: string; signal?: string }> = [
+/**
+ * Each matrix row maps to a validation key (or a custom evaluator).
+ *
+ * `naIfEmptyField` encodes the "precondition not met ⇒ N/A" rule (the same
+ * semantic the SERP-driven table checks 6–9 already use): when the named
+ * article-schema field is empty, the check cannot be meaningfully evaluated, so
+ * it reports N/A rather than FAIL. #19 (LSI coverage) is the first user: an
+ * empty `lsi_retrieved` set means no LSI terms were retrieved, so coverage is
+ * undefined — N/A, not a failure. See the evaluator below.
+ */
+const KEY_MAP: Array<{ n: number; check: string; key?: string; table?: string; signal?: string; naIfEmptyField?: string }> = [
   { n: 1, check: "No duplicate H2s/H3s", key: "heading_hygiene_passes" },
   { n: 2, check: "Primary keyword in title/H1/first-100/meta/H2/closing", key: "keyword_placement_passes" },
   { n: 3, check: "Meta description 150–155 chars", key: "meta_length_passes" },
@@ -41,7 +50,7 @@ const KEY_MAP: Array<{ n: number; check: string; key?: string; table?: string; s
   { n: 16, check: "≥2 external authority citations", key: "authority_floor_passes" },
   { n: 17, check: "All stats verified live + content match", key: "all_stats_verified_live" },
   { n: 18, check: "All stats have year, >24mo flagged", key: "stats_freshness_passes" },
-  { n: 19, check: "LSI coverage ≥0.60", key: "lsi_coverage_passes" },
+  { n: 19, check: "LSI coverage ≥0.60", key: "lsi_coverage_passes", naIfEmptyField: "lsi_retrieved" },
   { n: 20, check: "Topic checklist complete", key: "topic_checklist_passes" },
   { n: 21, check: "Stat density ≤1/paragraph", key: "stat_density_passes" },
   { n: 22, check: "No section-spanning repetition", key: "repetition_passes" },
@@ -91,6 +100,11 @@ async function main() {
       if (!required) return { n: m.n, check: m.check, status: "N/A" as Status, reason: "not required by SERP signals" };
       const present = nonEmpty(schema[m.table]);
       return { n: m.n, check: m.check, status: present ? "PASS" : "FAIL", reason: present ? "" : `${m.table} missing` };
+    }
+    // Precondition gate: an empty source field ⇒ N/A (mirrors checks 6–9). For
+    // #19, an empty lsi_retrieved means coverage has no denominator to score.
+    if (m.naIfEmptyField && !nonEmpty(schema[m.naIfEmptyField])) {
+      return { n: m.n, check: m.check, status: "N/A" as Status, reason: `precondition not met: ${m.naIfEmptyField} empty` };
     }
     const key = m.key!;
     if (!(key in passes)) return { n: m.n, check: m.check, status: "N/A" as Status, reason: "validator did not run" };

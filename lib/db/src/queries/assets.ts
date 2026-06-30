@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, sql } from "drizzle-orm";
 import { withBrandScope } from "../brand-scope";
 import {
   reviewsBankEntriesTable,
@@ -83,7 +83,10 @@ export async function findTestimonials(opts: {
 
       const rows = (await scoped.select(reviewsBankEntriesTable, {
         where: and(...conds)!,
-        orderBy: desc(reviewsBankEntriesTable.lastVerifiedAt),
+        // `id` tiebreak makes the LIMITed subset deterministic when several rows
+        // share a lastVerifiedAt — generation callers inject these into cached
+        // prompts and rely on a byte-identical candidate block across calls.
+        orderBy: [desc(reviewsBankEntriesTable.lastVerifiedAt), asc(reviewsBankEntriesTable.id)],
         limit,
       })) as ReviewsBankEntry[];
 
@@ -204,7 +207,10 @@ export async function findLinkTargets(opts: {
 
       const rows = (await scoped.select(linkTargetsTable, {
         where: and(...conds)!,
-        orderBy: desc(linkTargetsTable.lastVerifiedAt),
+        // `id` tiebreak makes the LIMITed subset deterministic when several rows
+        // share a lastVerifiedAt — generation callers inject these into cached
+        // prompts and rely on a byte-identical candidate block across calls.
+        orderBy: [desc(linkTargetsTable.lastVerifiedAt), asc(linkTargetsTable.id)],
         limit,
       })) as LinkTarget[];
 

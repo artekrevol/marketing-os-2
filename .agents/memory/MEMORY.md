@@ -1,3 +1,2 @@
-- [Case-study money suppression](contentforge-case-study-no-money.md) — case_studies_cited carries NO contract_value/dollar figure; defense-in-depth across schema + sanitizer + validator.
-- [Validator purity & strip contract](contentforge-validator-contract.md) — runAllValidators clones the article, applies HARD strips to the clone, returns sanitizedArticle to persist; never mutate the input.
-- [Validator URL fetch SSRF guard](contentforge-validator-ssrf.md) — model-extracted source_url fetches must resolve to public IPs only; guard every redirect hop.
+- [Citation whitelist vs validators](citation-whitelist-vs-validators.md) — draft-route enforceCitationWhitelist strips any citation host not in whitelist.hosts BEFORE validators run; add new authority/link hosts there or they vanish silently.
+- [Asset-candidate injection](asset-candidate-injection.md) — injected candidate blocks feed CACHED prompts: need DB id-tiebreak + caller id-sort for byte-identical output; matrix #19 N/A-when-lsi_retrieved-empty mirrors checks 6–9.

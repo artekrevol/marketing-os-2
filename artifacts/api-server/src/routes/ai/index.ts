@@ -12,6 +12,7 @@ import {
   runAllValidators,
   getPlaybookProjectNames,
   computeLsiCoverage,
+  AUTHORITY_WHITELIST,
   type StageKey,
   type ValidatorDeps,
   type ArticleSchema,
@@ -34,6 +35,8 @@ import {
   isUrlInLinkTargets,
   getAnchorVariations,
   getReviewsBankProjectNames,
+  findTestimonials,
+  findLinkTargets,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { isIP } from "node:net";
@@ -245,6 +248,13 @@ router.post("/outline-generate", requireAuth, requireProjectAccess, async (req, 
     const proofs = proofRows;
     if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
+    const outlineIcp = Array.isArray(project.icps) && project.icps.length ? (project.icps[0] as number) : undefined;
+    const { block: outlineAssetBlock } = await buildAssetCandidates({
+      brandId: project.brandId,
+      icp: outlineIcp,
+      funnelStage: project.funnelStage || undefined,
+    });
+
     const outlineInstructions = `Honor the playbook for ICP language, banned phrases, and pillar alignment when shaping the outline.
 
 You must also distribute the brief's atomic_question_map across sections — every atomic question with liftable_paragraph=true must be assigned to exactly one section as a standalone, citation-ready paragraph. Distribute the entity_data_requirements proportionally across sections so the article hits its minimums. Estimate ai_citation_likelihood for each section based on entity density, atomic-question coverage, and citation plan.`;
@@ -289,7 +299,11 @@ Produce 6-9 sections. Each section gets:
 - ai_citation_likelihood: high/medium/low
 - schema_markup_types: JSON-LD types this section supports (FAQPage for Q&A blocks, HowTo for stepwise content, etc.)
 
-Cover EVERY atomic question with liftable_paragraph=true at least once. Distribute entities and citations so the article hits the entity_data_requirements minimums. Also produce H1, meta description (<160 chars), tone reminder, and CTA placement notes.`,
+Cover EVERY atomic question with liftable_paragraph=true at least once. Distribute entities and citations so the article hits the entity_data_requirements minimums. Also produce H1, meta description (<160 chars), tone reminder, and CTA placement notes.
+
+${outlineAssetBlock}
+
+When assigning internal_links to sections, use ONLY the INTERNAL LINK TARGETS above, and note in each section where a selected testimonial should be placed.`,
         },
       ],
     });
@@ -517,6 +531,96 @@ function enforceCitationWhitelist(text: string, hosts: Set<string>): { text: str
   return { text: out, stripped };
 }
 
+/**
+ * Cut A — candidate injection. Fetch the brand's approved testimonial + internal-
+ * link candidates (and the authority-citation whitelist) and format them into a
+ * block the generation prompts inject as "you MUST select from these — do not
+ * invent". The reviews_bank / link_targets validators remain the verification
+ * floor; this only gives the model real assets to anchor to so the asset-derived
+ * gates (#15 internal links, #16 authority, testimonials) can actually pass.
+ *
+ * Filtered candidates are preferred (ICP / funnel-matched) but we fall back to a
+ * brand-wide fetch when the filtered set is empty, so the model is never left
+ * with nothing to select. Candidates are sorted by id before formatting so the
+ * injected block is byte-identical across the section calls of one project —
+ * preserving the prompt-cache hits that buildRoutedSystemWithProject relies on.
+ */
+async function buildAssetCandidates(opts: {
+  brandId: string;
+  icp?: number;
+  vertical?: string;
+  costBucket?: string;
+  cluster?: string;
+  funnelStage?: string;
+}): Promise<{ block: string; linkHosts: string[] }> {
+  const { brandId, icp, vertical, costBucket, cluster, funnelStage } = opts;
+  const fs = funnelStage
+    ? (funnelStage.toUpperCase() as "TOFU" | "MOFU" | "BOFU")
+    : undefined;
+
+  let tRes = await findTestimonials({ brandId, icp, vertical, costBucket, limit: 50 });
+  if (tRes.data.length === 0 && (icp != null || vertical || costBucket)) {
+    tRes = await findTestimonials({ brandId, limit: 50 });
+  }
+  let lRes = await findLinkTargets({ brandId, cluster, vertical, funnelStage: fs, icp, limit: 50 });
+  if (lRes.data.length === 0 && (cluster || vertical || fs || icp != null)) {
+    lRes = await findLinkTargets({ brandId, limit: 50 });
+  }
+
+  const testimonials = [...tRes.data].sort((a, b) => a.id.localeCompare(b.id)).slice(0, 12);
+  const linkTargets = [...lRes.data].sort((a, b) => a.id.localeCompare(b.id)).slice(0, 20);
+
+  const tLines = testimonials.length
+    ? testimonials
+        .map((t) => {
+          const role = t.reviewerRole ? `, ${t.reviewerRole}` : "";
+          const proj = t.projectName ? ` [project: ${t.projectName}]` : "";
+          return `- "${(t.quoteExcerpt || "").trim()}" — ${t.reviewerName}${role} at ${t.company}${proj}`;
+        })
+        .join("\n")
+    : "(no testimonials on file for this brand — do not include any testimonial)";
+
+  const linkHosts: string[] = [];
+  const lLines = linkTargets.length
+    ? linkTargets
+        .map((l) => {
+          try {
+            linkHosts.push(new URL(l.url).host.toLowerCase().replace(/^www\./, ""));
+          } catch { /* skip malformed url */ }
+          const anchors = Array.isArray(l.anchorVariations)
+            ? (l.anchorVariations as unknown[]).filter((x): x is string => typeof x === "string")
+            : [];
+          const meta = [l.contentCluster ? `cluster: ${l.contentCluster}` : "", `funnel: ${l.funnelStage}`]
+            .filter(Boolean)
+            .join(" | ");
+          const anchorTxt = anchors.length ? ` | anchors: ${anchors.join(", ")}` : "";
+          return `- ${l.url}${meta ? ` | ${meta}` : ""}${anchorTxt}`;
+        })
+        .join("\n")
+    : "(no internal link targets on file for this brand — do not include internal links)";
+
+  const authorityDomains = [...AUTHORITY_WHITELIST, "*.gov", "*.edu"].join(", ");
+
+  const block = `=== APPROVED ASSET CANDIDATES — you MUST select from these lists; do NOT invent ===
+
+TESTIMONIALS (select at least 1 relevant one; use the EXACT reviewer name, company, and quote excerpt):
+${tLines}
+
+INTERNAL LINK TARGETS (select 3–5 relevant URLs; use ONLY these URLs with one of the listed anchor variations):
+${lLines}
+
+AUTHORITY CITATION DOMAINS (≥2 external authority citations required; cite ONLY from these domains or any .gov / .edu host):
+${authorityDomains}
+
+NON-NEGOTIABLE:
+- You MUST select testimonials from the TESTIMONIALS list above — never invent a reviewer, company, or quote.
+- You MUST select internal links from the INTERNAL LINK TARGETS list above — never invent a URL; use a listed anchor variation.
+- External authority citations MUST come from the AUTHORITY CITATION DOMAINS above.
+=== END ASSET CANDIDATES ===`;
+
+  return { block, linkHosts };
+}
+
 router.post("/draft-section", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id, section_id, revision_instruction } = req.body as {
@@ -553,6 +657,18 @@ router.post("/draft-section", requireAuth, requireProjectAccess, async (req, res
       ? whitelist.sources.slice(0, 25).map((s) => `- ${s.label}: ${s.url}`).join("\n")
       : "(no verified sources for this project — do not invent any citations)";
 
+    const draftIcp = Array.isArray(project.icps) && project.icps.length ? (project.icps[0] as number) : undefined;
+    const { block: draftAssetBlock, linkHosts: draftLinkHosts } = await buildAssetCandidates({
+      brandId: project.brandId,
+      icp: draftIcp,
+      funnelStage: project.funnelStage || undefined,
+    });
+    // Authority-citation domains and internal-link target hosts must survive
+    // enforceCitationWhitelist below, or the asset-derived citations (#16) and
+    // internal links (#15) get stripped before they ever reach the validators.
+    for (const d of AUTHORITY_WHITELIST) whitelist.hosts.add(d);
+    for (const h of draftLinkHosts) whitelist.hosts.add(h);
+
     const projectContext = `=== PROJECT CONTEXT (shared across all sections) ===
 Content type: ${project.contentType}
 Title (H1): ${outline?.h1}
@@ -581,6 +697,8 @@ CITATION RULES — non-negotiable:
 - Do not cite Wikipedia or AI-generated content even if it appears in the whitelist.
 
 Banned phrases (do not use): "in today's fast-paced world", "in conclusion", "leverage", "synergy", "delve", "navigate the landscape", "game-changer", "unlock the power".
+
+${draftAssetBlock}
 === END PROJECT CONTEXT ===`;
 
     const projectCacheTag = `project:${project_id}|outline:${outline?.updatedAt || ""}|brief:${brief?.updatedAt || ""}|proofs:${proofs.length}`;
@@ -1114,7 +1232,7 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
     const [projectRows, outlineRows, draftRows, briefRows] = await Promise.all([
-      db.select({ id: projectsTable.id, brandId: projectsTable.brandId, keyword: projectsTable.keyword, contentType: projectsTable.contentType, funnelStage: projectsTable.funnelStage, serpSignals: projectsTable.serpSignals, lsiRetrieved: projectsTable.lsiRetrieved }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
+      db.select({ id: projectsTable.id, brandId: projectsTable.brandId, keyword: projectsTable.keyword, contentType: projectsTable.contentType, funnelStage: projectsTable.funnelStage, icps: projectsTable.icps, serpSignals: projectsTable.serpSignals, lsiRetrieved: projectsTable.lsiRetrieved }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
       db.select().from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
       db.select().from(draftsTable).where(eq(draftsTable.projectId, project_id)),
       db.select({ atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, aiCitationLandscape: researchBriefsTable.aiCitationLandscape }).from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
@@ -1193,8 +1311,14 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
     let extraction_failed = false;
     try {
       const t0 = Date.now();
-      const extractSystem = `You extract a structured publishing schema from a finished article. Return ONLY a submit_article_schema tool call. Use the exact primary keyword "${primaryKeyword}" where required. Never invent dollar amounts. For case_studies_cited, describe what was built and the measurable outcome — never a contract value or any dollar figure.`;
-      const extractUser = `PRIMARY KEYWORD: ${primaryKeyword}\n\nARTICLE (Markdown):\n${stitched.slice(0, 60000)}`;
+      const fsIcp = Array.isArray((project as any).icps) && (project as any).icps.length ? ((project as any).icps[0] as number) : undefined;
+      const { block: stitchAssetBlock } = await buildAssetCandidates({
+        brandId: project.brandId,
+        icp: fsIcp,
+        funnelStage: String((project as any).funnelStage || "") || undefined,
+      });
+      const extractSystem = `You extract a structured publishing schema from a finished article. Return ONLY a submit_article_schema tool call. Use the exact primary keyword "${primaryKeyword}" where required. Never invent dollar amounts. For case_studies_cited, describe what was built and the measurable outcome — never a contract value or any dollar figure. When populating testimonials_used, internal_links, and external_authority_citations, copy values VERBATIM from the APPROVED ASSET CANDIDATES below — never invent a reviewer, company, quote, URL, or citation domain; omit any asset that is not present both in the article and in the candidate lists.`;
+      const extractUser = `PRIMARY KEYWORD: ${primaryKeyword}\n\n${stitchAssetBlock}\n\nARTICLE (Markdown):\n${stitched.slice(0, 60000)}`;
       const exData = await callAnthropicRaw({
         model: SONNET,
         max_tokens: 8000,

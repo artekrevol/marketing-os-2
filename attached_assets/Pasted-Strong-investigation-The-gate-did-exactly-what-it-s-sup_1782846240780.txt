@@ -1,0 +1,15 @@
+Strong investigation. The gate did exactly what it's supposed to do — caught a real upstream gap, halted ship, wrote provenance. Two decisions:
+1. Reclassify #19 (LSI coverage) as N/A when lsi_retrieved is empty. Same rule the matrix already applies to checks 6–9. The semantic for N/A is "precondition not met"; an empty retrieved LSI set means the precondition for coverage isn't met. Update the matrix harness so #19 returns N/A when lsi_retrieved.length === 0. Document the rule near the harness logic so it's discoverable.
+2. Proceed with Cut A — candidate injection — as a focused dispatch. Defer Cut B until after Cut A is verified.
+Cut A scope:
+
+Outline and draft prompt builders call findTestimonials(brandId, {icp, vertical, costBucket?}) and findLinkTargets(brandId, {cluster, funnel_stage, icp}) to fetch candidates.
+Candidates injected into the system prompt as "You MUST select testimonials from this list — do not invent. You MUST select internal link targets from this list — do not invent."
+Authority citation whitelist (clutch.co, statista.com, bls.gov, gartner.com, mckinsey.com, hbr.org, .gov, .edu) injected as part of citation instructions.
+Final-stitch prompt receives the same context for consistency.
+No changes to validators themselves — they remain the verification floor.
+
+After Cut A ships, regenerate Blog #1 against the same parameters. The expected delta: testimonials_used ≥ 1, internal_links ≥ 1, authority citations ≥ 2, all asset-derived fields validated against DB. Strip behavior should drop to near-zero on those checks because the model now has real candidates to anchor to.
+Content-shaping fails (#1, #2, #3, #5, #20, #21, #22) defer to Cut B after we see what Cut A leaves behind. Some of these may resolve as a side effect of better candidate injection (cleaner prompts often produce cleaner structure). Others will need specific prompt tightening.
+One note for Cut A implementation: the brand-mention ratio issue (0:202) is content-shaping (Cut B), not candidate injection. Brand voice instruction in the system prompt is the fix there. Don't conflate "model doesn't say TekRevol" with "model doesn't have brand assets" — different fixes.
+Begin Cut A. Same operational rules. Pause after the regenerated Blog #1 matrix runs.
