@@ -1,0 +1,648 @@
+# ContentForge Quality Fix Dispatch (v2)
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Supersedes:** the earlier "Content Quality Fix Dispatch FINAL." That dispatch assumed file-based asset loading from `/data/`. The Shared Data Layer has since shipped; this v2 uses the database-backed pattern instead. Send v2 only; ignore v1.
+
+**Regression targets:**
+- Primary: project `821e5c72-0cb7-400e-83f4-77d533b445a8` (Austin app development cost blog)
+- Secondary: project `04cc54c1-8aef-4bd3-acc6-0dc3dd2bb4e9` (dog training app development cost blog)
+
+**Dispatch type:** Single sequential change. Schema → ingestion → generation rules → validators → regression. Eight phases.
+
+---
+
+## What this dispatch fixes
+
+Two audited blogs surfaced four classes of failure: wrong proof (internal financials and per-project dollars used as authority), wrong structure (duplicate H2s, prose where lists belong, missing FAQ blocks), wrong substance (cost guides missing hourly rates, team models, maintenance breakdowns), and wrong tone (brand mentions stacked 14+ times per piece, scattered CTAs, advertorial voice).
+
+After this dispatch, regenerating either audited piece must produce a structurally valid, asset-validated article that opens with a direct answer in the first 100 words, proves expertise through engineering specifics rather than dollar amounts, and uses only TekRevol assets that exist in the canonical database tables. Validators block ship on every one of these requirements.
+
+---
+
+## What's already in place from prior dispatches
+
+This dispatch builds on three landed pieces of infrastructure. Do not rebuild any of them.
+
+**From SEO Module Integration:**
+- `lib/integrations/dataforseo/` — Search Volume, SERP Live Advanced, Keyword Ideas, Ranked Keywords, OnPage Instant endpoints. Reuse for Phase 3 SERP-driven content flags.
+- `lib/seo/cache.ts` — 7-day TTL cache on slow-moving endpoints.
+- `usage_logs` table records per-call cost.
+
+**From Department + Role Taxonomy:**
+- `requireSeoRole` middleware. Reuse for any new admin endpoints in this dispatch that should be gated.
+- `role` and `department` fields on `user_profiles` for audit logging.
+
+**From Shared Data Layer (the most important to internalize):**
+- `module_data_provenance` table — every cross-module write tags source, generator, method. Use for every asset write in Phase 2.
+- `lib/db/queries/cross-module.ts` — the `QueryResult<T>` shape with `{ data, source, reason }`. Use this pattern for all new query helpers.
+- `lib/ui-shared/DataSourceTag` — render this anywhere a generated draft surfaces asset-derived content (testimonials, link targets, citations).
+- The four design rules (graceful degradation, explicit empty states, mandatory attribution, staleness-as-data) — apply to every new surface in this dispatch.
+
+Critically: **the playbook is already stored in the database** via the existing `playbook` table and the admin "Company playbook" upload widget. This dispatch does not introduce file-based playbook loading. The reviews bank and internal linking file become DB-backed in the same way.
+
+---
+
+## Phase 0 — Pre-flight (read-only, report before continuing)
+
+Same survey-only contract as prior dispatches. No code, no schema changes, no installs.
+
+1. **Confirm Shared Data Layer is shipped.** Check for: `module_data_provenance` table, `content_url_keyword_link` table, `lib/db/queries/cross-module.ts`, `lib/ui-shared` package with `DataSourceTag` component. If any are missing, halt — this dispatch depends on them.
+
+2. **The existing `playbook` table.** Show its schema. Show the admin UI surface that uploads to it. Show how the playbook content is read at generation time (the prompt injection point). This dispatch reuses the table; no schema changes required.
+
+3. **The `REVIEW_TOOL` schema location and current shape.** Locate the file (likely `artifacts/api-server/src/routes/ai/index.ts`). Show the existing schema in full — `voice_flags`, `voice_match_score`, `entity_density_score`, `ai_citation_readiness_score`, `ai_citation_flags`. This is what Phase 4 extends.
+
+4. **The `sanitizeVoiceFlags()` pattern.** Locate the three layers (API schema rejection, insert/onConflictDoUpdate sanitization, display-layer `safeText`). Phase 4 follows this exact pattern for the new fields.
+
+5. **Existing admin UI patterns.** Locate how the playbook upload widget is built — file picker, parse, persist, surface in admin. Phase 2 reuses this pattern for reviews bank and link target import.
+
+6. **DataForSEO Replit Secrets.** Confirm `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` are set. Halt if missing.
+
+7. **The two regression projects.** Confirm `821e5c72-0cb7-400e-83f4-77d533b445a8` and `04cc54c1-8aef-4bd3-acc6-0dc3dd2bb4e9` exist and are accessible.
+
+Report findings before any code is written.
+
+---
+
+## Phase 1 — Schema: asset tables
+
+Three new tables. Scoped transactional DDL only — no blanket `drizzle-kit push` (the schema drift from `user_roles`/`page_events`/`playbook_sections` remains untouched).
+
+### 1.1 `reviews_bank_entries` — the testimonial corpus
+
+83 reviews from Clutch, attributed by name + company, queryable by ICP and vertical.
+
+```sql
+CREATE TABLE "reviews_bank_entries" (
+  "id"                uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "brand_id"          uuid NOT NULL REFERENCES "brands"("id") ON DELETE restrict,
+  "reviewer_name"     text NOT NULL,
+  "reviewer_role"     text,
+  "company"           text NOT NULL,
+  "company_industry"  text,
+  "project_name"      text,
+  "quote_excerpt"     text NOT NULL,        -- the short displayable quote
+  "quote_full"        text,                  -- full transcript when available
+  "rating"            numeric(3,1),          -- 0.5 to 5.0
+  "source_url"        text,                  -- Clutch profile URL
+  "date_published"    date,
+  "icp"               integer,               -- 1-4 (passion founder | operator | tech pro | enterprise)
+  "vertical"          text,                  -- healthcare | fintech | real_estate | etc.
+  "cost_bucket"       text,                  -- under_50k | 50k_to_200k | over_200k
+  "outcome_metrics"   jsonb DEFAULT '{}'::jsonb,
+  "is_confidential"   boolean NOT NULL DEFAULT false,  -- true = exclude from generation (the 0.5 and 1.0 reviews)
+  "confidential_reason" text,                -- 'critical_review' | 'client_requested' | etc.
+  "imported_at"       timestamptz NOT NULL DEFAULT now(),
+  "last_verified_at"  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "reviews_bank_entries_reviewer_company_uq"
+    UNIQUE ("brand_id", "reviewer_name", "company")
+);
+CREATE INDEX "rbe_brand_icp_idx"      ON "reviews_bank_entries" ("brand_id", "icp")          WHERE "is_confidential" = false;
+CREATE INDEX "rbe_brand_vertical_idx" ON "reviews_bank_entries" ("brand_id", "vertical")     WHERE "is_confidential" = false;
+CREATE INDEX "rbe_brand_confidential_idx" ON "reviews_bank_entries" ("brand_id", "is_confidential");
+```
+
+The confidentiality flag is the *only* gate for testimonial generation. Validators query `WHERE is_confidential = false` always — the gates can't be bypassed by validator code that forgets the filter, because partial indexes only cover non-confidential entries (queries against confidential rows take a slower path, which is acceptable and a safety floor).
+
+### 1.2 `link_targets` — the internal linking file as a queryable corpus
+
+113 URLs from TekRevol's website, classified for ContentForge to query during generation.
+
+```sql
+CREATE TABLE "link_targets" (
+  "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "brand_id"            uuid NOT NULL REFERENCES "brands"("id") ON DELETE restrict,
+  "url"                 text NOT NULL,
+  "page_title"          text,
+  "page_type"           text NOT NULL,           -- 'home' | 'service' | 'solution' | 'blog' | 'location' | 'case_study' | etc.
+  "content_cluster"     text,                    -- 'mobile_app' | 'ai' | 'cloud' | etc.
+  "vertical"            text,                    -- 'healthcare' | 'fintech' | null
+  "funnel_stage"        text NOT NULL,           -- 'TOFU' | 'MOFU' | 'BOFU'
+  "primary_icp"         integer,                 -- 1-4
+  "primary_keyword"     text,
+  "anchor_variations"   jsonb NOT NULL DEFAULT '[]'::jsonb,  -- array of 3 anchor strings
+  "use_for"             text,                    -- guidance description from the linking file
+  "is_active"           boolean NOT NULL DEFAULT true,
+  "imported_at"         timestamptz NOT NULL DEFAULT now(),
+  "last_verified_at"    timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "link_targets_brand_url_uq" UNIQUE ("brand_id", "url")
+);
+CREATE INDEX "lt_brand_cluster_idx" ON "link_targets" ("brand_id", "content_cluster") WHERE "is_active" = true;
+CREATE INDEX "lt_brand_funnel_icp_idx" ON "link_targets" ("brand_id", "funnel_stage", "primary_icp") WHERE "is_active" = true;
+CREATE INDEX "lt_brand_url_lookup_idx" ON "link_targets" ("brand_id", "url") WHERE "is_active" = true;
+```
+
+`is_active = false` is the soft-delete path. Validators query against `is_active = true` only. The brand-scoped URL uniqueness prevents the same URL appearing twice per brand.
+
+### 1.3 `linking_rules` — precomputed cluster patterns
+
+26 rules from the linking file's Rules sheet. Drives the AI's link-selection logic at generation time.
+
+```sql
+CREATE TABLE "linking_rules" (
+  "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "brand_id"            uuid NOT NULL REFERENCES "brands"("id") ON DELETE restrict,
+  "trigger_pattern"     text NOT NULL,           -- 'cost_guide_mobile_app' | 'comparison_ios_vs_android' | etc.
+  "trigger_keywords"    jsonb NOT NULL DEFAULT '[]'::jsonb,  -- array of trigger keyword substrings
+  "primary_target_urls" jsonb NOT NULL DEFAULT '[]'::jsonb,  -- ordered array of preferred targets
+  "notes"               text,                    -- caveats and guidance
+  "created_at"          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX "lr_brand_pattern_idx" ON "linking_rules" ("brand_id", "trigger_pattern");
+```
+
+### 1.4 Allow-list updates
+
+Add to `BRAND_SCOPED_TABLES` in `lib/db/src/brand-scope.ts`:
+- `reviews_bank_entries`
+- `link_targets`
+- `linking_rules`
+
+### 1.5 No changes to existing playbook table
+
+The existing `playbook` table and its admin upload widget are sufficient. This dispatch's Phase 5 rules call helper functions that parse the live playbook content (e.g., `getBannedPhrases()`, `getFunnelDefinition()`, `getCredentialBlock()`) — same parse-at-usage pattern that already works. No schema migration to "structure" the playbook into sections; that's a separate question for later.
+
+### 1.6 Migration approach
+
+Same as prior dispatches: scoped transactional DDL in a `BEGIN/COMMIT` block. Report SQL before applying. Pause for review.
+
+---
+
+## Phase 2 — Asset ingestion (admin endpoints + UI)
+
+Two import endpoints, two admin UI surfaces, one set of canonical query helpers. All use the existing patterns from the playbook upload widget.
+
+### 2.1 Reviews bank import
+
+**Endpoint:** `POST /api/admin/reviews-bank/import`
+- Auth: admin only.
+- Body: array of review objects (matching the schema in 1.1). Upserts by `(brand_id, reviewer_name, company)`. Records each upsert in `module_data_provenance` with `source_module = 'system'`, `generation_method = 'import'`, `metadata = { source_file: 'reviews_bank.json', count: N }`.
+
+**Endpoint:** `GET /api/admin/reviews-bank` — list all entries for the active brand, with confidential flag visible.
+
+**Endpoint:** `PATCH /api/admin/reviews-bank/:id` — edit a single entry (typically to flip `is_confidential` or update outcome metrics). Each edit emits a provenance row tagged with the editing user.
+
+**Endpoint:** `DELETE /api/admin/reviews-bank/:id` — soft-delete (sets a flag). Provenance row emitted.
+
+**Admin UI page:** `/admin/reviews-bank` in ContentForge. List view sortable by ICP, vertical, confidentiality. Import button takes the `reviews_bank.json` file directly. Inline edit for confidentiality toggle.
+
+### 2.2 Link targets import
+
+**Endpoint:** `POST /api/admin/link-targets/import`
+- Auth: admin only.
+- Body: structured object with `link_targets[]` and `linking_rules[]` arrays. Upserts both tables. Records in provenance.
+
+**Endpoint:** `GET /api/admin/link-targets` — list view for the active brand.
+
+**Endpoint:** `PATCH /api/admin/link-targets/:id` — update entry. Useful when a URL retires or a page's funnel stage changes.
+
+**Endpoint:** `DELETE /api/admin/link-targets/:id` — soft-delete (sets `is_active = false`).
+
+**Admin UI page:** `/admin/link-targets` in ContentForge. Table view filterable by cluster, funnel stage, ICP. Import button takes the `internal_linking.xlsx` file (server-side parse using the existing xlsx library used elsewhere in the platform).
+
+### 2.3 Query helpers in `lib/db/queries/`
+
+Add to existing cross-module query module:
+
+```typescript
+// lib/db/queries/assets.ts (new file, re-exported from queries/index.ts)
+
+// Reviews bank queries — always filter is_confidential = false
+findTestimonials(opts: {
+  brandId: string;
+  icp?: number;
+  vertical?: string;
+  costBucket?: string;
+  limit?: number;
+}): Promise<QueryResult<Review[]>>
+
+isReviewInBank(
+  brandId: string,
+  reviewerName: string,
+  company: string,
+  quoteExcerpt: string
+): Promise<boolean>  // exact match on name + company + quote substring
+
+getConfidentialCompanies(brandId: string): Promise<string[]>  // for the exclusion list
+
+// Link target queries — always filter is_active = true
+findLinkTargets(opts: {
+  brandId: string;
+  cluster?: string;
+  vertical?: string;
+  funnelStage?: 'TOFU' | 'MOFU' | 'BOFU';
+  icp?: number;
+  limit?: number;
+}): Promise<QueryResult<LinkTarget[]>>
+
+isUrlInLinkTargets(brandId: string, url: string): Promise<boolean>
+
+getAnchorVariations(brandId: string, url: string): Promise<string[]>
+
+getLinkingRulesForCluster(
+  brandId: string,
+  cluster: string
+): Promise<QueryResult<LinkingRule[]>>
+
+// Playbook queries — reuse existing playbook table
+getActivePlaybook(brandId: string): Promise<string | null>
+getBannedPhrases(brandId: string): Promise<string[]>
+getDiscardList(brandId: string): Promise<string[]>
+getCredentialBlock(brandId: string): Promise<string>
+```
+
+All return the standard `QueryResult<T>` shape from the shared data layer. Empty results carry `reason` codes (`'not-tracked'`, `'no-active-playbook'`, etc.).
+
+### 2.4 Bootstrap imports
+
+The dispatcher will provide three source files:
+- `playbook.md` (v2.5) — uploaded via the existing admin "Company playbook" widget.
+- `reviews_bank.json` — uploaded via the new `/admin/reviews-bank` import.
+- `internal_linking.xlsx` — uploaded via the new `/admin/link-targets` import.
+
+The agent must NOT attempt to bootstrap these from any file path. The dispatcher uploads them via the admin UI after Phase 2 ships. Until then, the asset tables are empty; the validators in Phase 6 fail-closed (block ship on no testimonials available) until the import runs.
+
+---
+
+## Phase 3 — DataForSEO integration (already shipped, light additions)
+
+The DataForSEO client is already wired from the SEO module integration. This dispatch's needs require two additional behaviors at the research stage:
+
+### 3.1 SERP-driven content flags
+
+After the existing SERP Live Advanced call returns top-10, scan for missing-element signals and set required-content flags on the project:
+
+- `requires_cost_table` = primary keyword contains "cost"/"price"/"how much"/"pricing" OR ≥3 top-10 results display structured pricing
+- `requires_timeline_table` = any top-10 H2 contains "how long"/"timeline"/"phases"
+- `requires_regional_comparison` = any top-10 result discusses geographic rate variation
+- `requires_hourly_rate_comparison` = cost-cluster article AND top-10 includes hourly rates
+- `requires_team_model_comparison` = cost-cluster article AND top-10 includes in-house/agency/freelancer
+- `requires_maintenance_cost_breakdown` = cost-cluster article AND top-10 includes maintenance-cost-as-%
+- `requires_competitor_teardown` = ≥2 competitor products named in the brief
+- `requires_local_context` = primary keyword contains a city or region name
+
+Store these as a `serp_signals` jsonb column on `projects` (additive schema change — single nullable column).
+
+### 3.2 LSI tracking
+
+After Keyword Ideas returns, record `lsi_retrieved` (array of LSI terms with volumes) on the project. After draft, compute `lsi_used_count` and `lsi_coverage_ratio = used / retrieved`. Target ≥ 0.60 (see Rule 4.15).
+
+### 3.3 Budget enforcement
+
+Per-article hard cap: $1.00. Soft target: $0.50. Log spend per call to `usage_logs` (existing pattern from SEO module). Halt research stage if hard cap is hit; return partial data with a flag.
+
+---
+
+## Phase 4 — Output schema enforcement
+
+Extend the `REVIEW_TOOL` schema in `artifacts/api-server/src/routes/ai/index.ts` with new required fields. Use the proven three-layer pattern: API rejection on missing/malformed, `sanitizeOutput()` at insert + onConflict, `safeText()` at display.
+
+### 4.1 New required fields
+
+```typescript
+{
+  // Existing
+  voice_flags: { ... },
+
+  // Title / meta
+  title_tag: string                    // ≤60 chars, contains primary keyword
+  h1: string                           // contains primary keyword (unique on page)
+  meta_description: string             // 150–155 chars, contains primary keyword
+
+  // Opening (Rule 5.2 — hard)
+  opening_block: {
+    first_100_words: string            // MUST contain primary keyword
+    direct_answer: string              // explicit 2–3-sentence answer
+  }
+
+  // Closing reinforcement (Rule 5.2 extension)
+  closing_block: {
+    summary: string                    // MUST contain exact-match primary keyword
+  }
+
+  // Structure
+  headings: { h2: string[], h3: string[] }
+  list_blocks: Array<{ section: string, type: 'ordered'|'unordered', items: string[] }>
+
+  // Conditional tables (Phase 3.1 flags)
+  cost_table?: { columns, rows }
+  timeline_table?: { phases: Array<{ phase, duration, deliverables }> }
+  regional_rate_comparison?: { rows: Array<{ region, hourly_rate, notes }> }
+  hourly_rate_comparison?: { rows: Array<{ role, junior, mid, senior }> }
+  team_model_comparison?: { rows: Array<{ model, cost, speed, quality, control, best_for }> }
+  maintenance_cost_breakdown?: { annual_pct_of_build, components }
+  competitor_teardown?: { competitors: Array<{ name, key_features, estimated_build_cost, what_makes_them_work }> }
+
+  // Case studies — schema-enforced "what we built, not what we billed"
+  case_studies_cited: Array<{
+    project_name: string
+    // PROHIBITED at schema layer: NO contract_value field exists
+    technical_narrative: string        // 2–3 sentences, ≥40 words, no $ amounts
+    outcome: string                    // measurable result, never a dollar amount
+    in_playbook_or_bank: boolean       // MUST be true to ship
+  }>
+
+  // Local context (Rule 5.14)
+  local_entity_grounding?: {           // required if requires_local_context = true
+    city: string
+    local_context_sentences: string[]  // ≥2 sentences true ONLY of this city
+  }
+
+  // E-E-A-T
+  author_byline: {
+    name: 'By the TekRevol team'       // fixed
+    credentials: string                // from playbook via getCredentialBlock()
+    bio_link: '/about'
+  }
+  statistics_used: Array<{
+    claim, source_url, source_name, year, verified_live, flagged_as_stale
+  }>
+  external_authority_citations: Array<{ domain, url, purpose }>   // ≥2 required
+
+  // Asset retrieval (validated against canonical sources)
+  testimonials_used: Array<{
+    reviewer_name, company, quote_excerpt, source_url,
+    in_bank: boolean                   // MUST be true to ship — DB validator
+  }>
+  internal_links: Array<{
+    target_url, anchor_text, section,
+    in_link_targets: boolean           // MUST be true to ship — DB validator
+  }>
+
+  // FAQ schema
+  faq_schema: Array<{ question, answer }>  // 3–5 pairs, 40–60-word answers
+
+  // CTA
+  cta_block: {
+    placement: 'end_only',
+    anchor_text: string,
+    target_url: '/contact'
+  }
+
+  // LSI coverage (Phase 3.2)
+  lsi_retrieved: string[]
+  lsi_used_in_body: string[]
+  lsi_coverage_ratio: number          // target ≥0.60
+
+  // Validation summary (populated by Phase 6 validators)
+  validation: { /* all the *_passes booleans */ }
+}
+```
+
+### 4.2 Sanitization (three layers)
+
+Per the existing `sanitizeVoiceFlags()` pattern: schema rejection at API boundary with `additionalProperties: false`, `sanitizeOutput()` at insert + onConflictDoUpdate, `safeText()` at display with escape-sequence decoding.
+
+### 4.3 DataSourceTag on every asset-derived field
+
+Wherever `testimonials_used`, `internal_links`, or `case_studies_cited` are rendered in the review UI, the `<DataSourceTag>` component from `lib/ui-shared` shows the asset's provenance (when it was imported, by whom, when last verified). Per Rule 3 from the shared data layer dispatch — attribution is mandatory.
+
+---
+
+## Phase 5 — Generation rules (16 bundles)
+
+### 5.1 Brand-mention ratio (funnel-differentiated)
+
+Count branded mentions ("TekRevol", "our team", "our work", "our clients", "we") as ratio to non-branded sentences.
+
+| Funnel | Max ratio |
+|---|---|
+| TOFU | 1:12 |
+| MOFU | 1:8 |
+| BOFU | 1:5 |
+
+Exceeds threshold → block ship via `validation.brand_mention_passes = false`.
+
+### 5.2 Direct-answer + closing reinforcement (hard)
+
+**Opening:** first 100 words MUST contain primary keyword + 2–3-sentence direct answer.
+**Closing:** summary or FAQ block MUST contain exact-match primary keyword again.
+Either fails → block ship.
+
+### 5.3 Competitive completeness
+
+Driven by Phase 3.1 flags. If a flag is set, the schema field is required. Missing → block ship.
+
+### 5.4 Heading hygiene
+
+H1 unique. No duplicate H2s. No duplicate H3s within parent. Valid nesting. Block on duplicates.
+
+### 5.5 Citation grounding + authority floor
+
+- Every URL in `statistics_used` and `external_authority_citations` → HTTP 200 + content match (±5% on numbers). Failures stripped, `verified_live = false`.
+- Every stat must have a `year`. `year < current_year - 2` → `flagged_as_stale = true`. Flag inline, don't block.
+- **Authority floor:** ≥2 entries in `external_authority_citations` from whitelist (clutch.co, statista.com, bls.gov, gartner.com, mckinsey.com, hbr.org, .gov, .edu, etc.). Below 2 → block ship.
+
+### 5.6 Content-type integrity
+
+CTAs only in `cta_block`. Body reads vendor-neutral. >1 CTA detected mid-body → block ship.
+
+### 5.7 Author byline
+
+Fixed: "By the TekRevol team." Credentials from `getCredentialBlock()`. Bio link `/about`. Top of article.
+
+### 5.8 Visual prompts
+
+For cost/timeline/regional flagged articles, generate `visual_prompts` array. Designer-facing, used by Central Design when producing infographics.
+
+### 5.9 Case-study narrative pivot (the most important rule)
+
+This is the change with the largest impact on perceived quality. Both audits identified it independently.
+
+**Schema-enforced:** `case_studies_cited[]` has no `contract_value` field. The model cannot emit it because nowhere to put it.
+
+**Validation (Phase 6.6):**
+- `technical_narrative` must be ≥40 words.
+- `technical_narrative` must NOT contain dollar amounts (regex `\$[\d,]+`).
+- `outcome` if present must NOT be a dollar amount.
+- `in_playbook_or_bank` validated against database: project name must exist in either the playbook's named-project list or the reviews bank's `project_name` field.
+
+### 5.10 Aggregate financial suppression
+
+Regex + LLM classifier scans full article for:
+- Total/aggregate revenue ("$Xm total revenue", "we've earned $X")
+- Client concentration ("X% of our clients", "most of our clients in Y")
+- Deal metadata ("X deals closed", "average contract value")
+- Internal BD metrics ("win rate", "ARPU", "LTV")
+
+Match → strip + flag. `validation.no_aggregate_financial_data = false`.
+
+### 5.11 Stat density cap
+
+Max one supporting number per paragraph. Count digit-bearing tokens that read as statistics. >1 → flag for revision. Soft validator.
+
+### 5.12 Repetition detection
+
+Cross-section: any 8+ word phrase appearing in ≥2 sections → flag. Soft validator.
+
+### 5.13 List formatting
+
+Content enumerating 3+ items MUST render as a list. Detection: "first... second... third" patterns. Flag for conversion at outline stage; block at draft if still prose.
+
+### 5.14 Local entity grounding
+
+If `requires_local_context = true`, `local_entity_grounding.local_context_sentences` must have ≥2 sentences true ONLY of that city. The model is fed a brief on local context from `/data/local_context/{city}.md` reference files (dispatcher seeds these for the priority five cities: Austin, Houston, Dallas, Chicago, LA — via the same import pattern as the playbook). Block ship if missing.
+
+### 5.15 LSI coverage
+
+Compute `lsi_coverage_ratio` after draft. Target ≥ 0.60. Below → flag for revision. Soft validator.
+
+### 5.16 Topic-coverage checklist
+
+Per content type, required sub-topics from the playbook's existing checklist:
+
+- **Cost guide**: cost ranges, drivers, regional variation, team model, maintenance %, timeline, exclusions
+- **Comparison guide**: feature table, cost comparison, use-case fit, migration cost, recommendation
+- **How-to guide**: prerequisites, numbered steps, pitfalls, tools, outcome
+
+Missing sub-topic on cost guide → block ship. Other content types → flag.
+
+---
+
+## Phase 6 — Validators (six hard gates)
+
+All run before draft is shippable. Each gates ship; failures surface in review UI with specific reason + `<DataSourceTag>`.
+
+### 6.1 Testimonial validator
+
+For each entry in `testimonials_used`:
+- Call `isReviewInBank(brandId, reviewer_name, company, quote_excerpt)`. Must return true.
+- Company MUST NOT appear in `getConfidentialCompanies(brandId)`.
+
+Failure → testimonial stripped, `validation.all_testimonials_in_bank = false`. Emit provenance row with `reason = 'validator-stripped'`.
+
+### 6.2 Internal link validator
+
+For each entry in `internal_links`:
+- Call `isUrlInLinkTargets(brandId, target_url)`. Must return true.
+- Anchor text must appear in `getAnchorVariations(brandId, target_url)` OR be a natural variation not used elsewhere in the same article.
+
+Failure → link stripped, `validation.all_links_in_link_targets = false`. Emit provenance row.
+
+### 6.3 Citation URL validator (HTTP + content match)
+
+For each entry in `statistics_used` AND `external_authority_citations`:
+- Fetch URL → require HTTP 200.
+- Verify claim's key phrase / numeric value appears in fetched page text (±5% on numbers).
+
+Use the existing OnPage API client from `lib/integrations/dataforseo/onpage.ts` for fetches. Cache 24h.
+
+Failure → claim stripped, `verified_live = false`.
+
+### 6.4 Confidentiality exclusion (dynamic)
+
+Database-driven. Validator scans full article + all schema fields for any company name returned by `getConfidentialCompanies(brandId)`. Currently: Branding Design & Packaging Co, Retail Company. Match → strip + flag. Validators load the exclusion list fresh on every generation — no cached list to go stale.
+
+### 6.5 Aggregate financial suppression
+
+Regex + LLM classifier per Rule 5.10. Strip + flag.
+
+### 6.6 Case-study narrative validator
+
+For each entry in `case_studies_cited`:
+- `technical_narrative.length >= 40` words.
+- `technical_narrative` does not match `\$[\d,]+`.
+- `project_name` exists in either playbook portfolio or `reviews_bank_entries.project_name` for the active brand.
+
+Failure → case study stripped, validation fails.
+
+---
+
+## Phase 7 — Regression test (two projects, 24-check matrix each)
+
+After fix ships, regenerate both pieces through the full pipeline (same writer inputs).
+
+### 7.1 Primary regression: Austin app development cost — project `821e5c72`
+
+| # | Check |
+|---|---|
+| 1 | No duplicate H2s/H3s |
+| 2 | Primary keyword in title, H1, first 100 words, meta, ≥1 H2, closing |
+| 3 | Meta description 150–155 chars |
+| 4 | FAQ schema with 3–5 pairs, 40–60-word answers |
+| 5 | Author byline + credentials |
+| 6 | Cost table (features × tiers) |
+| 7 | Hourly rate comparison |
+| 8 | Team model comparison (in-house / agency / freelancer) |
+| 9 | Maintenance cost breakdown |
+| 10 | Local entity grounding — ≥2 Austin-specific sentences |
+| 11 | "Seven factors" or similar enumerated content as list |
+| 12 | Brand mention ratio ≤ 1:8 (MOFU cost guide) |
+| 13 | No aggregate financial data |
+| 14 | No per-project dollar figures — every case study has `technical_narrative`, no `$` |
+| 15 | Internal links 3–5, all in `link_targets` |
+| 16 | ≥2 external authority citations from whitelist |
+| 17 | All stats verified live + content match |
+| 18 | All stats have year, > 24mo flagged |
+| 19 | LSI coverage ≥ 0.60 |
+| 20 | Topic checklist (cost-guide): all sub-topics present |
+| 21 | Stat density ≤ 1/paragraph |
+| 22 | No section-spanning repetition |
+| 23 | CTA in single closing block |
+| 24 | No confidential companies named (DB-driven exclusion list) |
+
+### 7.2 Secondary regression: dog training app — project `04cc54c1`
+
+Same 24-check matrix. Additional project-specific assertions:
+- Competitor teardown includes Dogo, Puppr, GoodPup with `what_makes_them_work` per competitor.
+- Timeline table present (audit specifically called this out).
+- Regional rate comparison (US / Eastern Europe / South Asia).
+
+All 24 checks must pass on both pieces for the dispatch to complete.
+
+---
+
+## Phase 8 — Architect / validator notes
+
+Same as prior dispatches: `git show --stat HEAD` before declaring complete. Treat architect feedback as authoritative.
+
+Two specific areas to scrutinize:
+
+**The Phase 5.9 case-study schema enforcement.** This is the architecturally strongest fix — making the bad pattern (per-project dollar amounts) unconstructible at the schema layer. The architect should verify there is *no path* by which a dollar amount can land in `case_studies_cited[]`. If there is, redesign before ship.
+
+**The Phase 6.4 confidentiality exclusion freshness.** The validator must call `getConfidentialCompanies()` on every generation, not cache it at app start. If a new review is marked confidential at noon, generations starting at 12:01 must respect it. The architect should look for any caching that defeats this.
+
+---
+
+## Acceptance criteria
+
+1. Phase 0 report submitted; shared data layer confirmed shipped.
+2. Three asset tables created via scoped DDL; allow-list updated; migration SQL reviewed.
+3. Reviews bank, link targets imports working via admin UI; canonical files imported via dispatcher.
+4. `REVIEW_TOOL` schema extended with all Phase 4 fields; three-layer sanitization in place.
+5. All 16 generation rule bundles (5.1–5.16) implemented at correct pipeline stages.
+6. All 6 validators (6.1–6.6) gate ship; failures surface in review UI with specific reasons + `<DataSourceTag>`.
+7. Primary regression (project `821e5c72`) passes all 24 checks.
+8. Secondary regression (project `04cc54c1`) passes all 24 checks.
+9. `git show --stat HEAD` reflects expected paths: schema files, asset table migrations, admin routes + UI pages, query helpers in `lib/db/queries/`, validator modules, regression fixtures.
+
+---
+
+## Operational notes
+
+- **Order of operations:** Phase 1 (schema) → Phase 2 (ingestion endpoints + admin UI) → dispatcher uploads canonical files → Phase 3–6 (rules + validators) → Phase 7 (regression). Phase 7 cannot pass if Phase 2's imports haven't run — validators fail-closed when asset tables are empty, which is correct behavior.
+
+- **The playbook upload is unchanged.** Existing admin widget. Dispatcher uploads `playbook.md` v2.5 there.
+
+- **The dispatcher will provide three canonical files:**
+  - `playbook.md` — uploaded via existing playbook widget.
+  - `reviews_bank.json` — uploaded via new `/admin/reviews-bank/import`.
+  - `internal_linking.xlsx` — uploaded via new `/admin/link-targets/import`.
+
+- **Local context files for the priority five cities (Austin, Houston, Dallas, Chicago, LA)** are uploaded via the playbook widget as supplementary documents OR via a new small admin surface for "local context per city" — dispatcher's choice based on what's lightest. If the latter, add a `local_context_documents` table mirroring `reviews_bank_entries` in structure (brand-scoped, per-city text).
+
+- **Brand-mention ratios (1:12 / 1:8 / 1:5)** are starting values. Tune after 20 post-fix articles.
+
+- **The confidentiality exclusion list is dynamic** — it reads from `reviews_bank_entries.is_confidential` on every validation pass. Admin UI changes propagate immediately.
+
+- **Provenance everywhere.** Every asset import, every validator strip, every admin edit emits a row in `module_data_provenance`. This is the audit trail when something goes wrong.
+
+- **DataForSEO secrets** must remain set in Replit Secrets (already set from prior dispatch).
+
+- **Cache TTLs:** 7 days on DataForSEO endpoints (already set). 24 hours on citation URL verification fetches. Asset queries (testimonials, link targets) are not cached — they read fresh from DB per generation.
+
+- **Outstanding from prior dispatches that don't block this one but are still worth attention:** Supabase token rotation + history purge, Clerk/Supabase dead-weight cleanup, schema drift cleanup (`user_roles`, `page_events`, `playbook_sections`), validation/task-routing investigation.
+
+---
+
+**Critical: deliver the dispatch sequentially. Phase 0 reports before Phase 1 begins. Phase 1 completes with migration SQL reviewed before Phase 2 begins. Phase 7 regression on both projects is not optional — all 24 checks on each blog or the dispatch is not complete.**
