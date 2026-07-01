@@ -7,7 +7,7 @@
  * running) drains the `scoring` queue and writes the rows.
  *
  * Idempotency: every per-day job uses
- * `recovery-snapshot:<brandId>:<YYYY-MM-DD>` as `idempotencyKey`, so
+ * `recovery-snapshot:<brandId>-<YYYY-MM-DD>` as `idempotencyKey`, so
  *
  *   - BullMQ dedupes within the redis attempt-window
  *     (`enqueue` derives `jobId` from the key).
@@ -191,7 +191,7 @@ async function main(): Promise<void> {
         enqueue("scoring.recovery-snapshot", {
           brandId: p.brandId,
           snapshotDate: d,
-          idempotencyKey: `recovery-snapshot:${p.brandId}:${d}`,
+          idempotencyKey: `recovery-snapshot:${p.brandId}-${d}`,
         }),
       );
     }

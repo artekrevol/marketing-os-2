@@ -156,7 +156,7 @@ router.post("/research-generate", requireAuth, requireProjectAccess, async (req,
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
     await getQueue("ai").add("ai.research-generate", {
-      idempotencyKey: `research-generate:${project_id}:${Date.now()}`,
+      idempotencyKey: `research-generate:${project_id}-${Date.now()}`,
       project_id,
     });
 
@@ -181,7 +181,7 @@ router.post("/research-retry-card", requireAuth, requireProjectAccess, async (re
     }
 
     await getQueue("ai").add("ai.research-retry-card", {
-      idempotencyKey: `research-retry-card:${project_id}:${stage}:${Date.now()}`,
+      idempotencyKey: `research-retry-card:${project_id}-${stage}-${Date.now()}`,
       project_id,
       stage: stage as StageKey,
     });

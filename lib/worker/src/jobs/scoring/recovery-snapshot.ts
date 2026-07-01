@@ -164,7 +164,7 @@ function isoDateUtc(d: Date): string {
  * `scoring.recovery-snapshot` job for yesterday's date.
  *
  * Idempotency: the per-brand job's `idempotencyKey` is
- * `recovery-snapshot:<brandId>:<date>`, so re-firing the cron the same
+ * `recovery-snapshot:<brandId>-<date>`, so re-firing the cron the same
  * minute (or a backfill landing on the same date) is a no-op via
  * BullMQ's `jobId` dedup AND the per-row unique `(brand_id,
  * snapshot_date)` check inside the handler.
@@ -200,7 +200,7 @@ export async function handleRecoverySnapshotNightly(
     await enqueue("scoring.recovery-snapshot", {
       brandId,
       snapshotDate,
-      idempotencyKey: `recovery-snapshot:${brandId}:${snapshotDate}`,
+      idempotencyKey: `recovery-snapshot:${brandId}-${snapshotDate}`,
     });
     enqueued += 1;
   }

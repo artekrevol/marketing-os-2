@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import { buildJobId } from "@workspace/jobs";
 
 const BRAND_ID = "2d10bb54-ba9a-4444-8a18-a262bca9b2bc";
+const PROJECT_ID = "8f14e45f-ceea-4670-8a1b-2d10bb54ba9a";
 const TS = 1782177522145;
 
 describe("buildJobId — BullMQ custom-id constraint", () => {
@@ -23,6 +24,12 @@ describe("buildJobId — BullMQ custom-id constraint", () => {
         "seo.competitor-insights.compute",
         `seo-competitor-insights:${BRAND_ID}-${TS}`,
       ],
+      ["ai.research-generate", `research-generate:${PROJECT_ID}-${TS}`],
+      [
+        "ai.research-retry-card",
+        `research-retry-card:${PROJECT_ID}-outline-${TS}`,
+      ],
+      ["scoring.recovery-snapshot", `recovery-snapshot:${BRAND_ID}-2026-06-30`],
     ];
     for (const [name, key] of cases) {
       const jobId = buildJobId(name, key);
@@ -37,6 +44,20 @@ describe("buildJobId — BullMQ custom-id constraint", () => {
         `seo-competitor-discover:${BRAND_ID}:${TS}`,
       ),
     ).toThrow(/exactly one ":"/);
+  });
+
+  it("rejects the old multi-colon AI-research and recovery-snapshot shapes", () => {
+    const oldShapes: Array<[string, string]> = [
+      ["ai.research-generate", `research-generate:${PROJECT_ID}:${TS}`],
+      [
+        "ai.research-retry-card",
+        `research-retry-card:${PROJECT_ID}:outline:${TS}`,
+      ],
+      ["scoring.recovery-snapshot", `recovery-snapshot:${BRAND_ID}:2026-06-30`],
+    ];
+    for (const [name, key] of oldShapes) {
+      expect(() => buildJobId(name, key)).toThrow(/exactly one ":"/);
+    }
   });
 
   it("rejects a colon-free key (yields a 2-part id BullMQ also refuses)", () => {
