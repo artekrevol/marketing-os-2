@@ -1,2 +1,3 @@
 - [Citation whitelist vs validators](citation-whitelist-vs-validators.md) — draft-route enforceCitationWhitelist strips any citation host not in whitelist.hosts BEFORE validators run; add new authority/link hosts there or they vanish silently.
+- [GitHub remote](github-remote.md) — push destination is artekrevol/marketing-os-2 (marketing-os is 404); a 403 on push usually means wrong repo name, not perms.
 - [Asset-candidate injection](asset-candidate-injection.md) — injected candidate blocks feed CACHED prompts: need DB id-tiebreak + caller id-sort for byte-identical output; matrix #19 N/A-when-lsi_retrieved-empty mirrors checks 6–9.
