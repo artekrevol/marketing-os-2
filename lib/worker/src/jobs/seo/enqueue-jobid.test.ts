@@ -13,6 +13,7 @@ import { buildJobId } from "@workspace/jobs";
 
 const BRAND_ID = "2d10bb54-ba9a-4444-8a18-a262bca9b2bc";
 const PROJECT_ID = "8f14e45f-ceea-4670-8a1b-2d10bb54ba9a";
+const QA_RUN_ID = "6a1b2d10-bb54-4a9a-8f14-e45fceea4670";
 const TS = 1782177522145;
 
 describe("buildJobId — BullMQ custom-id constraint", () => {
@@ -30,6 +31,7 @@ describe("buildJobId — BullMQ custom-id constraint", () => {
         `research-retry-card:${PROJECT_ID}-outline-${TS}`,
       ],
       ["scoring.recovery-snapshot", `recovery-snapshot:${BRAND_ID}-2026-06-30`],
+      ["content.qa-run-checks", `qa:${QA_RUN_ID}`],
     ];
     for (const [name, key] of cases) {
       const jobId = buildJobId(name, key);
@@ -62,6 +64,12 @@ describe("buildJobId — BullMQ custom-id constraint", () => {
 
   it("rejects a colon-free key (yields a 2-part id BullMQ also refuses)", () => {
     expect(() => buildJobId("maintenance.cleanup", "no-colons-here")).toThrow(
+      /exactly one ":"/,
+    );
+  });
+
+  it("rejects the old bare-UUID quality-gate submit key (zero colons)", () => {
+    expect(() => buildJobId("content.qa-run-checks", QA_RUN_ID)).toThrow(
       /exactly one ":"/,
     );
   });

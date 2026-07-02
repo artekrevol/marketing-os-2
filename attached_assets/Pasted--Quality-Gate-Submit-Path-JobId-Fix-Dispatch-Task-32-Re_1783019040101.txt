@@ -1,0 +1,106 @@
+# Quality-Gate Submit-Path JobId Fix Dispatch (Task #32)
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Objective:** Fix the zero-colon BullMQ jobId issue in the quality-gate submit-path surfaced during Task #28. Same class of hygiene fix as #28, different subsystem, tighter scope.
+**Dispatch type:** Single sequential change. Small, focused, single-purpose.
+
+---
+
+## Context
+
+Task #28 fixed multi-colon jobId violators in AI research and recovery snapshot jobs. During that investigation, a related zero-colon violator was surfaced in the quality-gate submit path:
+
+`content.qa-run-checks` jobs enqueued from `lib/services/quality-gate/src/actions.ts` use `idempotencyKey: qaRunId` where `qaRunId` is a colon-free UUID. The resolved jobId is `content.qa-run-checks:<uuid>` = 2 parts. The `buildJobId` guard requires exactly 3 parts (exactly one colon in the idempotencyKey).
+
+This path fires on every draft submission for review. Higher blast radius than the #28 fixes because it's on a hot code path — Cut B and Blog #1 regeneration will exercise this path repeatedly.
+
+---
+
+## Startup check (before any code)
+
+Before beginning, run `ls -la .local/tasks/*.md 2>/dev/null` and report the results. Confirm no stale task files from cancelled or completed work are present. If any are, archive them to `.local/tasks/archive/` before proceeding. This prevents mis-targeted validation gates from firing on unrelated objectives.
+
+---
+
+## Scope
+
+### 1. Two call sites in `lib/services/quality-gate/src/actions.ts`
+
+- Line 156: `submitForReview` function — enqueue of `content.qa-run-checks`
+- Line 476: `runChecks` function — enqueue of `content.qa-run-checks`
+
+### 2. The fix
+
+Prefix a constant segment so the resolved jobId lands at exactly 3 parts:
+
+```typescript
+// Before
+idempotencyKey: qaRunId  // resolves to "content.qa-run-checks:<uuid>" = 2 parts
+
+// After
+idempotencyKey: `qa:${qaRunId}`  // resolves to "content.qa-run-checks:qa:<uuid>" = 3 parts
+```
+
+Apply identically at both call sites. Both must use the same prefix pattern.
+
+### 3. The stored `qa_runs.id` in the database is NOT touched
+
+Only the BullMQ jobId string changes. Database rows, foreign key relationships, and any code reading `qaRunId` from the DB stay exactly as they are. This is a jobId-hygiene fix only — no data model changes.
+
+### 4. Extend the existing regression test
+
+The `buildJobId` test in `lib/worker/jobs/seo/enqueue-jobid.test.ts` (or wherever the equivalent test lives per Task #28's additions) needs a new accept case:
+
+- Accept: `qa:<uuid>` → resolves to 3 parts
+- Reject: bare `<uuid>` → resolves to 2 parts (was the old shape)
+
+### 5. Typecheck across affected packages
+
+`pnpm run typecheck:libs` and any package that depends on the quality-gate service must pass clean.
+
+### 6. Restart the worker and confirm clean boot
+
+Same clean-boot verification as Task #28: worker status RUNNING, no error/throw/enqueue lines in the log, no crash loop.
+
+---
+
+## Blast-radius pause
+
+**Pause after the fix is in but BEFORE restarting the worker.** This path fires on every draft submission for review. The regression risk is higher than #28's paths (which fire on scheduled jobs and AI research). I want to see the diff before the worker picks it up.
+
+Second pause after the worker restart with logs, before declaring complete.
+
+---
+
+## Do NOT
+
+- Refactor unrelated code in the touched files. `actions.ts` has other functions — leave them.
+- Change quality-gate handler logic or semantics. The handler runs identically; only the jobId string it's enqueued under changes.
+- Modify the `buildJobId` guard itself. It's working correctly.
+- Bundle in any other adjacent hygiene work. If you spot another finding while working, capture it as a follow-up task with self-contained description — same discipline as #28.
+
+---
+
+## Operational rules
+
+Same as prior hygiene dispatches:
+
+- Scoped transactional changes only
+- `git show --stat HEAD` before declaring complete
+- Treat architect feedback as authoritative
+- No scope creep beyond the two named call sites and the regression test
+
+---
+
+## Acceptance
+
+1. Both call sites in `actions.ts` use `qa:${qaRunId}` pattern
+2. `buildJobId` regression test extended with accept and reject cases for the pattern
+3. `pnpm run typecheck:libs` and api-server typecheck pass clean
+4. Worker restarts with a clean boot after fix applied
+5. Architect review PASS on the diff
+6. `git show --stat HEAD` reflects: 2 files changed in `lib/services/quality-gate/` and 1 file changed in the test suite (approximately +6/-2)
+
+---
+
+**Begin with the startup check for stale task files. Then apply the two fixes. Pause before worker restart. Pause after clean boot. Complete after architect PASS.**

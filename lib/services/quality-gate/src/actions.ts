@@ -150,16 +150,19 @@ export async function submitForReview(
     return runId;
   });
 
-  // Enqueue outside the transaction. BullMQ jobId == qa_run.id makes
-  // a double-press idempotent at the queue layer too.
+  // Enqueue outside the transaction. The key is `qa:${qaRunId}` — the
+  // `qa:` prefix gives the key its required single colon (buildJobId
+  // needs exactly one) while qa_run.id still makes a double-press
+  // idempotent at the queue layer too.
+  const idempotencyKey = `qa:${qaRunId}`;
   await enqueue("content.qa-run-checks", {
-    idempotencyKey: qaRunId,
+    idempotencyKey,
     brandId: input.brandId,
     qaRunId,
     contentObjectId: input.contentObjectId,
   });
 
-  return { contentObjectId: input.contentObjectId, qaRunId, idempotencyKey: qaRunId };
+  return { contentObjectId: input.contentObjectId, qaRunId, idempotencyKey };
 }
 
 /**
@@ -473,7 +476,8 @@ export interface RunChecksResult {
 }
 export async function runChecks(input: RunChecksInput): Promise<RunChecksResult> {
   await enqueue("content.qa-run-checks", {
-    idempotencyKey: input.qaRunId,
+    // `qa:` prefix — buildJobId requires exactly one colon in the key.
+    idempotencyKey: `qa:${input.qaRunId}`,
     brandId: input.brandId,
     contentObjectId: input.contentObjectId,
     qaRunId: input.qaRunId,
