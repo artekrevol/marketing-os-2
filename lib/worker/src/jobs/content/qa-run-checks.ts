@@ -122,7 +122,8 @@ const RUNNERS: Record<CheckName, CheckRunner> = {
 
 /**
  * Quality-gate worker. Per qa_run:
- *   1. Idempotency guard (qa_run.id is the key).
+ *   1. Idempotency guard (`qa:${qa_run.id}` is the key — the `qa:`
+ *      prefix satisfies buildJobId's exactly-one-colon rule).
  *   2. Mark qa_runs.status='running'.
  *   3. Load content_object + per-brand check definitions.
  *   4. Execute every enabled runner in PARALLEL via Promise.allSettled
