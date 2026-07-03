@@ -11,6 +11,7 @@ import {
   ALWAYS_INCLUDE,
   runAllValidators,
   getPlaybookProjectNames,
+  getCredentialBlock,
   computeLsiCoverage,
   AUTHORITY_WHITELIST,
   type StageKey,
@@ -196,6 +197,71 @@ router.post("/research-retry-card", requireAuth, requireProjectAccess, async (re
 /* ─────────────────────────────────────────────────────────────
  * POST /api/ai/outline-generate
  * ───────────────────────────────────────────────────────────── */
+/**
+ * Cut B Fix 5 — infer the checklist content type from the primary keyword
+ * (falling back to the project's contentType). Mirrors the validator's
+ * checklistKind() inference order (cost → comparison → how-to), plus the
+ * stats type from the dispatch.
+ */
+function inferChecklistContentType(contentType: string | null | undefined, keyword: string | null | undefined): string {
+  const t = `${contentType || ""} ${keyword}`.toLowerCase();
+  if (/cost|price|pricing|how much/.test(t)) return "cost guide";
+  if (/compar|vs\b|versus|alternative/.test(t)) return "comparison guide";
+  if (/how to|how-to|guide|tutorial|step/.test(t)) return "how-to guide";
+  if (/statistic|trends|\bdata\b/.test(t)) return "stats article";
+  return contentType || "article";
+}
+
+/** Cut B Fix 5 — content-type-aware topic checklist injected at outline stage. */
+function buildTopicChecklistBlock(contentType: string | null | undefined, keyword: string | null | undefined): string {
+  const inferred = inferChecklistContentType(contentType, keyword);
+  return `TOPIC COVERAGE CHECKLIST — this is a ${inferred} article. The outline MUST include sections covering every required sub-topic for its type:
+- Cost guide: cost ranges, cost drivers, regional variation, team model, maintenance %, timeline, EXCLUSIONS (what the price does NOT include)
+- Comparison guide: feature comparison, cost comparison, use-case fit, migration cost, recommendation
+- How-to guide: prerequisites, numbered steps, common pitfalls, tools, expected outcome
+- Stats article: hero stat, methodology, breakdown by segment, YoY comparison, source citations
+
+Any missing required sub-topic will fail matrix check #20 and block ship. Verify your outline covers every item before returning.
+
+LITERAL TERM RULE (cost guide only): the published article is scanned for the literal terms "cost range", "regional", "team model", and "exclusions". Ensure at least one section HEADING contains the phrase "Cost Range" or "Cost Ranges" (e.g. "Mobile App Cost Ranges by Complexity"), at least one contains the word "Regional" (e.g. "Regional Cost Differences..."), at least one contains the phrase "Team Model" (e.g. "Team Models: In-House vs Outsourced vs Hybrid"), and at least one contains the word "Exclusions" (e.g. "Pricing Exclusions: What Your Quote Does NOT Include"). Do not rely on synonyms like "cost breakdown", "by location", "team location", or "hidden costs" alone.`;
+}
+
+/**
+ * Cut B Fix 7 — detect phrases of `minWords`+ words that repeat verbatim
+ * across H2 sections of the assembled article (normalization mirrors the
+ * repetition validator: strip markdown links, lowercase, alphanumerics only).
+ */
+function findCrossSectionRepetitions(md: string, minWords = 8, maxPhrases = 20): string[] {
+  /* Mirrors the validator's splitSectionsByH2: the intro (everything before
+   * the first H2, including the H1 line) counts as its own section. */
+  const parts = md.split(/^## /m);
+  const bodies = parts.map((p, i) => (i === 0 ? p : p.split("\n").slice(1).join(" ")));
+  const phraseToSections = new Map<string, Set<number>>();
+  bodies.forEach((body, idx) => {
+    const words = body
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+    for (let i = 0; i + minWords <= words.length; i++) {
+      const gram = words.slice(i, i + minWords).join(" ");
+      const set = phraseToSections.get(gram) || new Set<number>();
+      set.add(idx);
+      phraseToSections.set(gram, set);
+    }
+  });
+  const repeated = [...phraseToSections.entries()].filter(([, s]) => s.size >= 2).map(([g]) => g);
+  // Collapse overlapping n-grams: drop a gram if it shares 7 words with the previously kept one.
+  const collapsed: string[] = [];
+  for (const g of repeated) {
+    const prev = collapsed[collapsed.length - 1];
+    if (prev && prev.split(" ").slice(1).join(" ") === g.split(" ").slice(0, minWords - 1).join(" ")) continue;
+    collapsed.push(g);
+  }
+  return collapsed.slice(0, maxPhrases);
+}
+
 const OUTLINE_TOOL = {
   name: "submit_outline",
   input_schema: {
@@ -299,7 +365,11 @@ Produce 6-9 sections. Each section gets:
 - ai_citation_likelihood: high/medium/low
 - schema_markup_types: JSON-LD types this section supports (FAQPage for Q&A blocks, HowTo for stepwise content, etc.)
 
-Cover EVERY atomic question with liftable_paragraph=true at least once. Distribute entities and citations so the article hits the entity_data_requirements minimums. Also produce H1, meta description (<160 chars), tone reminder, and CTA placement notes.
+KEYWORD PLACEMENT RULE — NON-NEGOTIABLE: Section s1's H2 heading MUST contain the primary keyword "${project.keyword}" EXACTLY, verbatim, as a contiguous phrase (capitalization may differ; wording may not). Example of a valid s1 heading: "${String(project.keyword || "").replace(/\b\w/g, (c) => c.toUpperCase())}? The Quick Answer". A paraphrase or close variant does NOT count and will block ship. Every other H2 should vary naturally — do not stuff.
+
+${buildTopicChecklistBlock(project.contentType, project.keyword)}
+
+Cover EVERY atomic question with liftable_paragraph=true at least once. Distribute entities and citations so the article hits the entity_data_requirements minimums. Also produce H1, meta description (BETWEEN 150 AND 155 characters — count them; include the primary keyword), tone reminder, and CTA placement notes.
 
 ${outlineAssetBlock}
 
@@ -552,7 +622,7 @@ async function buildAssetCandidates(opts: {
   costBucket?: string;
   cluster?: string;
   funnelStage?: string;
-}): Promise<{ block: string; linkHosts: string[] }> {
+}): Promise<{ block: string; linkHosts: string[]; linkTargetList: Array<{ url: string; anchors: string[] }> }> {
   const { brandId, icp, vertical, costBucket, cluster, funnelStage } = opts;
   const fs = funnelStage
     ? (funnelStage.toUpperCase() as "TOFU" | "MOFU" | "BOFU")
@@ -606,7 +676,7 @@ async function buildAssetCandidates(opts: {
 TESTIMONIALS (select at least 1 relevant one; use the EXACT reviewer name, company, and quote excerpt):
 ${tLines}
 
-INTERNAL LINK TARGETS (select 3–5 relevant URLs; use ONLY these URLs with one of the listed anchor variations):
+INTERNAL LINK TARGETS (select exactly 5 relevant URLs — or ALL listed if fewer than 5 exist; use ONLY these URLs with one of the listed anchor variations; NEVER use a URL from memory of the company's site):
 ${lLines}
 
 AUTHORITY CITATION DOMAINS (≥2 external authority citations required; cite ONLY from these domains or any .gov / .edu host):
@@ -618,7 +688,13 @@ NON-NEGOTIABLE:
 - External authority citations MUST come from the AUTHORITY CITATION DOMAINS above.
 === END ASSET CANDIDATES ===`;
 
-  return { block, linkHosts };
+  const linkTargetList = linkTargets.map((l) => ({
+    url: l.url,
+    anchors: Array.isArray(l.anchorVariations)
+      ? (l.anchorVariations as unknown[]).filter((x): x is string => typeof x === "string")
+      : [],
+  }));
+  return { block, linkHosts, linkTargetList };
 }
 
 router.post("/draft-section", requireAuth, requireProjectAccess, async (req, res) => {
@@ -692,11 +768,29 @@ VERIFIED CITATION WHITELIST (the ONLY URLs you may cite inline):
 ${whitelistBlock}
 
 CITATION RULES — non-negotiable:
-- Inline citations MUST use the form [Publisher Name](https://real-url) where the URL is on the whitelist above (matching by host is OK, so deep links into a whitelisted domain are allowed).
-- NEVER invent, guess, or hallucinate URLs. If a claim has no whitelisted source, write the claim WITHOUT a citation rather than inventing one.
+- Inline citations MUST use the form [Publisher Name](https://real-url) where the URL is copied CHARACTER-FOR-CHARACTER from the whitelist above. NEVER construct, extend, or guess a URL — do not invent paths like "/statistics/1234..." on a whitelisted domain; a fabricated URL fails live verification and blocks ship.
+- If a claim has no whitelisted source URL, state the point qualitatively WITHOUT a number and WITHOUT a citation rather than inventing either.
 - Do not cite Wikipedia or AI-generated content even if it appears in the whitelist.
 
 Banned phrases (do not use): "in today's fast-paced world", "in conclusion", "leverage", "synergy", "delve", "navigate the landscape", "game-changer", "unlock the power".
+
+HEADING RULE — exactly one H1, no repeated section heading:
+The article has EXACTLY ONE H1 — the title provided in the intake (shown above). Never emit H1 ("# ") tags inside section content. Do NOT include the section's own heading in your content — the stitch step inserts it automatically; starting your content with the section heading creates a duplicate H2 and blocks ship. Start your content directly with prose. Any sub-headings inside your section must be H3 ("### ").
+
+KEYWORD EXCLUSIVITY RULE:
+The exact primary keyword phrase may appear verbatim ONLY in the article's H1 title, the opening paragraph (first 100 words), and "## " H2 headings. It must NEVER appear verbatim in any section's body paragraphs — not even Section 1's. In all body text (including the closing section and FAQ answers), use natural variations — never the full exact phrase. Verbatim repetition of the keyword phrase across sections is flagged as cross-section repetition and blocks ship.
+
+STATISTIC DENSITY RULE (validator-enforced, blocking):
+At most ONE digit-based figure per paragraph AND per list item. A digit-based figure is: any dollar amount ("$45,000"), any percentage ("30%"), or any bare number of 100 or more ("1,200"). A range written with two digit figures ("$15,000–$50,000", "150–300%") counts as TWO and fails. To express a range: give ONE bound in digits and the other in words ("from $15,000 up to fifty thousand dollars"), or use a single anchor ("around $30,000", "under 25%"), or split the bounds across separate paragraphs / separate list items with a BLANK LINE between them. Small two-digit numbers ("15", "40 hours") and bare years ("2026") do not count.
+Prose narrative should carry the paragraph. A statistic is punctuation, not the sentence.
+
+BRAND VOICE — TekRevol identity:
+This article is written from TekRevol's perspective. You may use "we," "our team," "our clients" — but EVERY occurrence of the words "we", "our", or "TekRevol" counts as a brand mention against the funnel-stage cap:
+- TOFU: max 1 brand mention per 12 sentences
+- MOFU: max 1 brand mention per 8 sentences
+- BOFU: max 1 brand mention per 5 sentences
+This article's funnel stage: ${project.funnelStage || "unknown"}.
+HARD BUDGET for this section: at most TWO sentences that use "we"/"our"/"TekRevol" — write everything else in third person or passive-free neutral voice. Exceeding the cap blocks ship. But do not go to zero: at least one brand mention somewhere in the article is required, so if this section is the natural place for a client story or CTA, spend the budget here.
 
 ${draftAssetBlock}
 === END PROJECT CONTEXT ===`;
@@ -724,7 +818,15 @@ REVISION RULES:
 5. Preserve the section's heading, target word count (±20%), and any inline citations that are still relevant.
 6. Return the FULL revised section content via submit_draft (not a diff).`
       : `You are drafting Section ${sectionIndex} of ${totalSections} ("${section.heading}"). ${section.word_count}-word target. Job: ${section.job}.
-
+${sectionIndex === 1
+  ? `
+OPENING KEYWORD RULE: The first 100 words of this section MUST contain the primary keyword: "${project.keyword}". Follow the direct-answer rule: the primary keyword appears in the first sentence, followed by a two-to-three-sentence direct answer.
+`
+  : sectionIndex === totalSections
+    ? `
+CLOSING SECTION RULE: This is the final (closing) section. Reference the topic using a close VARIANT of the primary keyword — do NOT repeat the exact phrase "${project.keyword}" verbatim (that verbatim phrase belongs to Section 1 only; repeating it across sections blocks ship).
+`
+    : ""}
 === AI CITATION REQUIREMENTS FOR THIS SECTION ===
 
 Atomic questions this section MUST answer as standalone, liftable paragraphs (each paragraph reads correctly out of context, completely answers one question):
@@ -743,6 +845,10 @@ RULES:
 2. Include EVERY required named entity by name (not generic placeholders).
 3. Inline-cite every required authority source with a real URL.
 4. If a schema_markup_type is FAQPage, format the relevant Q&A as a clear question heading + answer paragraph and emit the JSON-LD in schema_markup_recommendations. If HowTo, emit ordered steps + JSON-LD.
+5. HARD LIMIT — at most ONE numeric value per paragraph AND per list item. Numeric values are: dollar figures, percentages, and any number of 100 or more. A range like "$15,000 to $50,000" counts as TWO numeric values — give a single representative figure instead ("around $30,000") or split the endpoints across separate list items with a BLANK LINE between each item. Before returning, re-read every paragraph and bullet: if it carries more than one numeric value, cut or relocate. This is a blocking ship gate.
+6. Any list of 3 or more parallel items (features, cost factors, steps, options) MUST be formatted as a markdown bullet or numbered list — never as a comma-separated run-on sentence. Leave a blank line between list items that contain numbers.
+7. Never introduce a statistic from memory. Every statistic you state MUST carry an inline [Publisher](url) citation whose URL is copied EXACTLY from the whitelist or starred proof points — never a bare domain like "https://clutch.co" and never a constructed/invented path. If a number has no such source, CUT the number and make the point qualitatively. NEVER attribute a number to "industry standard", "internal data", "internal TekRevol project data", or an unnamed analysis — those are automatically stripped and block ship. Spelling a number out in words does not exempt it from needing a verifiable source.
+8. Internal links: only ever link to URLs that appear VERBATIM in the INTERNAL LINK TARGETS list in the project context. The anchor text MUST be copied WORD-FOR-WORD from one of the listed anchor variations for that URL — never paraphrase, shorten, or reword an anchor. Never link to a company-site URL from memory, and never link the same target URL twice in one section.
 
 Produce real prose. Do not produce a brief. Then call submit_draft with:
 - content: the full prose for this section, with inline [Publisher](url) citations
@@ -1249,8 +1355,271 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
       .map((id: string) => drafts.find((d) => d.sectionId === id))
       .filter(Boolean) as typeof drafts;
 
+    /* Cut B safety net: drafts must not repeat their own section heading —
+     * if a draft's content starts with a heading line matching its section
+     * heading (any level), strip it so the stitched article has one H2 per
+     * section. */
+    const normHeading = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     let stitched = `# ${(outline as any).h1}\n\n`;
-    for (const d of ordered) stitched += `## ${d.sectionHeading}\n\n${d.content}\n\n`;
+    for (const d of ordered) {
+      let content = String(d.content || "").trimStart();
+      const m = content.match(/^(#{1,3})\s+(.+)\n?/);
+      if (m && normHeading(m[2]!) === normHeading(String(d.sectionHeading || ""))) {
+        content = content.slice(m[0].length).trimStart();
+      }
+      stitched += `## ${d.sectionHeading}\n\n${content}\n\n`;
+    }
+
+    /* Cut B Fix 1 safety net: EXACTLY one H1 in the assembled article.
+     * The prompt instruction is the primary fix; if section content still
+     * emitted H1s, demote every H1 beyond the first to H2 and warn. */
+    {
+      const lines = stitched.split("\n");
+      let seenH1 = false;
+      let demoted = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (/^#\s/.test(lines[i]!)) {
+          if (seenH1) {
+            lines[i] = `#${lines[i]!}`;
+            demoted++;
+          } else {
+            seenH1 = true;
+          }
+        }
+      }
+      if (demoted > 0) {
+        stitched = lines.join("\n");
+        req.log.warn({ demoted }, "final-stitch: demoted extra H1 heading(s) to H2");
+      }
+    }
+
+    /* Cut B Fix 7: cross-section repetition scan + rewrite pass.
+     * Detect verbatim 8+ word phrases repeating across sections; if found,
+     * run a revision call that rewrites the later occurrence(s) while
+     * preserving meaning, then RE-SCAN and repeat up to 3 passes (a single
+     * pass routinely leaves or reintroduces repeats).
+     * Non-fatal: on any failure, keep the current text. */
+    const countDensityOffenders = (md: string): number => {
+      const text = md
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/^#{1,6}\s+/gm, "")
+        .replace(/[*_`>|]/g, "");
+      let offenders = 0;
+      for (const para of text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)) {
+        const stats = (para.match(/\$\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s?%|\b\d[\d,]{2,}\b/g) || [])
+          .filter((t: string) => !/^\d{4}$/.test(t.replace(/[^\d]/g, "")));
+        if (stats.length > 1) offenders++;
+      }
+      return offenders;
+    };
+    for (let rwPass = 1; rwPass <= 3; rwPass++) {
+      const repeatedPhrases = findCrossSectionRepetitions(stitched);
+      const densityOffenders = countDensityOffenders(stitched);
+      if (repeatedPhrases.length === 0 && densityOffenders === 0) break;
+      try {
+        const tRw = Date.now();
+        const rwMetaUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: `repetition-rewrite-${rwPass}`, writer_id: (project as any).writerId });
+        const rwSystem = `You are revising an assembled article before finalizing. The listed phrases of 8 or more words repeat verbatim across sections. For EACH listed phrase, keep the FIRST occurrence and rewrite every later occurrence with genuinely different wording while preserving the meaning — reordering two words is not enough; the rewritten passage must share no 8-word run with the original. KEYWORD PLACEMENT (do not break it): the primary keyword "${(project as any).keyword || ""}" MUST remain verbatim in the H1 and in the first 100 words of the body — NEVER reword the opening paragraph's keyword occurrence. After the first "## " heading, replace verbatim keyword occurrences in paragraph text and "### " subheadings with a natural variation. NUMERIC DENSITY: every paragraph may carry at most ONE numeric value (dollar figure, percentage, or number of 100+, excluding bare years) — if a paragraph has more, keep the most important one WITH its citation and move each extra number (with its own citation) to its own list item separated by blank lines, or cut the extra number entirely. NEVER convert a cited number into spelled-out words and NEVER drop, shorten, or alter any [Publisher](url) citation or its URL — every markdown link URL in the original must appear unchanged in your output. Do not delete content — rewrite. Do not change H1 ("# ") or H2 ("## ") headings or quotes. H3 ("### ") question-style subheadings (e.g. FAQ questions) MAY be reworded when they contain a repeated phrase or the verbatim keyword. Return ONLY the full revised article in Markdown, with no preamble or commentary.`;
+        const rwUser = `Repeated phrases detected (normalized to lowercase words):\n${repeatedPhrases.length ? repeatedPhrases.map((p) => `- "${p}"`).join("\n") : "(none — this pass is for the numeric-density rule only)"}\n\nParagraphs carrying more than one numeric value: ${densityOffenders}\n\nARTICLE (Markdown):\n${stitched}`;
+        const rwData = await callAnthropicRaw({
+          model: SONNET,
+          max_tokens: 16000,
+          metadata: { user_id: rwMetaUserId },
+          system: rwSystem,
+          messages: [{ role: "user", content: rwUser }],
+        });
+        await logUsage({ project_id, stage: "final-stitch", sub_stage: `repetition-rewrite-${rwPass}`, model: SONNET, metadata_user_id: rwMetaUserId, usage: rwData.usage, duration_ms: Date.now() - tRw, ok: true });
+        const rwText = (rwData.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+        const countH2 = (s: string) => (s.match(/^## /gm) || []).length;
+        /* Invariant guards: the rewrite must not break keyword placement or
+         * alter/drop any markdown link URL — reject the pass otherwise. */
+        const kwNorm = String((project as any).keyword || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+        const normText = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ");
+        const first100 = (md: string) => {
+          const body = md.replace(/^#\s.*$/m, "");
+          return normText(body.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^#{2,6}\s+/gm, "")).split(" ").filter(Boolean).slice(0, 100).join(" ");
+        };
+        const kwInFirst100 = (md: string) => !kwNorm || first100(md).includes(kwNorm);
+        const kwInH2 = (md: string) => !kwNorm || (md.match(/^##\s+.*$/gm) || []).some((h) => normText(h).includes(kwNorm));
+        const linkUrlSet = (md: string) =>
+          new Set(
+            (md.match(/\]\(([^)]+)\)/g) || []).map((m) =>
+              m.slice(2, -1).trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, ""),
+            ),
+          );
+        const origUrls = linkUrlSet(stitched);
+        const newUrls = linkUrlSet(rwText);
+        const invented = [...newUrls].filter((u) => !origUrls.has(u));
+        const dropped = [...origUrls].filter((u) => !newUrls.has(u));
+        const urlsOk = invented.length === 0 && dropped.length <= 2;
+        const kw100Ok = kwInFirst100(rwText) || !kwInFirst100(stitched);
+        const kwH2Ok = kwInH2(rwText) || !kwInH2(stitched);
+        const invariantsOk = kw100Ok && kwH2Ok && urlsOk;
+        if (!invariantsOk) {
+          req.log.warn({ pass: rwPass, kw100Ok, kwH2Ok, invented, dropped }, "final-stitch: repetition rewrite violated invariants; keeping original");
+          continue;
+        }
+        const rwReps = findCrossSectionRepetitions(rwText).length;
+        const rwDensity = countDensityOffenders(rwText);
+        const improves =
+          (repeatedPhrases.length === 0 || rwReps < repeatedPhrases.length) &&
+          rwDensity <= Math.max(densityOffenders, 0) &&
+          rwReps <= repeatedPhrases.length;
+        if (!improves) {
+          req.log.warn({ pass: rwPass, rwReps, wasReps: repeatedPhrases.length, rwDensity, wasDensity: densityOffenders }, "final-stitch: repetition rewrite did not improve counters; keeping original");
+          continue;
+        }
+        if (
+          rwText.length >= stitched.length * 0.7 &&
+          rwText.length <= stitched.length * 1.4 &&
+          (rwText.match(/^#\s/gm) || []).length === 1 &&
+          countH2(rwText) === countH2(stitched)
+        ) {
+          stitched = rwText;
+          req.log.info({ pass: rwPass, phrases: repeatedPhrases.length }, "final-stitch: repetition rewrite applied");
+          /* Provenance: one row per rewritten phrase (audit trail for Fix 7). */
+          try {
+            await db.insert(moduleDataProvenanceTable).values(
+              repeatedPhrases.map((phrase) => ({
+                brandId: project.brandId,
+                entityType: "draft_score",
+                entityId: project_id,
+                sourceModule: "content-forge",
+                generationMethod: "repetition-rewrite",
+                metadata: { phrase, pass: rwPass, action: "rewrote-subsequent-occurrence" },
+              })),
+            );
+          } catch (e) {
+            req.log.warn({ err: e }, "final-stitch: repetition-rewrite provenance insert failed (non-fatal)");
+          }
+        } else {
+          req.log.warn({ pass: rwPass, gotChars: rwText.length, wantAtLeast: Math.round(stitched.length * 0.7) }, "final-stitch: repetition rewrite failed sanity check; keeping original");
+          break;
+        }
+      } catch (e) {
+        req.log.warn({ err: e }, "final-stitch: repetition rewrite failed (non-fatal)");
+        break;
+      }
+    }
+
+    /* Surgical net for matrix #22 (cross-section repetition) and #21 (stat
+     * density): micro-rewrite ONLY the offending paragraphs, splice each
+     * replacement back deterministically, and validate every splice against
+     * the mirrored validator counters before accepting it. */
+    try {
+      const normWords = (s: string) =>
+        s.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+      const paraLinkSet = (s: string) => new Set((s.match(/\]\(([^)]+)\)/g) || []).map((m) => m.slice(2, -1).trim()));
+      const paraStatCount = (s: string) => {
+        const text = s.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_`>|]/g, "");
+        return (text.match(/\$\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s?%|\b\d[\d,]{2,}\b/g) || [])
+          .filter((t: string) => !/^\d{4}$/.test(t.replace(/[^\d]/g, ""))).length;
+      };
+      type MicroFix = { para: string; instructions: string; requireSameLinks: boolean; check: (out: string) => boolean };
+      const microFixes: MicroFix[] = [];
+
+      const remaining = findCrossSectionRepetitions(stitched);
+      if (remaining.length) {
+        const parts = stitched.split(/^## /m);
+        const bodyOf = (part: string, idx: number) => (idx === 0 ? part : part.split("\n").slice(1).join("\n"));
+        const firstIdx = new Map<string, number>();
+        parts.forEach((part, idx) => {
+          const norm = normWords(bodyOf(part, idx));
+          for (const ph of remaining) if (!firstIdx.has(ph) && norm.includes(ph)) firstIdx.set(ph, idx);
+        });
+        const seen = new Set<string>();
+        parts.forEach((part, idx) => {
+          for (const para of bodyOf(part, idx).split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)) {
+            if (/^#\s/.test(para) || seen.has(para)) continue;
+            const norm = normWords(para);
+            const hits = remaining.filter((ph) => norm.includes(ph) && (firstIdx.get(ph) ?? 0) < idx);
+            if (!hits.length) continue;
+            seen.add(para);
+            microFixes.push({
+              para,
+              instructions: `Rewrite this Markdown paragraph (or subheading) with genuinely different wording so that it no longer contains ANY of the following word sequences (comparison ignores case and punctuation). Preserve the meaning and approximate length. Keep every [text](url) markdown link EXACTLY as-is — same anchor text, same URL. Do NOT add any new links or URLs. STRUCTURE: keep exactly the input's structure — if the input is a plain paragraph, return a plain paragraph with NO "#" heading markers; if it starts with "### ", keep exactly "### ".\n${hits.map((p) => `- "${p}"`).join("\n")}`,
+              requireSameLinks: true,
+              check: (out) => hits.every((ph) => !normWords(out).includes(ph)),
+            });
+          }
+        });
+      }
+
+      for (const para of stitched.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)) {
+        if (paraStatCount(para) <= 1 || /^#{1,6}\s/.test(para)) continue;
+        microFixes.push({
+          para,
+          instructions: `This Markdown paragraph carries more than one numeric statistic (dollar figure, percentage, or number of 100+; bare years do not count). Rewrite it so that it keeps ONLY the single most important numeric value together with the markdown citation link already attached to it in the paragraph (if any), and remove the other numbers entirely (do not spell them out as words — describe the point qualitatively instead). Keep any remaining markdown links exactly as-is — same anchor text, same URL. NEVER invent, add, or alter a link or URL, and NEVER emit placeholder links like [Publisher](url). STRUCTURE: return a plain paragraph with NO "#" heading markers (unless the input itself starts with heading markers — then keep them identical). Preserve the meaning.`,
+          requireSameLinks: false,
+          check: (out) => paraStatCount(out) <= 1,
+        });
+      }
+
+      let applied = 0;
+      for (const [i, mf] of microFixes.slice(0, 8).entries()) {
+        if (!stitched.includes(mf.para)) continue;
+        try {
+          const tMicro = Date.now();
+          const microUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: `surgical-rewrite-${i + 1}`, writer_id: (project as any).writerId });
+          const md = await callAnthropicRaw({
+            model: SONNET,
+            max_tokens: 2000,
+            metadata: { user_id: microUserId },
+            system: "You are surgically revising ONE paragraph of a finished article. Return ONLY the revised paragraph in Markdown — no preamble, no quotes, no commentary.",
+            messages: [{ role: "user", content: `${mf.instructions}\n\nPARAGRAPH:\n${mf.para}` }],
+          });
+          await logUsage({ project_id, stage: "final-stitch", sub_stage: `surgical-rewrite-${i + 1}`, model: SONNET, metadata_user_id: microUserId, usage: md.usage, duration_ms: Date.now() - tMicro, ok: true });
+          const out = (md.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+          if (!out || out.length < mf.para.length * 0.3 || out.length > mf.para.length * 2.5) {
+            req.log.warn({ fix: i + 1, gotChars: out.length }, "final-stitch: surgical rewrite length out of bounds; skipped");
+            continue;
+          }
+          const origLinks = paraLinkSet(mf.para);
+          const newLinks = paraLinkSet(out);
+          const invented = [...newLinks].filter((u) => !origLinks.has(u));
+          const dropped = [...origLinks].filter((u) => !newLinks.has(u));
+          const linksOk = invented.length === 0 && (!mf.requireSameLinks || dropped.length === 0);
+          if (!linksOk || !mf.check(out)) {
+            req.log.warn({ fix: i + 1, invented, dropped, checkOk: mf.check(out) }, "final-stitch: surgical rewrite violated constraints; skipped");
+            continue;
+          }
+          /* Structure guards: the replacement must keep the same heading level
+           * (or stay a plain paragraph) and must not add or remove H1s. */
+          const headPrefix = (s: string) => (s.match(/^(#{1,6})\s/) || [])[1] || "";
+          if (headPrefix(out) !== headPrefix(mf.para)) {
+            req.log.warn({ fix: i + 1, wasPrefix: headPrefix(mf.para), gotPrefix: headPrefix(out) }, "final-stitch: surgical rewrite changed heading level; skipped");
+            continue;
+          }
+          const candidate = stitched.replace(mf.para, out);
+          const h1Count = (s: string) => (s.match(/^#\s/gm) || []).length;
+          const kwLower = String((project as any).keyword || "").trim().toLowerCase();
+          const bodyFirstWords = (s: string) =>
+            s.replace(/\[([^\]]+)\]\((?:https?:\/\/[^)]+)\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_`>|]/g, "").toLowerCase().split(/\s+/).filter(Boolean).slice(0, 120).join(" ");
+          const kwEarlyPreserved = !kwLower || !bodyFirstWords(stitched).includes(kwLower) || bodyFirstWords(candidate).includes(kwLower);
+          if (
+            h1Count(candidate) !== h1Count(stitched) ||
+            !kwEarlyPreserved ||
+            findCrossSectionRepetitions(candidate).length > findCrossSectionRepetitions(stitched).length ||
+            countDensityOffenders(candidate) > countDensityOffenders(stitched)
+          ) {
+            req.log.warn({ fix: i + 1, kwEarlyPreserved, h1Was: h1Count(stitched), h1Got: h1Count(candidate) }, "final-stitch: surgical rewrite regressed global counters; skipped");
+            continue;
+          }
+          stitched = candidate;
+          applied++;
+        } catch (e) {
+          req.log.warn({ err: e, fix: i + 1 }, "final-stitch: surgical rewrite call failed (non-fatal)");
+        }
+      }
+      if (microFixes.length) {
+        req.log.info(
+          { planned: microFixes.length, applied, repetitionsLeft: findCrossSectionRepetitions(stitched).length, densityLeft: countDensityOffenders(stitched) },
+          "final-stitch: surgical rewrite net finished",
+        );
+      }
+    } catch (e) {
+      req.log.warn({ err: e }, "final-stitch: surgical rewrite net failed (non-fatal)");
+    }
 
     const word_count = stitched.split(/\s+/).filter(Boolean).length;
     const lower = stitched.toLowerCase();
@@ -1312,12 +1681,35 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
     try {
       const t0 = Date.now();
       const fsIcp = Array.isArray((project as any).icps) && (project as any).icps.length ? ((project as any).icps[0] as number) : undefined;
-      const { block: stitchAssetBlock } = await buildAssetCandidates({
+      const { block: stitchAssetBlock, linkTargetList: stitchLinkTargets } = await buildAssetCandidates({
         brandId: project.brandId,
         icp: fsIcp,
         funnelStage: String((project as any).funnelStage || "") || undefined,
       });
-      const extractSystem = `You extract a structured publishing schema from a finished article. Return ONLY a submit_article_schema tool call. Use the exact primary keyword "${primaryKeyword}" where required. Never invent dollar amounts. For case_studies_cited, describe what was built and the measurable outcome — never a contract value or any dollar figure. When populating testimonials_used, internal_links, and external_authority_citations, copy values VERBATIM from the APPROVED ASSET CANDIDATES below — never invent a reviewer, company, quote, URL, or citation domain; omit any asset that is not present both in the article and in the candidate lists.`;
+      const credentialsFromPlaybook = (await getCredentialBlock(project.brandId)).replace(/\s+/g, " ").trim().slice(0, 300);
+      const extractSystem = `You extract a structured publishing schema from a finished article. Return ONLY a submit_article_schema tool call. Use the exact primary keyword "${primaryKeyword}" where required. Never invent dollar amounts. When populating testimonials_used, internal_links, and external_authority_citations, copy values VERBATIM from the APPROVED ASSET CANDIDATES below — never invent a reviewer, company, quote, URL, or citation domain; omit any asset that is not present both in the article and in the candidate lists.
+
+CASE STUDY RULE: case_studies_cited may ONLY contain case studies whose project/client name appears VERBATIM in the APPROVED ASSET CANDIDATES below (a testimonial's company or project name counts). NEVER invent, generalize, or anonymize a project name (e.g. "Healthcare Telehealth Platform") — an unrecognized name is stripped and BLOCKS SHIP, while an EMPTY case_studies_cited array PASSES. If the article's case narratives don't use an approved name, return an empty array. Never include a contract value or any dollar figure in a case study; rewrite the text without the number.
+
+STATISTICS RULE: statistics_used may ONLY contain statistics that carry an inline [Publisher](url) citation in the article whose URL is a FULL deep link to a specific page. Copy that exact URL into source_url. OMIT any statistic whose source is a bare domain (e.g. "https://clutch.co"), "industry standard", "internal data", or any unnamed analysis — every entry is fetched live and stripped on failure, and one stripped entry BLOCKS SHIP. A short verified list beats a long unverified one.
+
+INTERNAL LINKS RULE: internal_links must contain between 3 and 5 entries, each copied VERBATIM (URL + anchor) from the APPROVED ASSET CANDIDATES and actually present in the article. anchor_text must be copied WORD-FOR-WORD from one of the listed anchor variations for that URL — never paraphrase, shorten, or invent anchor text; a paraphrased anchor gets the entry stripped. List each target URL at most once. If more than 5 approved links appear in the article, keep the 5 strongest. Never list a URL that is not in the candidates — it gets stripped and can push the kept count below 3.
+
+H1 RULE: The article has EXACTLY ONE H1 — the article's title. The h1 field must be that single title. Never derive or invent additional H1 tags.
+
+CLOSING KEYWORD RULE: closing_block.summary MUST contain the exact-match primary keyword "${primaryKeyword}" at least once. faq_schema must reference the primary keyword in at least one question.
+
+META DESCRIPTION RULE: meta_description must be BETWEEN 150 AND 155 characters. Aim for 152–153 characters so that a one-character miscount still lands inside the window. Count the characters of your candidate meta description one by one before emitting it. If it is longer than 155, cut; if shorter than 150, add. Include the primary keyword.
+
+FAQ RULE: faq_schema must contain BETWEEN 3 AND 5 question/answer pairs — never more, never fewer; prefer 5 when the article supports it. Each answer must be 40–60 words — COUNT the words of every answer before emitting; aim for 45–55 so a miscount still lands inside the window. Do NOT copy the article's FAQ answers verbatim when they run long — CONDENSE each one to 45–55 words. Any answer over 60 or under 40 words is a hard failure.
+
+OPENING BLOCK RULE: opening_block.first_100_words must be the VERBATIM first 100 words of the article body (everything after the H1, markdown formatting stripped) — copy them exactly, do not paraphrase or summarize.
+
+DIRECT ANSWER RULE: opening_block.direct_answer must be EXACTLY 2 to 3 complete sentences (never a single sentence, never more than 3) that directly answer the primary keyword's question with the article's headline figures.
+
+AUTHOR BYLINE RULE: author_byline is REQUIRED. Emit exactly:
+{"name": "By the TekRevol team", "credentials": ${JSON.stringify(credentialsFromPlaybook)}, "bio_link": "/about"}
+Do not omit any field. Do not modify the name.`;
       const extractUser = `PRIMARY KEYWORD: ${primaryKeyword}\n\n${stitchAssetBlock}\n\nARTICLE (Markdown):\n${stitched.slice(0, 60000)}`;
       const exData = await callAnthropicRaw({
         model: SONNET,
@@ -1331,6 +1723,158 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
       const exTool = (exData.content || []).find((b: any) => b.type === "tool_use");
       if (exTool?.input) {
         const sanitized = sanitizeArticleSchema(exTool.input);
+        /* Cut B safety net: meta_description must land in 150–155 chars.
+         * If the model overshoots, trim at a word boundary down to ≤155;
+         * keep the trim only if it stays ≥150. */
+        if (typeof sanitized.meta_description === "string" && sanitized.meta_description.length > 155) {
+          const original = sanitized.meta_description;
+          let meta = original.slice(0, 155);
+          meta = meta.replace(/\s+\S*$/, "").replace(/[\s,;:—-]+$/, "");
+          if (!/[.!?]$/.test(meta) && meta.length <= 154) meta += ".";
+          if (meta.length >= 150 && meta.length <= 155) {
+            sanitized.meta_description = meta;
+          } else {
+            /* Word-boundary trim fell below 150 — fall back to a hard cut at
+             * 155 chars (guaranteed inside the 150–155 window). */
+            sanitized.meta_description = original.slice(0, 155).trimEnd();
+          }
+        }
+        /* Cut B safety net: FAQ answers must be 40–60 words. First try to
+         * TRIM overlong answers by dropping trailing sentences (accept the
+         * trim only if it lands in 40–60 words); then drop any remaining
+         * out-of-range pairs as long as at least 3 valid pairs remain. */
+        if (Array.isArray(sanitized.faq_schema)) {
+          const wordCount = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
+          sanitized.faq_schema = (sanitized.faq_schema as any[]).map((f: any) => {
+            const answer = String(f?.answer || "").trim();
+            if (wordCount(answer) <= 60) return f;
+            const sentences = answer.split(/(?<=[.!?])\s+/);
+            let kept = sentences.slice();
+            while (kept.length > 1 && wordCount(kept.join(" ")) > 60) kept = kept.slice(0, -1);
+            const trimmed = kept.join(" ");
+            const w = wordCount(trimmed);
+            return w >= 40 && w <= 60 ? { ...f, answer: trimmed } : f;
+          });
+          if ((sanitized.faq_schema as any[]).length > 3) {
+            const inRange = (sanitized.faq_schema as any[]).filter((f: any) => {
+              const w = wordCount(String(f?.answer || ""));
+              return w >= 40 && w <= 60;
+            });
+            if (inRange.length >= 3 && inRange.length < (sanitized.faq_schema as any[]).length) {
+              sanitized.faq_schema = inRange.slice(0, 5);
+            }
+          }
+        }
+        /* Cut B safety net: internal_links anchors must be approved variations.
+         * Repair paraphrased anchors (swap in the first approved variation for
+         * that URL, matched on a normalized URL key). Never drop an entry whose
+         * URL we can't find in our (possibly filtered) candidate list — the
+         * validator checks the full link_targets table. De-dupe repeated URLs
+         * only when ≥3 entries survive. */
+        if (Array.isArray(sanitized.internal_links) && stitchLinkTargets.length > 0) {
+          const normUrl = (u: string) => u.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
+          const targetByUrl = new Map(stitchLinkTargets.map((t) => [normUrl(t.url), t]));
+          const repaired = (sanitized.internal_links as any[]).map((l: any) => {
+            const target = targetByUrl.get(normUrl(String(l?.target_url || "")));
+            if (!target || target.anchors.length === 0) return l;
+            const anchor = String(l?.anchor_text || "").trim().toLowerCase();
+            const ok = target.anchors.some((a) => a.trim().toLowerCase() === anchor);
+            if (!ok) {
+              req.log.info({ url: l?.target_url, from: l?.anchor_text, to: target.anchors[0] }, "final-stitch: internal_links net repaired anchor");
+              return { ...l, anchor_text: target.anchors[0] };
+            }
+            return l;
+          });
+          const seenUrls = new Set<string>();
+          const deduped = repaired.filter((l: any) => {
+            const key = normUrl(String(l?.target_url || ""));
+            if (seenUrls.has(key)) return false;
+            seenUrls.add(key);
+            return true;
+          });
+          sanitized.internal_links = (deduped.length >= 3 ? deduped : repaired).slice(0, 5);
+        }
+        /* Cut B safety net: statistics_used entries whose source_url is a
+         * bare domain (no path) are guaranteed to be stripped by the live
+         * verifier and one strip blocks ship — remove them up front. An
+         * empty statistics_used list passes. */
+        if (Array.isArray(sanitized.statistics_used)) {
+          const before = (sanitized.statistics_used as any[]).length;
+          sanitized.statistics_used = (sanitized.statistics_used as any[]).filter((s: any) => {
+            const raw = String(s?.source_url || "").trim();
+            if (!raw) return false;
+            try {
+              const u = new URL(raw);
+              return u.pathname.replace(/\/+$/, "").length > 1;
+            } catch {
+              return false;
+            }
+          });
+          const after = (sanitized.statistics_used as any[]).length;
+          if (after !== before) {
+            req.log.info({ before, after }, "final-stitch: statistics net dropped bare-domain sources");
+          }
+        }
+        /* Cut B safety net: opening_block.first_100_words is defined as the
+         * verbatim first 100 words of the body after the H1 — compute it
+         * deterministically instead of trusting the extraction model. */
+        try {
+          const first100 = stitched
+            .replace(/^#\s.*$/m, "")
+            .replace(/\[([^\]]+)\]\((?:https?:\/\/[^)]+)\)/g, "$1")
+            .replace(/^#{1,6}\s+/gm, "")
+            .replace(/^[-*+]\s+/gm, "")
+            .replace(/^\d+\.\s+/gm, "")
+            .replace(/[*_`>|]/g, "")
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(0, 100)
+            .join(" ");
+          if (first100) {
+            sanitized.opening_block = { ...(sanitized.opening_block || {}), first_100_words: first100 };
+          }
+        } catch (e) {
+          req.log.warn({ err: e }, "final-stitch: opening-block net failed (non-fatal)");
+        }
+        /* Cut B safety net: meta_description must be 150–155 chars and carry
+         * the keyword — repair out-of-range extractions with one bounded
+         * micro-call, falling back to the outline's meta if it qualifies. */
+        try {
+          const kwLc = primaryKeyword.trim().toLowerCase();
+          const metaOk = (m: string) => {
+            const t = m.trim();
+            return t.length >= 150 && t.length <= 155 && (!kwLc || t.toLowerCase().includes(kwLc));
+          };
+          if (!metaOk(String(sanitized.meta_description || ""))) {
+            const outlineMeta = String((outline as any).metaDescription || "").trim();
+            if (metaOk(outlineMeta)) {
+              sanitized.meta_description = outlineMeta;
+              req.log.info({ len: outlineMeta.length }, "final-stitch: meta net used outline meta description");
+            } else {
+              for (let attempt = 1; attempt <= 2; attempt++) {
+                const tMeta = Date.now();
+                const metaUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: `meta-fix-${attempt}`, writer_id: (project as any).writerId });
+                const metaData = await callAnthropicRaw({
+                  model: SONNET,
+                  max_tokens: 300,
+                  metadata: { user_id: metaUserId },
+                  system: `Revise the given meta description so it is BETWEEN 150 AND 155 characters (count every character including spaces and punctuation; aim for 152–153) and contains the phrase "${primaryKeyword}" verbatim. Keep the meaning. Return ONLY the revised meta description text with no quotes or commentary.`,
+                  messages: [{ role: "user", content: String(sanitized.meta_description || outlineMeta || "") }],
+                });
+                await logUsage({ project_id, stage: "final-stitch", sub_stage: `meta-fix-${attempt}`, model: SONNET, metadata_user_id: metaUserId, usage: metaData.usage, duration_ms: Date.now() - tMeta, ok: true });
+                const fixed = (metaData.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim().replace(/^["']|["']$/g, "");
+                if (metaOk(fixed)) {
+                  sanitized.meta_description = fixed;
+                  req.log.info({ attempt, len: fixed.length }, "final-stitch: meta net repaired meta description");
+                  break;
+                }
+                req.log.warn({ attempt, len: fixed.length }, "final-stitch: meta net attempt out of range");
+              }
+            }
+          }
+        } catch (e) {
+          req.log.warn({ err: e }, "final-stitch: meta net failed (non-fatal)");
+        }
         sanitized.lsi_retrieved = lsiRetrieved;
         sanitized.lsi_used_in_body = lsiCov.used;
         sanitized.lsi_coverage_ratio = lsiCov.ratio;

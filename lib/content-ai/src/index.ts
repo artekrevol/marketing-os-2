@@ -5,6 +5,8 @@ export {
   getActivePlaybook,
   getPlaybookSections,
   getPlaybookProjectNames,
+  getCredentialBlock,
+  CREDENTIAL_FALLBACK,
   getRoutedPlaybook,
   buildCachedSystem,
   buildCachedSystemWithProject,

@@ -455,16 +455,24 @@ export async function getDiscardList(_brandId?: string): Promise<string[]> {
   return body ? extractListItems(body) : [];
 }
 
-/** The credential / proof-point block (raw section text, "" if absent). */
+/**
+ * Generic credential fallback used when the playbook has no credential
+ * section. The author byline requires a non-empty credentials value
+ * (matrix #5), so this function never returns an empty string.
+ */
+export const CREDENTIAL_FALLBACK =
+  "TekRevol has delivered 280+ engagements across mobile, AI, and enterprise software since 2018.";
+
+/** The credential / proof-point block (raw section text; generic fallback if absent — never empty). */
 export async function getCredentialBlock(_brandId?: string): Promise<string> {
   const content = await getActivePlaybookContent();
-  if (!content) return "";
+  if (!content) return CREDENTIAL_FALLBACK;
   const sections = parsePlaybookSections(content);
   const body = findSectionBody(
     sections,
     /credential|proof\s*point|company\s*facts?|trust\s*signal|about\s*the\s*company/i,
   );
-  return body ?? "";
+  return body && body.trim() ? body : CREDENTIAL_FALLBACK;
 }
 
 /**

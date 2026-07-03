@@ -1,0 +1,173 @@
+# Cut B — Content-Shaping Prompt Tightening Dispatch
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Objective:** Fix the seven structural failures plus one brand-voice gap surfaced by Blog #1's Cut A matrix output. Purely prompt refinements — no validator changes, no schema changes, no new DB queries.
+**Dispatch type:** Single sequential change. Small, focused, single-purpose. Same scope discipline as Task #28 and #32.
+
+---
+
+## Startup check (before any code)
+
+Before beginning: `ls -la .local/tasks/*.md 2>/dev/null`. Report results. Archive anything from cancelled or completed tasks to `.local/tasks/archive/` before proceeding. Confirms no stale objectives are bound to this task record.
+
+---
+
+## Context
+
+Cut A candidate injection closed the asset-side gaps in Blog #1. Testimonials, internal links, and authority citations now flow correctly from the DB into the prompts. The regenerated Blog #1 matrix showed 9 pass / 10 fail / 5 N/A.
+
+Cut B closes what's left. The remaining failures are structural — validators catch them correctly; the generation prompts don't satisfy them on first pass. Fixes are entirely in the prompt builders (outline, draft, final-stitch).
+
+Target after Cut B: Blog #1 regeneration hits shippable = YES.
+
+---
+
+## The eight fixes
+
+### Fix 1 — Exactly one H1 (was 2 H1s emitted)
+
+**Where:** Draft-section prompt builder and final-stitch prompt.
+**Change:** Add an explicit rule at the top of both prompts:
+
+> The article has EXACTLY ONE H1 — the title provided in the intake. Section drafts must use H2 as their top-level heading. Never emit H1 tags inside section content. The stitch step will not add H1 tags; the intake title is the sole H1.
+
+Enforce in the final-stitch extractor: if more than one H1 exists in the assembled article, log a warning and demote all H1s beyond the first to H2. This is a safety net; the primary fix is the prompt instruction.
+
+### Fix 2 — Keyword placement (first 100 words, ≥1 H2, closing block)
+
+**Where:** Draft-section prompt for the opening section; final-stitch prompt for closing.
+**Change:** For the first section, add:
+
+> The first 100 words of this section MUST contain the primary keyword: `{primaryKeyword}`. Follow the direct-answer rule: the primary keyword appears in the first sentence, followed by a two-to-three-sentence direct answer.
+
+For H2 placement, add to the outline prompt:
+
+> At least one H2 in the outline must contain the primary keyword or a close variant. Distribute the keyword naturally — do not stuff.
+
+For closing reinforcement, add to the final-stitch prompt:
+
+> The closing section MUST contain the exact-match primary keyword at least once. The FAQ block should reference the primary keyword in at least one question.
+
+### Fix 3 — Meta description length (181 chars, target 150–155)
+
+**Where:** Final-stitch prompt, meta description generation.
+**Change:** Hard constraint:
+
+> Meta description must be BETWEEN 150 AND 155 characters. Not "under 160," not "around 150" — literally 150 to 155 inclusive. Count characters. If your first draft is longer, cut. If shorter, add. Include the primary keyword.
+
+Add a validator-side character-count check that reports the actual length in the validation output for feedback.
+
+### Fix 4 — Author byline (missing name + bio_link)
+
+**Where:** Final-stitch prompt, structured output emission.
+**Change:** Template with fixed values:
+
+> Author byline is REQUIRED. Emit exactly:
+> ```json
+> {
+>   "name": "By the TekRevol team",
+>   "credentials": "{credentialsFromPlaybook}",
+>   "bio_link": "/about"
+> }
+> ```
+> Do not omit any field. Do not modify the name. The `credentials` value comes from the playbook's credential block; if not available, use a generic fallback provided in the prompt.
+
+Update `getCredentialBlock()` to always return a value (fallback: "TekRevol has delivered 280+ engagements across mobile, AI, and enterprise software since 2018."). Never null.
+
+### Fix 5 — Topic checklist (missing "team model" and "exclusion" for cost guides)
+
+**Where:** Outline-generate prompt.
+**Change:** Content-type-aware checklist injection at outline stage:
+
+> This is a `{contentType}` article. The outline MUST include sections covering:
+> - Cost guide: cost ranges, drivers, regional variation, team model, maintenance %, timeline, EXCLUSIONS (what the price does NOT include)
+> - Comparison guide: feature comparison, cost comparison, use-case fit, migration cost, recommendation
+> - How-to guide: prerequisites, numbered steps, common pitfalls, tools, expected outcome
+> - Stats article: hero stat, methodology, breakdown by segment, YoY comparison, source citations
+>
+> Any missing required sub-topic will fail matrix check #20 and block ship. Verify your outline covers every item before returning.
+
+Content type inference: from the primary keyword ("cost" → cost guide, "vs" / "versus" → comparison, "how to" / "guide to" → how-to, "statistics" / "trends" / "data" → stats).
+
+### Fix 6 — Stat density (25 paragraphs over ≤1/paragraph)
+
+**Where:** Draft-section prompt.
+**Change:** Add explicit rule:
+
+> Maximum ONE supporting statistic per paragraph. If a paragraph has two or more numerical claims that read as statistics, split it into two paragraphs OR remove one of the statistics. Statistics include: percentages, dollar amounts, counts of things, growth rates, market sizes, survey results.
+>
+> Prose narrative should carry the paragraph. A statistic is punctuation, not the sentence.
+
+### Fix 7 — Cross-section repetition (3 phrases repeat across sections)
+
+**Where:** Final-stitch prompt, revision pass.
+**Change:** Add a repetition-scan step to the stitch:
+
+> Before finalizing, scan the assembled article for phrases of 8 or more words that repeat verbatim across sections. If any repetitions found, rewrite the second occurrence to use different phrasing while preserving the meaning. Do not delete content — rewrite.
+
+Log detected repetitions to `module_data_provenance` with `generation_method: 'repetition-rewrite'` for audit.
+
+### Fix 8 — Brand-voice ratio (0:202 — TekRevol never named)
+
+**Where:** Draft-section system prompt.
+**Change:** Add brand identity instruction upstream of the funnel-ratio rules:
+
+> This article is written from TekRevol's perspective. You are drafting on behalf of the TekRevol team. You may naturally use "we," "our team," "we've built," "our clients" — as long as the funnel-stage brand-mention ratio is respected:
+> - TOFU: max 1 brand mention per 12 sentences
+> - MOFU: max 1 brand mention per 8 sentences
+> - BOFU: max 1 brand mention per 5 sentences
+>
+> Vendor-neutral prose is NOT the goal. This is a TekRevol article. Identify as TekRevol at the appropriate density for the funnel stage. Zero brand mentions in the body indicates a failure of voice — the validators will not catch this today, but readers will notice.
+
+---
+
+## What NOT to change
+
+- **Validators.** Zero changes to `lib/content-ai/src/validators/`. The rules are correct; the prompts need to satisfy them.
+- **Schema.** Zero changes to `REVIEW_TOOL` or `ARTICLE_TOOL` output schemas. No new fields.
+- **DB queries.** Zero changes to `findTestimonials`, `findLinkTargets`, or any asset queries. Cut A's candidate injection stays as-is.
+- **Matrix harness.** Zero changes. Same 24 checks.
+- **Job semantics.** Zero changes to workers, queues, or job types.
+
+This is entirely a prompt-engineering dispatch. Every code change is inside a prompt-builder string or a small helper that assembles a prompt.
+
+---
+
+## Testing after fixes
+
+After all eight fixes are in and typecheck passes:
+
+1. Regenerate Blog #1 using the same driver pattern as Cut A's regeneration.
+2. Run the 24-check matrix.
+3. Target: shippable = YES. At minimum, all seven previously-failed structural checks (#1, #2, #3, #5, #20, #21, #22) must flip to PASS.
+4. Brand mention ratio should read as a positive number (not 0), within the funnel-stage limit.
+
+If shippable = YES on regeneration, Cut B ships and the content quality fix dispatch closes on Blog #1's side.
+
+If shippable = NO with different failures than before, that's a signal the prompt fixes shifted the problem rather than solving it. Halt and report which checks now fail.
+
+---
+
+## Operational rules
+
+- Scoped changes only
+- `git show --stat HEAD` before declaring complete
+- Treat architect feedback as authoritative
+- No scope creep — if you spot other prompt improvements while working, capture as a follow-up task with self-contained description
+- Startup check for stale task files was step one; if that returned anything, it was archived before this work began
+
+---
+
+## Acceptance
+
+1. All eight prompt refinements applied to the correct prompt builders
+2. `pnpm run typecheck:libs` and api-server typecheck pass clean
+3. Blog #1 regeneration hits shippable = YES on the 24-check matrix
+4. All seven previously-failed structural checks (#1, #2, #3, #5, #20, #21, #22) now PASS
+5. Brand mention ratio reads > 0 and within funnel-stage limits
+6. Architect review PASS on the diff
+7. Provenance rows written for any strip/revision behavior triggered by fixes 7 (repetition rewrite)
+
+---
+
+**Begin with the startup check. Apply the eight fixes as one atomic change. Typecheck. Regenerate Blog #1. Report matrix output.**

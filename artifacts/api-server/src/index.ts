@@ -207,6 +207,12 @@ const server = app.listen(port, (err) => {
   logger.info({ port }, "Server listening");
 });
 
+/* Long-running AI routes (final-stitch with rewrite passes + live stat
+ * verification) can exceed Node's 5-minute default request timeout.
+ * Raise it to 15 minutes. */
+server.requestTimeout = 900_000;
+server.headersTimeout = 910_000;
+
 if (process.env["NODE_ENV"] === "production") {
   import("@workspace/worker/embedded")
     .then(({ startEmbeddedWorkers }) => startEmbeddedWorkers())
