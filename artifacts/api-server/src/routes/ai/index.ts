@@ -1549,7 +1549,7 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
         if (paraStatCount(para) <= 1 || /^#{1,6}\s/.test(para)) continue;
         microFixes.push({
           para,
-          instructions: `This Markdown paragraph carries more than one numeric statistic (dollar figure, percentage, or number of 100+; bare years do not count). Rewrite it so that it keeps ONLY the single most important numeric value together with the markdown citation link already attached to it in the paragraph (if any), and remove the other numbers entirely (do not spell them out as words — describe the point qualitatively instead). Keep any remaining markdown links exactly as-is — same anchor text, same URL. NEVER invent, add, or alter a link or URL, and NEVER emit placeholder links like [Publisher](url). STRUCTURE: return a plain paragraph with NO "#" heading markers (unless the input itself starts with heading markers — then keep them identical). Preserve the meaning.`,
+          instructions: `This Markdown paragraph carries more than one digit-based figure (a dollar amount like "$45,000", a percentage like "30%", or a bare number of 100 or more; two-digit numbers and bare years like "2026" do NOT count). The paragraph must end up with AT MOST ONE digit-based figure. Choose whichever ONE figure is most important and keep it in digits. For every OTHER figure, do ONE of these: (a) if it is the other end of a range, rewrite the bound in words (e.g. "$15,000 and over $300,000" → "$15,000 up to roughly three hundred thousand dollars"); (b) otherwise remove it entirely and describe the point qualitatively. Spelled-out numbers ("three hundred thousand", "thirty percent") do not count against the limit. Keep any markdown citation links already in the paragraph exactly as-is — same anchor text, same URL. NEVER invent, add, or alter a link or URL, and NEVER emit placeholder links like [Publisher](url). STRUCTURE: return a plain paragraph with NO "#" heading markers (unless the input itself starts with heading markers — then keep them identical). Preserve the meaning and approximate length.`,
           requireSameLinks: false,
           check: (out) => paraStatCount(out) <= 1,
         });
@@ -1611,9 +1611,70 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
           req.log.warn({ err: e, fix: i + 1 }, "final-stitch: surgical rewrite call failed (non-fatal)");
         }
       }
-      if (microFixes.length) {
+
+      /* Density repair pass: a paragraph can be BOTH a repetition offender and
+       * a density offender. The repetition fix above rewrites it first, which
+       * invalidates the density fix's captured text (silent no-op). So here we
+       * recompute density offenders from the LIVE `stitched` and repair each
+       * one, up to a small cap, with the same safety guards. */
+      const densityInstructions = `This Markdown paragraph carries more than one digit-based figure (a dollar amount like "$45,000", a percentage like "30%", or a bare number of 100 or more; two-digit numbers and bare years like "2026" do NOT count). The paragraph must end up with AT MOST ONE digit-based figure. Choose whichever ONE figure is most important and keep it in digits. For every OTHER figure, do ONE of these: (a) if it is the other end of a range, rewrite the bound in words (e.g. "$15,000 and over $300,000" → "$15,000 up to roughly three hundred thousand dollars"); (b) otherwise remove it entirely and describe the point qualitatively. Spelled-out numbers ("three hundred thousand", "thirty percent") do not count against the limit. Keep any markdown citation links already in the paragraph exactly as-is — same anchor text, same URL. NEVER invent, add, or alter a link or URL, and NEVER emit placeholder links like [Publisher](url). STRUCTURE: return a plain paragraph with NO "#" heading markers (unless the input itself starts with heading markers — then keep them identical). Preserve the meaning and approximate length.`;
+      const headPrefix2 = (s: string) => (s.match(/^(#{1,6})\s/) || [])[1] || "";
+      const h1Count2 = (s: string) => (s.match(/^#\s/gm) || []).length;
+      const kwLower2 = String((project as any).keyword || "").trim().toLowerCase();
+      const bodyFirstWords2 = (s: string) =>
+        s.replace(/\[([^\]]+)\]\((?:https?:\/\/[^)]+)\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_`>|]/g, "").toLowerCase().split(/\s+/).filter(Boolean).slice(0, 120).join(" ");
+      let densityRepairs = 0;
+      for (let round = 1; round <= 6 && countDensityOffenders(stitched) > 0; round++) {
+        const offender = stitched
+          .split(/\n\s*\n/)
+          .map((p) => p.trim())
+          .filter(Boolean)
+          .find((p) => !/^#{1,6}\s/.test(p) && paraStatCount(p) > 1);
+        if (!offender) break;
+        try {
+          const tMicro = Date.now();
+          const microUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: `density-repair-${round}`, writer_id: (project as any).writerId });
+          const md = await callAnthropicRaw({
+            model: SONNET,
+            max_tokens: 2000,
+            metadata: { user_id: microUserId },
+            system: "You are surgically revising ONE paragraph of a finished article. Return ONLY the revised paragraph in Markdown — no preamble, no quotes, no commentary.",
+            messages: [{ role: "user", content: `${densityInstructions}\n\nPARAGRAPH:\n${offender}` }],
+          });
+          await logUsage({ project_id, stage: "final-stitch", sub_stage: `density-repair-${round}`, model: SONNET, metadata_user_id: microUserId, usage: md.usage, duration_ms: Date.now() - tMicro, ok: true });
+          const out = (md.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+          if (!out || out.length < offender.length * 0.3 || out.length > offender.length * 2.5) {
+            req.log.warn({ round, gotChars: out.length }, "final-stitch: density repair length out of bounds; stopping");
+            break;
+          }
+          const origLinks = paraLinkSet(offender);
+          const invented = [...paraLinkSet(out)].filter((u) => !origLinks.has(u));
+          if (invented.length || paraStatCount(out) > 1 || headPrefix2(out) !== headPrefix2(offender)) {
+            req.log.warn({ round, invented, statsLeft: paraStatCount(out) }, "final-stitch: density repair violated constraints; stopping");
+            break;
+          }
+          const candidate = stitched.replace(offender, out);
+          const kwEarlyPreserved = !kwLower2 || !bodyFirstWords2(stitched).includes(kwLower2) || bodyFirstWords2(candidate).includes(kwLower2);
+          if (
+            h1Count2(candidate) !== h1Count2(stitched) ||
+            !kwEarlyPreserved ||
+            findCrossSectionRepetitions(candidate).length > findCrossSectionRepetitions(stitched).length ||
+            countDensityOffenders(candidate) >= countDensityOffenders(stitched)
+          ) {
+            req.log.warn({ round, kwEarlyPreserved }, "final-stitch: density repair regressed counters; stopping");
+            break;
+          }
+          stitched = candidate;
+          densityRepairs++;
+        } catch (e) {
+          req.log.warn({ err: e, round }, "final-stitch: density repair call failed (non-fatal)");
+          break;
+        }
+      }
+
+      if (microFixes.length || densityRepairs) {
         req.log.info(
-          { planned: microFixes.length, applied, repetitionsLeft: findCrossSectionRepetitions(stitched).length, densityLeft: countDensityOffenders(stitched) },
+          { planned: microFixes.length, applied, densityRepairs, repetitionsLeft: findCrossSectionRepetitions(stitched).length, densityLeft: countDensityOffenders(stitched) },
           "final-stitch: surgical rewrite net finished",
         );
       }
