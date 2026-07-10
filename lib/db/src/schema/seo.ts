@@ -10,6 +10,7 @@ import {
   timestamp,
   index,
   unique,
+  check,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
@@ -46,7 +47,10 @@ export const locationsTable = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("locations_brand_id_idx").on(t.brandId)],
+  (t) => [
+    index("locations_brand_id_idx").on(t.brandId),
+    unique("locations_brand_dfsc_uq").on(t.brandId, t.dataforseoLocationCode),
+  ],
 );
 
 export type Location = typeof locationsTable.$inferSelect;
@@ -74,6 +78,7 @@ export const keywordListsTable = pgTable(
   (t) => [
     index("keyword_lists_brand_id_idx").on(t.brandId),
     index("keyword_lists_parent_idx").on(t.parentListId),
+    unique("keyword_lists_brand_name_uq").on(t.brandId, t.name),
   ],
 );
 
@@ -104,6 +109,16 @@ export const keywordsTable = pgTable(
     // Shared Data Layer: denormalized count of content_url_keyword_link
     // rows pointing at this keyword. Maintained by the publish-link worker.
     linkedContentCount: integer("linked_content_count").notNull().default(0),
+    // SEO Dashboard migration columns
+    targetUrl: text("target_url"),
+    languageCode: text("language_code"),
+    priority: text("priority"),
+    intentHint: text("intent_hint"),
+    cluster: text("cluster"),
+    isCorePage: boolean("is_core_page").notNull().default(false),
+    trackDaily: boolean("track_daily").notNull().default(true),
+    difficulty: numeric("difficulty", { precision: 5, scale: 2 }),
+    isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -115,6 +130,10 @@ export const keywordsTable = pgTable(
       t.brandId,
       t.keywordText,
       t.locationId,
+    ),
+    check(
+      "keywords_priority_check",
+      sql`${t.priority} IS NULL OR ${t.priority} IN ('P0', 'P1', 'P2', 'P3')`,
     ),
   ],
 );
@@ -276,6 +295,11 @@ export const competitorInsightsTable = pgTable(
     averagePosition: numeric("average_position", { precision: 6, scale: 2 }),
     topKeywords: jsonb("top_keywords").notNull().default([]),
     lastComputedAt: timestamp("last_computed_at", { withTimezone: true }),
+    // SEO Dashboard migration columns
+    dateCaptured: timestamp("date_captured", { withTimezone: true }),
+    aboveUsKeywordCount: integer("above_us_keyword_count").default(0),
+    authorityScore: numeric("authority_score", { precision: 5, scale: 2 }),
+    pressureIndex: numeric("pressure_index", { precision: 6, scale: 2 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
