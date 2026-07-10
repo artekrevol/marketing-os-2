@@ -1,0 +1,709 @@
+# SEO Dashboard Data Migration Dispatch (Replit)
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Objective:** Migrate ~58,000 rows of production data from the SEO Dashboard database dump into Marketing OS. Two content phases: core SEO data into existing tables, LLM citation data into new preservation tables.
+**Source:** `db_dump.sql` — pg_dump from SEO Dashboard production (Postgres 16.10, dated 2026-07-10). Upload via Replit file system.
+**Target:** Marketing OS current database.
+**Dispatch type:** Multi-phase sequential migration. Larger than hygiene dispatches; concentrated data work with clear pause points.
+
+---
+
+## Startup check (before any code)
+
+Before beginning: `ls -la .local/tasks/*.md 2>/dev/null`. Report results. Archive anything from cancelled or completed tasks to `.local/tasks/archive/` before proceeding. Prevents mis-targeted validation gates from firing on unrelated objectives.
+
+---
+
+## What's confirmed about the dump
+
+Already surveyed by the dispatcher. Do NOT re-survey the source data — the mapping below is authoritative.
+
+**Single project:** TekRevol at Tekrevol.com (dump project_id: `3fa04ca3-7ac8-4b58-afca-a2aa1363ca03`, created 2025-12-01). Every row in the dump belongs to this project. All migrated rows target the TekRevol brand in Marketing OS.
+
+**Row counts to migrate:**
+
+| Dump table | Rows | Target |
+|---|---|---|
+| projects | 1 | Validate only (do not import — Marketing OS already has TekRevol brand) |
+| locations | 23 | `locations` (existing table) |
+| keywords | 425 | `keywords` (existing table) + `keyword_lists` (auto-create per target_url) |
+| rankings_history | 5,447 | `rank_snapshots` (existing table) |
+| keyword_metrics | 5,519 | Merged into `rank_snapshots` metadata where applicable, or skipped |
+| competitor_metrics | 422 | `competitor_insights` (existing table) |
+| crawl_schedules | 1 | `crawl_schedules` (existing table) |
+| llm_citation_runs | 4 | NEW `llm_citation_runs` table |
+| llm_citation_snapshots | 14 | NEW `llm_citation_snapshots` table |
+| llm_citation_items | 22,019 | NEW `llm_citation_items` table |
+| llm_citation_top_pages | 57 | NEW `llm_citation_top_pages` table |
+| llm_competitors | 5 | NEW `llm_competitors` table |
+| ai_overview_citations | 24,943 | NEW `ai_overview_citations` table |
+
+**Skip entirely (do NOT migrate):** serp_layout_items (680K rows, transient SERP scraping), serp_layout_snapshots, competitor_serp_presence (639K rows, transient), backlinks, backlinks_history, competitor_backlinks, gsc_credentials, gsc_query_stats, gsc_url_inspection (dead GSC integration), page_audits, page_issues, page_metrics (site audit data), tech_crawls, ai_insights_cache, task_execution_logs, import_logs, global_settings, report_runs, scheduled_reports, app_versions, settings_falling_stars, settings_priority_rules, settings_quick_wins, users (Marketing OS has its own), keyword_page_conflicts, intent_alerts, seo_health_snapshots, seo_recommendations, crawl_results.
+
+**Rationale for skips:** high-volume tables with transient value (SERP scraping), dead integrations (GSC), separate subsystems (backlinks), operational overhead (settings, logs), or conflicting subsystems (users). If any of these become priority later, they're separate migration dispatches.
+
+---
+
+## Phase 0 — Pre-flight and staging load
+
+### 0.1 Database backup
+
+Before any data operation, take a Postgres backup of the current Marketing OS database. Use whatever backup mechanism the platform supports — a `pg_dump` output stored in a Replit file, a database snapshot, or the equivalent. Report the backup location.
+
+**Do not proceed to Phase 0.2 until backup is confirmed.**
+
+### 0.2 Verify TekRevol brand exists
+
+```sql
+SELECT id, name FROM brands WHERE name ILIKE '%tekrevol%';
+```
+
+Store the returned uuid as the TekRevol brand ID for use throughout the migration. If no TekRevol brand exists, halt — the brand needs to exist before any data import.
+
+### 0.3 Check for existing keyword conflicts
+
+The current Marketing OS DB may have keywords already added (Rabia's testing, Maria's testing, seed data). Report:
+
+```sql
+SELECT COUNT(*) FROM keywords WHERE brand_id = '<TEKREVOL_BRAND_ID>';
+SELECT keyword_text, location_id FROM keywords WHERE brand_id = '<TEKREVOL_BRAND_ID>' LIMIT 20;
+```
+
+Report the count and sample. Pause here for dispatcher decision on conflict resolution policy:
+- **Preserve existing rows and skip conflicts on import** (default recommendation — existing rows may have platform-generated metadata worth keeping)
+- **Delete existing rows and let dump values win** (if the dispatcher wants a clean slate)
+
+### 0.4 Upload the dump file
+
+The dispatcher will upload `db_dump.sql` to the Replit workspace before this phase begins. Confirm the file exists:
+
+```bash
+ls -la db_dump.sql
+```
+
+The file is approximately 340MB. If it's not present, halt.
+
+### 0.5 Load the dump into a staging schema
+
+Do NOT restore the dump into the `public` schema — it would overwrite current Marketing OS tables. Load into a separate `staging_seo_dashboard` schema:
+
+```sql
+CREATE SCHEMA staging_seo_dashboard;
+```
+
+Then rewrite the schema references and load:
+
+```bash
+sed 's/public\./staging_seo_dashboard./g' db_dump.sql > db_dump_staged.sql
+psql "$DATABASE_URL" -f db_dump_staged.sql
+```
+
+Verify the staging schema loaded correctly:
+
+```sql
+SELECT COUNT(*) FROM staging_seo_dashboard.keywords;   -- expect 425
+SELECT COUNT(*) FROM staging_seo_dashboard.locations;  -- expect 23
+SELECT COUNT(*) FROM staging_seo_dashboard.projects;   -- expect 1
+```
+
+If counts differ, halt and report before Phase 1 begins.
+
+**Pause after Phase 0.** Dispatcher confirms staging is loaded correctly and reviews conflict resolution policy.
+
+---
+
+## Phase 1 — Core SEO data migration
+
+All migrations wrapped in transactions. Report row counts inserted after each block.
+
+### 1.1 Locations (23 rows)
+
+```sql
+BEGIN;
+
+INSERT INTO locations (id, brand_id, name, dataforseo_location_code, language_code, is_active, created_at, updated_at)
+SELECT
+  gen_random_uuid(),
+  '<TEKREVOL_BRAND_ID>'::uuid,
+  s.name,
+  s.dataforseo_location_code,
+  s.language_code,
+  s.is_active,
+  s.created_at,
+  s.updated_at
+FROM staging_seo_dashboard.locations s
+ON CONFLICT (brand_id, dataforseo_location_code) DO NOTHING;
+
+COMMIT;
+```
+
+Build a mapping table for Phase 1.2 use:
+
+```sql
+CREATE TEMP TABLE location_id_map AS
+SELECT s.id AS old_id, l.id AS new_id
+FROM staging_seo_dashboard.locations s
+JOIN locations l ON l.dataforseo_location_code = s.dataforseo_location_code
+                AND l.brand_id = '<TEKREVOL_BRAND_ID>'::uuid;
+```
+
+Verify 23 rows in the map.
+
+### 1.2 Keyword lists (auto-create per target_url)
+
+Group keywords by target_url. Each unique target_url becomes a `keyword_lists` entry. Expected: 54 lists from unique target_urls plus one Uncategorized.
+
+```sql
+BEGIN;
+
+INSERT INTO keyword_lists (id, brand_id, name, description, created_at)
+SELECT
+  gen_random_uuid(),
+  '<TEKREVOL_BRAND_ID>'::uuid,
+  INITCAP(REPLACE(REPLACE(
+    REGEXP_REPLACE(s.target_url, '^https?://[^/]+/', ''),
+    '-', ' '), '/', ' - ')),
+  s.target_url,
+  MIN(s.created_at)
+FROM staging_seo_dashboard.keywords s
+WHERE s.target_url IS NOT NULL
+GROUP BY s.target_url
+ON CONFLICT (brand_id, name) DO NOTHING;
+
+INSERT INTO keyword_lists (id, brand_id, name, description, created_at)
+VALUES (gen_random_uuid(), '<TEKREVOL_BRAND_ID>'::uuid, 'Uncategorized', 'Keywords with no target URL', now())
+ON CONFLICT (brand_id, name) DO NOTHING;
+
+COMMIT;
+```
+
+Report count of lists created. Expected: 54 URL-based lists + 1 Uncategorized = 55.
+
+### 1.3 Keywords schema additions + data migration (425 rows)
+
+The dump's `keywords` table has fields the current schema doesn't hold: `target_url`, `priority`, `intent_hint`, `cluster`, `is_core_page`, `track_daily`. Rather than dropping them, add columns.
+
+**Schema additions (scoped transactional DDL only — no blanket drizzle-kit push):**
+
+```sql
+BEGIN;
+
+ALTER TABLE keywords
+ADD COLUMN IF NOT EXISTS target_url text,
+ADD COLUMN IF NOT EXISTS priority text,
+ADD COLUMN IF NOT EXISTS intent_hint text,
+ADD COLUMN IF NOT EXISTS cluster text,
+ADD COLUMN IF NOT EXISTS is_core_page boolean NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS track_daily boolean NOT NULL DEFAULT true,
+ADD COLUMN IF NOT EXISTS difficulty numeric(5,2);
+
+ALTER TABLE keywords
+ADD CONSTRAINT keywords_priority_check
+  CHECK (priority IS NULL OR priority IN ('P0', 'P1', 'P2', 'P3'));
+
+COMMIT;
+```
+
+**Update Drizzle schema in `lib/db/src/schema/` to reflect these additions.** Report the diff before committing.
+
+**Data migration:**
+
+```sql
+BEGIN;
+
+CREATE TEMP TABLE keyword_id_map (
+  old_id integer PRIMARY KEY,
+  new_id uuid NOT NULL
+);
+
+WITH inserted AS (
+  INSERT INTO keywords (
+    id, brand_id, keyword_text, list_id, location_id, target_url,
+    priority, intent_hint, cluster, is_core_page, track_daily,
+    search_volume, difficulty, is_active, created_at, updated_at
+  )
+  SELECT
+    gen_random_uuid(),
+    '<TEKREVOL_BRAND_ID>'::uuid,
+    s.keyword,
+    kl.id,
+    lm.new_id,
+    s.target_url,
+    s.priority,
+    s.intent_hint,
+    s.cluster,
+    s.is_core_page,
+    s.track_daily,
+    s.search_volume,
+    s.difficulty,
+    s.is_active,
+    s.created_at,
+    s.updated_at
+  FROM staging_seo_dashboard.keywords s
+  LEFT JOIN location_id_map lm ON lm.old_id = s.location_id
+  LEFT JOIN keyword_lists kl ON (
+    (s.target_url IS NOT NULL AND kl.description = s.target_url AND kl.brand_id = '<TEKREVOL_BRAND_ID>'::uuid)
+    OR (s.target_url IS NULL AND kl.name = 'Uncategorized' AND kl.brand_id = '<TEKREVOL_BRAND_ID>'::uuid)
+  )
+  ON CONFLICT (brand_id, keyword_text, location_id) DO NOTHING
+  RETURNING id, keyword_text
+)
+INSERT INTO keyword_id_map (old_id, new_id)
+SELECT s.id, i.id
+FROM staging_seo_dashboard.keywords s
+JOIN inserted i ON i.keyword_text = s.keyword;
+
+COMMIT;
+```
+
+Verify count. Expected: 425 keywords, mapped across 55 keyword_lists.
+
+If existing Marketing OS keywords conflict with dump entries (per Phase 0.3 policy), report the conflict count and skipped rows.
+
+### 1.4 Rank snapshots (5,447 rows)
+
+Map dump's `rankings_history` to Marketing OS `rank_snapshots`.
+
+```sql
+BEGIN;
+
+INSERT INTO rank_snapshots (
+  id, brand_id, keyword_id, location_id, position, url,
+  serp_features, captured_at, created_at
+)
+SELECT
+  gen_random_uuid(),
+  '<TEKREVOL_BRAND_ID>'::uuid,
+  km.new_id,
+  lm.new_id,
+  s.position,
+  s.url,
+  s.serp_features,
+  s.date::timestamptz + INTERVAL '12 hours',
+  s.created_at
+FROM staging_seo_dashboard.rankings_history s
+JOIN keyword_id_map km ON km.old_id = s.keyword_id
+LEFT JOIN location_id_map lm ON lm.old_id = s.location_id;
+
+COMMIT;
+```
+
+INNER JOIN on `keyword_id_map` means rows with orphaned keyword_ids are dropped. Report count of orphans if INSERT count is less than 5,447.
+
+### 1.5 Competitor insights (422 rows)
+
+Marketing OS `competitor_insights` may not have all the columns needed. Verify schema first and add missing columns if necessary.
+
+```sql
+BEGIN;
+
+-- Additive schema additions if needed
+ALTER TABLE competitor_insights
+ADD COLUMN IF NOT EXISTS date_captured timestamptz,
+ADD COLUMN IF NOT EXISTS above_us_keyword_count integer DEFAULT 0,
+ADD COLUMN IF NOT EXISTS authority_score numeric(5,2),
+ADD COLUMN IF NOT EXISTS average_position numeric(5,2),
+ADD COLUMN IF NOT EXISTS pressure_index numeric(6,2);
+
+INSERT INTO competitor_insights (
+  id, brand_id, competitor_domain, date_captured,
+  shared_keyword_count, above_us_keyword_count,
+  authority_score, average_position, pressure_index,
+  created_at
+)
+SELECT
+  gen_random_uuid(),
+  '<TEKREVOL_BRAND_ID>'::uuid,
+  s.competitor_domain,
+  s.date::timestamptz + INTERVAL '12 hours',
+  s.shared_keywords,
+  s.above_us_keywords,
+  s.authority_score,
+  s.avg_position,
+  s.pressure_index,
+  s.created_at
+FROM staging_seo_dashboard.competitor_metrics s;
+
+COMMIT;
+```
+
+Update Drizzle schema for the additive columns.
+
+### 1.6 Crawl schedules (1 row)
+
+Only 1 row; migrate to preserve continuity. Adapt from dump's frequency-based schedule to Marketing OS cron-based schedule:
+
+```sql
+BEGIN;
+
+INSERT INTO crawl_schedules (
+  id, brand_id, list_id, cron_expression, is_active,
+  last_run_at, next_run_at, created_at, updated_at
+)
+SELECT
+  gen_random_uuid(),
+  '<TEKREVOL_BRAND_ID>'::uuid,
+  NULL,
+  CASE s.frequency
+    WHEN 'daily' THEN '0 2 * * *'
+    WHEN 'weekly' THEN '0 2 * * 0'
+    ELSE '0 2 * * *'
+  END,
+  s.is_active,
+  s.last_run_at,
+  s.next_run_at,
+  s.created_at,
+  s.updated_at
+FROM staging_seo_dashboard.crawl_schedules s;
+
+COMMIT;
+```
+
+**Important — schedule activation warning:** The dump's schedule is likely `is_active = true`. If it activates immediately after migration, it will trigger daily DataForSEO crawls across all 425 keywords. At ~$0.02 per SERP call × 425 keywords × 30 days ≈ $255/month. Before Phase 1.6 activates, set `is_active = false` and let the dispatcher decide activation policy after import:
+
+```sql
+UPDATE crawl_schedules
+SET is_active = false
+WHERE brand_id = '<TEKREVOL_BRAND_ID>'::uuid
+  AND id IN (SELECT id FROM crawl_schedules
+             WHERE brand_id = '<TEKREVOL_BRAND_ID>'::uuid
+             ORDER BY created_at DESC LIMIT 1);
+```
+
+Report that the schedule is imported but inactive. Dispatcher reactivates via SEO OS Schedules page after review.
+
+**Pause after Phase 1.** Dispatcher verifies data by inspecting SEO OS Keywords page — should show 425 keywords, 23 locations, 55 keyword lists. Ranking history should appear in Rankings page going back to December 2025.
+
+---
+
+## Phase 2 — LLM citation preservation (new tables)
+
+Create new brand-scoped tables mirroring the dump schemas. No UI is built for these in this dispatch — data preserved for a future AI Research module.
+
+### 2.1 Schema — 6 new tables
+
+Scoped transactional DDL. All brand-scoped. All added to `BRAND_SCOPED_TABLES` allow-list.
+
+```sql
+BEGIN;
+
+CREATE TABLE llm_citation_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  run_type text NOT NULL,
+  status text NOT NULL,
+  started_at timestamptz NOT NULL,
+  completed_at timestamptz,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX llm_citation_runs_brand_idx ON llm_citation_runs(brand_id);
+
+CREATE TABLE llm_citation_snapshots (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  run_id uuid REFERENCES llm_citation_runs(id) ON DELETE set null,
+  entity_type text NOT NULL,
+  entity_domain text NOT NULL,
+  entity_name text,
+  platform text NOT NULL,
+  mentions_count integer NOT NULL DEFAULT 0,
+  ai_search_volume integer NOT NULL DEFAULT 0,
+  impressions integer NOT NULL DEFAULT 0,
+  pages_count integer NOT NULL DEFAULT 0,
+  mentions_change integer NOT NULL DEFAULT 0,
+  ai_search_volume_change integer NOT NULL DEFAULT 0,
+  captured_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX llm_citation_snapshots_brand_platform_idx ON llm_citation_snapshots(brand_id, platform);
+CREATE INDEX llm_citation_snapshots_captured_at_idx ON llm_citation_snapshots(captured_at);
+
+CREATE TABLE llm_citation_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  snapshot_id uuid NOT NULL REFERENCES llm_citation_snapshots(id) ON DELETE cascade,
+  question text,
+  answer_excerpt text,
+  cited_url text,
+  cited_domain text,
+  cited_page_title text,
+  source_name text,
+  snippet text,
+  reference_position integer,
+  ai_search_volume integer DEFAULT 0,
+  impressions integer DEFAULT 0,
+  platform text NOT NULL,
+  location_code integer,
+  language_code text,
+  citation_status text DEFAULT 'new',
+  notes text,
+  intent text,
+  captured_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX llm_citation_items_brand_idx ON llm_citation_items(brand_id);
+CREATE INDEX llm_citation_items_snapshot_idx ON llm_citation_items(snapshot_id);
+CREATE INDEX llm_citation_items_cited_domain_idx ON llm_citation_items(cited_domain);
+
+CREATE TABLE llm_citation_top_pages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  snapshot_id uuid NOT NULL REFERENCES llm_citation_snapshots(id) ON DELETE cascade,
+  page_url text NOT NULL,
+  page_title text,
+  citation_count integer NOT NULL DEFAULT 0,
+  platform text NOT NULL,
+  captured_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX llm_citation_top_pages_brand_idx ON llm_citation_top_pages(brand_id);
+
+CREATE TABLE llm_competitors (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  competitor_domain text NOT NULL,
+  competitor_name text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (brand_id, competitor_domain)
+);
+
+CREATE TABLE ai_overview_citations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  snapshot_id uuid REFERENCES llm_citation_snapshots(id) ON DELETE set null,
+  keyword_id uuid REFERENCES keywords(id) ON DELETE set null,
+  domain text NOT NULL,
+  url text,
+  page_title text,
+  source_name text,
+  cited_text text,
+  ai_generated_context text,
+  reference_position integer,
+  is_element_level boolean NOT NULL DEFAULT false,
+  content_type text,
+  topic_category text,
+  captured_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ai_overview_citations_brand_idx ON ai_overview_citations(brand_id);
+CREATE INDEX ai_overview_citations_keyword_idx ON ai_overview_citations(keyword_id);
+CREATE INDEX ai_overview_citations_domain_idx ON ai_overview_citations(domain);
+
+COMMIT;
+```
+
+Update `BRAND_SCOPED_TABLES` allow-list with the six new table names. Update Drizzle schema in `lib/db/src/schema/`. Report the schema diff before committing.
+
+### 2.2 Data migration
+
+Build id mapping tables first (integer → uuid), then migrate in FK order.
+
+```sql
+CREATE TEMP TABLE llm_citation_run_id_map (
+  old_id integer PRIMARY KEY, new_id uuid NOT NULL
+);
+CREATE TEMP TABLE llm_citation_snapshot_id_map (
+  old_id integer PRIMARY KEY, new_id uuid NOT NULL
+);
+
+-- Migrate llm_citation_runs (4 rows)
+WITH inserted AS (
+  INSERT INTO llm_citation_runs (brand_id, run_type, status, started_at, completed_at, metadata, created_at)
+  SELECT '<TEKREVOL_BRAND_ID>'::uuid,
+         COALESCE(s.run_type, 'unknown'),
+         COALESCE(s.status, 'complete'),
+         s.started_at, s.completed_at,
+         COALESCE(s.metadata, '{}'::jsonb),
+         s.created_at
+  FROM staging_seo_dashboard.llm_citation_runs s
+  RETURNING id, started_at
+)
+INSERT INTO llm_citation_run_id_map (old_id, new_id)
+SELECT s.id, i.id
+FROM staging_seo_dashboard.llm_citation_runs s
+JOIN inserted i ON i.started_at = s.started_at;
+```
+
+```sql
+-- Migrate llm_citation_snapshots (14 rows)
+WITH inserted AS (
+  INSERT INTO llm_citation_snapshots (
+    brand_id, run_id, entity_type, entity_domain, entity_name, platform,
+    mentions_count, ai_search_volume, impressions, pages_count,
+    mentions_change, ai_search_volume_change, captured_at, created_at
+  )
+  SELECT
+    '<TEKREVOL_BRAND_ID>'::uuid, rm.new_id, s.entity_type, s.entity_domain, s.entity_name, s.platform,
+    s.mentions_count, s.ai_search_volume, s.impressions, s.pages_count,
+    s.mentions_change, s.ai_search_volume_change, s.captured_at, s.created_at
+  FROM staging_seo_dashboard.llm_citation_snapshots s
+  LEFT JOIN llm_citation_run_id_map rm ON rm.old_id = s.run_id
+  RETURNING id, captured_at, entity_domain, platform
+)
+INSERT INTO llm_citation_snapshot_id_map (old_id, new_id)
+SELECT s.id, i.id
+FROM staging_seo_dashboard.llm_citation_snapshots s
+JOIN inserted i ON i.captured_at = s.captured_at
+              AND i.entity_domain = s.entity_domain
+              AND i.platform = s.platform;
+```
+
+```sql
+-- Migrate llm_citation_items (22,019 rows)
+INSERT INTO llm_citation_items (
+  brand_id, snapshot_id, question, answer_excerpt, cited_url, cited_domain,
+  cited_page_title, source_name, snippet, reference_position,
+  ai_search_volume, impressions, platform, location_code, language_code,
+  citation_status, notes, intent, captured_at, created_at
+)
+SELECT
+  '<TEKREVOL_BRAND_ID>'::uuid, sm.new_id,
+  s.question, s.answer_excerpt, s.cited_url, s.cited_domain,
+  s.cited_page_title, s.source_name, s.snippet, s.reference_position,
+  s.ai_search_volume, s.impressions, s.platform, s.location_code, s.language_code,
+  s.citation_status, s.notes, s.intent, s.captured_at, s.created_at
+FROM staging_seo_dashboard.llm_citation_items s
+JOIN llm_citation_snapshot_id_map sm ON sm.old_id = s.snapshot_id;
+```
+
+```sql
+-- Migrate llm_citation_top_pages (57 rows)
+INSERT INTO llm_citation_top_pages (
+  brand_id, snapshot_id, page_url, page_title, citation_count, platform, captured_at, created_at
+)
+SELECT
+  '<TEKREVOL_BRAND_ID>'::uuid, sm.new_id,
+  s.page_url, s.page_title, s.citation_count, s.platform, s.captured_at, s.created_at
+FROM staging_seo_dashboard.llm_citation_top_pages s
+JOIN llm_citation_snapshot_id_map sm ON sm.old_id = s.snapshot_id;
+```
+
+```sql
+-- Migrate llm_competitors (5 rows)
+INSERT INTO llm_competitors (brand_id, competitor_domain, competitor_name, is_active, created_at, updated_at)
+SELECT '<TEKREVOL_BRAND_ID>'::uuid, s.competitor_domain, s.competitor_name, s.is_active, s.created_at, s.updated_at
+FROM staging_seo_dashboard.llm_competitors s
+ON CONFLICT (brand_id, competitor_domain) DO NOTHING;
+```
+
+```sql
+-- Migrate ai_overview_citations (24,943 rows)
+INSERT INTO ai_overview_citations (
+  brand_id, snapshot_id, keyword_id, domain, url, page_title, source_name,
+  cited_text, ai_generated_context, reference_position, is_element_level,
+  content_type, topic_category, captured_at, created_at
+)
+SELECT
+  '<TEKREVOL_BRAND_ID>'::uuid,
+  sm.new_id,
+  km.new_id,
+  s.domain, s.url, s.page_title, s.source_name,
+  s.cited_text, s.ai_generated_context, s.reference_position, s.is_element_level,
+  s.content_type, s.topic_category, s.captured_at, s.created_at
+FROM staging_seo_dashboard.ai_overview_citations s
+LEFT JOIN llm_citation_snapshot_id_map sm ON sm.old_id = s.snapshot_id
+LEFT JOIN keyword_id_map km ON km.old_id = s.keyword_id;
+```
+
+Note: `keyword_id_map` was created in Phase 1.3 as a TEMP table. If Phase 2 runs in a separate session, the temp table won't exist. Two options:
+- Run Phases 1 and 2 in a single session (recommended)
+- Rebuild the mapping at the start of Phase 2 by joining current `keywords` back to staging by keyword_text + location match
+
+**Report row counts after each INSERT:**
+- llm_citation_runs: 4
+- llm_citation_snapshots: 14
+- llm_citation_items: 22,019
+- llm_citation_top_pages: 57
+- llm_competitors: 5
+- ai_overview_citations: 24,943 (some may drop if keyword FK is unresolvable — report drop count)
+
+**Pause after Phase 2.** Dispatcher verifies row counts.
+
+---
+
+## Phase 3 — Cleanup
+
+```sql
+BEGIN;
+DROP SCHEMA staging_seo_dashboard CASCADE;
+COMMIT;
+```
+
+Verify no reference remains:
+
+```bash
+grep -r "staging_seo_dashboard" lib/ artifacts/ || echo "clean"
+```
+
+---
+
+## Phase 4 — Verification and completion
+
+### 4.1 Post-migration verification
+
+Dispatcher checks:
+
+1. Log into SEO OS as admin
+2. Keywords page shows 425 rows for TekRevol brand
+3. Locations page shows 23 rows
+4. Lists page shows 55 groupings
+5. Rankings page shows historical data going back to December 2025
+6. Competitors section shows 4-5 competitor domains with metrics
+
+### 4.2 Architect review
+
+Run `git show --stat HEAD` before declaring complete. Treat architect feedback as authoritative.
+
+Two specific areas to scrutinize:
+
+**Schema additions on `keywords` and `competitor_insights`.** ALTER TABLE ADD COLUMN operations were applied additively. Verify no existing queries are affected — Drizzle typing should catch any breakage.
+
+**LLM citation table indexes.** Six new tables with ~47K rows total. Verify the indexes cover the query patterns future consumers will use — brand_id filter first (always), then platform, captured_at, or entity_domain depending on the surface. If any index is missing, add before completion.
+
+### 4.3 Final report
+
+Report to dispatcher:
+- Total rows migrated per table
+- Any FK drift (orphaned references logged)
+- Any conflicts skipped (existing keywords preserved)
+- Schema additions applied
+- Crawl schedule status (imported but inactive per Phase 1.6)
+- `git show --stat HEAD` output
+
+---
+
+## Operational notes
+
+- **Backup before starting.** Phase 0.1 is not optional. Any data migration on a live database requires a rollback path.
+
+- **All operations transactional.** Every INSERT block wrapped in BEGIN/COMMIT. If any phase fails partway, roll back that phase and retry. Staging schema stays until Phase 3, so source data remains available for retry.
+
+- **Crawl schedule imported inactive.** The dump's daily schedule is imported with `is_active = false`. If reactivated, it triggers ~$255/month in DataForSEO cost. Dispatcher decides activation policy after import.
+
+- **LLM citation UI deferred.** No frontend surfaces built for the six new tables. Data preserved for a future AI Research module dispatch.
+
+- **Historical timestamps preserved.** New UUIDs generated but `created_at` and `captured_at` timestamps stay honest to the data's origin.
+
+- **Foreign key drift.** Some rows may reference keywords or snapshots that don't survive migration (edge cases). LEFT JOINs handle these gracefully by nulling the FK. Report drift counts.
+
+- **Scoped transactional DDL only.** No blanket `drizzle-kit push` — the existing drift (`user_roles`, `page_events`, `playbook_sections`) remains untouched.
+
+- **What this dispatch does NOT do:**
+  - Migrate SERP layout items (680K rows, transient)
+  - Migrate competitor SERP presence (639K rows, transient)
+  - Migrate backlinks (separate subsystem)
+  - Migrate GSC data (dead integration)
+  - Build any UI for LLM citation data
+  - Activate the crawl schedule (dispatcher decides after import)
+  - Set up new crawl schedules against the imported keywords (Rabia does this manually in the Schedules page after import if needed)
+
+- **If anything fails mid-migration:** transactions roll back cleanly. Staging schema stays until Phase 3 cleanup. No partial state visible to users.
+
+- **Startup check for stale task files** was step one; if that returned anything, it was archived before this work began.
+
+---
+
+**Begin startup check → Phase 0. Report backup completion, brand verification, keyword conflict count, and staging load results before Phase 1 begins. Pause after Phase 1 for dispatcher verification. Pause after Phase 2 for row count verification. Phase 4 architect review gates completion. Same operational rules as prior dispatches: scoped transactional DDL only, `git show --stat HEAD` before declaring complete, treat architect feedback as authoritative, no scope creep.**
