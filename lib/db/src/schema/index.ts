@@ -28,6 +28,8 @@ export * from "./voice-library";
 export * from "./interview-answers";
 // SEO Intelligence — keyword research, rank tracking, competitor discovery
 export * from "./seo";
+// LLM Citation Preservation — migrated legacy AI-citation data (future AI Research module)
+export * from "./llm-citations";
 // Shared Data Layer — cross-module bridge tables (ContentForge <-> SEO OS)
 export * from "./cross-module";
 // ContentForge Quality Fix — asset corpora (reviews bank, link targets, rules)

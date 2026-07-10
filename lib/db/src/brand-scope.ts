@@ -35,6 +35,13 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "crawl_schedules",
   "competitor_insights",
   "blacklisted_domains",
+  // LLM Citation Preservation — migrated legacy AI-citation data
+  "llm_citation_runs",
+  "llm_citation_snapshots",
+  "llm_citation_items",
+  "llm_citation_top_pages",
+  "llm_competitors",
+  "ai_overview_citations",
   // Sprint 3 — Quality Gate
   "content_objects",
   "qa_runs",
