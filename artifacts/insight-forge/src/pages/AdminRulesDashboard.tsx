@@ -5,6 +5,7 @@ import {
   BookOpen,
   ChevronRight,
   Clock,
+  Eye,
   ExternalLink,
   Globe,
   History,
@@ -121,10 +122,78 @@ function defaultGlobal(): GlobalData {
     cost_budget: { estimated_usd_per_article: null, daily_brand_cap_usd: null },
   };
 }
-function defaultTypeData(): TypeData {
+/**
+ * Per-type defaults — section kinds, boolean flags, and structural targets.
+ * These power both the "new template" initial state AND the Overview card
+ * descriptions. Mirrors the cascade map: only per-type-specific fields live
+ * here; cascadable fields (mentions, DR, etc.) always start as null (inherit).
+ */
+const TYPE_DEFAULTS: Record<ContentTypeKey, {
+  wordCount: number;
+  h2CountTarget: number;
+  sectionKinds: string[];
+  booleanFlags: Record<string, boolean>;
+  description: string;
+}> = {
+  cost_guide: {
+    wordCount: 2500, h2CountTarget: 6,
+    sectionKinds: ["intro", "cost_overview", "cost_factors", "cost_by_scope", "comparison", "faq", "cta"],
+    booleanFlags: { must_include_price_table: true, must_include_cta: true },
+    description: "Pricing transparency articles. Requires cost breakdown table and scope-by-scope comparison.",
+  },
+  comparison_guide: {
+    wordCount: 2200, h2CountTarget: 5,
+    sectionKinds: ["intro", "comparison_table", "factor_breakdown", "pros_cons", "recommendation", "cta"],
+    booleanFlags: { must_include_comparison_table: true, must_include_cta: true },
+    description: "Side-by-side comparison of services, tools, or vendors. Requires a comparison table.",
+  },
+  how_to_guide: {
+    wordCount: 1800, h2CountTarget: 5,
+    sectionKinds: ["intro", "prerequisites", "steps", "common_mistakes", "troubleshooting", "cta"],
+    booleanFlags: { must_include_numbered_steps: true, must_include_cta: true },
+    description: "Step-by-step instruction articles. Numbered steps required.",
+  },
+  statistics_trends: {
+    wordCount: 2000, h2CountTarget: 5,
+    sectionKinds: ["intro", "key_statistics", "trend_analysis", "industry_implications", "expert_outlook", "conclusion"],
+    booleanFlags: { must_include_data_sources_section: true },
+    description: "Data-led articles summarising industry statistics. External citation count is higher than other types.",
+  },
+  explainer: {
+    wordCount: 1500, h2CountTarget: 6,
+    sectionKinds: ["intro", "what_is", "how_it_works", "why_it_matters", "examples", "cta"],
+    booleanFlags: { must_include_cta: true },
+    description: "Foundational explainers for awareness-stage readers. Clear definitions required.",
+  },
+  case_study: {
+    wordCount: 1800, h2CountTarget: 6,
+    sectionKinds: ["intro", "client_background", "challenge", "solution", "implementation", "results", "conclusion"],
+    booleanFlags: { must_include_metrics: true, must_include_client_quote: true },
+    description: "Client success stories. Requires measurable outcomes and an attributed client quote.",
+  },
+  vertical_deep_dive: {
+    wordCount: 3000, h2CountTarget: 7,
+    sectionKinds: ["intro", "industry_overview", "market_dynamics", "key_challenges", "solution_landscape", "case_evidence", "outlook"],
+    booleanFlags: { must_include_industry_data: true },
+    description: "Long-form vertical reports for advanced readers. Highest word count and citation density.",
+  },
+  thought_leadership: {
+    wordCount: 2000, h2CountTarget: 5,
+    sectionKinds: ["intro", "thesis_statement", "evidence_and_argument", "counterargument", "resolution", "call_to_action"],
+    booleanFlags: { must_include_original_opinion: true },
+    description: "Opinion and perspective pieces. Must carry an explicit original thesis.",
+  },
+};
+
+function defaultTypeDataForType(key: ContentTypeKey): TypeData {
+  const d = TYPE_DEFAULTS[key];
   return {
-    article_structure: { target_word_count: 2000, h2_count_target: 5, section_kinds: ["intro", "body", "cta"] },
-    required_elements: { min_named_projects: 0, min_testimonials: 0, min_internal_links: 2, min_external_citations: 1 },
+    article_structure: { target_word_count: d.wordCount, h2_count_target: d.h2CountTarget, section_kinds: d.sectionKinds },
+    required_elements: {
+      min_named_projects: 0, min_testimonials: 0,
+      min_internal_links: 2, min_external_citations: 1,
+      ...d.booleanFlags,
+    },
     brand_mention_overrides: { mentions_per_article_target: null, mentions_per_article_max: null },
     citation_authority_overrides: { dr_minimum: null, max_age_years: null, max_per_article: null, domain_min_dr: {} },
   };
@@ -316,8 +385,9 @@ function GlobalForm({ data, onChange }: { data: GlobalData; onChange: (d: Global
 /* Per-type form with inherit/override toggles                                 */
 /* -------------------------------------------------------------------------- */
 
-function TypeForm({ data, onChange, globalData }: {
+function TypeForm({ data, onChange, globalData, contentType, brandId }: {
   data: TypeData; onChange: (d: TypeData) => void; globalData: GlobalData | null;
+  contentType: ContentTypeKey; brandId: string;
 }) {
   const setStructure = (patch: Partial<TypeData["article_structure"]>) =>
     onChange({ ...data, article_structure: { ...data.article_structure, ...patch } });
@@ -337,6 +407,13 @@ function TypeForm({ data, onChange, globalData }: {
 
   return (
     <div className="space-y-8">
+      {/* Type description */}
+      {TYPE_DEFAULTS[contentType]?.description && (
+        <p className="text-sm text-ink-muted -mt-2 pb-2 border-b border-rule/50">
+          {TYPE_DEFAULTS[contentType].description}
+        </p>
+      )}
+
       {/* Article structure */}
       <section>
         <h3 className="text-sm font-semibold text-ink mb-4 pb-2 border-b border-rule">Article structure</h3>
@@ -478,6 +555,124 @@ function TypeForm({ data, onChange, globalData }: {
           </div>
         </div>
       </section>
+
+      {/* Inline resolved-rules preview for this content type */}
+      <ResolvedPreviewPanel brandId={brandId} contentType={contentType} />
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Inline resolved-preview panel (per-type forms only)                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Collapsible panel at the foot of each per-type form. Calls /resolve for
+ * exactly this content type so Rabia can see what the planner will actually
+ * receive — without navigating to the global Preview section.
+ *
+ * Loads lazily on first open and caches the result in local state. Calling
+ * "Refresh" (or re-opening after a save) triggers a fresh fetch.
+ */
+function ResolvedPreviewPanel({ brandId, contentType }: { brandId: string; contentType: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [resolved, setResolved] = useState<ResolvedTemplate | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetch_ = async () => {
+    if (!brandId) return;
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch(
+        `/api/admin/content-plan-templates/resolve?brandId=${brandId}&contentType=${contentType}`,
+        { credentials: "include" },
+      );
+      if (!r.ok) throw new Error(await r.text());
+      setResolved(await r.json());
+    } catch (e) { setError((e as Error).message); }
+    finally { setLoading(false); }
+  };
+
+  const toggle = () => {
+    if (!open && !resolved) fetch_();
+    setOpen((o) => !o);
+  };
+
+  const prov = (p: "global" | "per_type") =>
+    p === "per_type"
+      ? <span className="text-[10px] text-accent font-medium ml-1">override</span>
+      : <span className="text-[10px] text-ink-muted/50 ml-1">global</span>;
+
+  return (
+    <div className="border-t border-rule pt-6 mt-2">
+      <div className="flex items-center gap-3">
+        <button onClick={toggle}
+          className="flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink transition-colors">
+          <Eye className="h-3.5 w-3.5" />
+          {open ? "Hide resolved preview" : "Preview resolved rules for this type"}
+        </button>
+        {open && resolved && !loading && (
+          <button onClick={fetch_} className="text-xs text-ink-muted/50 hover:text-ink-muted transition-colors">
+            Refresh
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-4">
+          {loading && (
+            <div className="flex items-center gap-2 text-xs text-ink-muted">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+            </div>
+          )}
+          {error && <p className="text-xs text-red-500">{error}</p>}
+          {resolved && !loading && (
+            <div className="p-4 bg-secondary/30 rounded-md border border-rule space-y-1.5 text-sm">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
+                  Resolved — {resolved.contentType.replace(/_/g, " ")}
+                </span>
+                <span className="text-[10px] text-ink-muted">
+                  global v{resolved.versions.global}
+                  {resolved.versions.perType !== null ? ` · type v${resolved.versions.perType}` : ""}
+                </span>
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1">
+                <span className="text-ink-muted text-xs">Word count</span>
+                <span className="text-xs">{resolved.articleStructure?.targetWordCount.toLocaleString() ?? "—"}</span>
+                <span className="text-ink-muted text-xs">Sections</span>
+                <span className="text-xs truncate">{resolved.articleStructure?.sectionKinds.join(" → ") ?? "—"}</span>
+                <span className="text-ink-muted text-xs">Mentions target</span>
+                <span className="text-xs">{resolved.brandVoice.mentionsPerArticleTarget} {prov(resolved.provenance.mentionsPerArticleTarget)}</span>
+                <span className="text-ink-muted text-xs">Mentions max</span>
+                <span className="text-xs">{resolved.brandVoice.mentionsPerArticleMax} {prov(resolved.provenance.mentionsPerArticleMax)}</span>
+                <span className="text-ink-muted text-xs">DR minimum</span>
+                <span className="text-xs">≥ {resolved.citationAuthority.drMinimum} {prov(resolved.provenance.drMinimum)}</span>
+                <span className="text-ink-muted text-xs">Max age (years)</span>
+                <span className="text-xs">≤ {resolved.citationAuthority.maxAgeYears} {prov(resolved.provenance.maxAgeYears)}</span>
+                <span className="text-ink-muted text-xs">Max citations</span>
+                <span className="text-xs">{resolved.citationAuthority.maxPerArticle} {prov(resolved.provenance.maxPerArticle)}</span>
+                {resolved.citationAuthority.whitelistedDomains.length > 0 && (
+                  <>
+                    <span className="text-ink-muted text-xs">Domain overrides</span>
+                    <span className="text-xs">
+                      {resolved.citationAuthority.whitelistedDomains
+                        .map((d) => `${d.domain} (DR ${d.effectiveDrMinimum})`)
+                        .join(", ")}
+                    </span>
+                  </>
+                )}
+                <span className="text-ink-muted text-xs">Internal / external</span>
+                <span className="text-xs">
+                  {resolved.requiredElements?.minInternalLinks ?? "—"} links ·{" "}
+                  {resolved.requiredElements?.minExternalCitations ?? "—"} citations
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -683,7 +878,7 @@ export default function AdminRulesDashboard() {
     const isType = CONTENT_TYPES.some((ct) => ct.key === activeSection);
     if (isType) {
       const d = templates.byType[activeSection as ContentTypeKey]?.template_data as unknown as Partial<TypeData> | undefined;
-      if (!d) return defaultTypeData();
+      if (!d) return defaultTypeDataForType(activeSection as ContentTypeKey);
       return {
         article_structure: d.article_structure ?? { target_word_count: 2000, h2_count_target: 5, section_kinds: [] },
         required_elements: d.required_elements ?? { min_named_projects: 0, min_testimonials: 0, min_internal_links: 2, min_external_citations: 1 },
@@ -862,7 +1057,13 @@ export default function AdminRulesDashboard() {
                   <GlobalForm data={effectiveData as GlobalData} onChange={handleDraftChange as (d: GlobalData) => void} />
                 )}
                 {CONTENT_TYPES.some((ct) => ct.key === activeSection) && effectiveData && (
-                  <TypeForm data={effectiveData as TypeData} onChange={handleDraftChange as (d: TypeData) => void} globalData={globalData} />
+                  <TypeForm
+                    data={effectiveData as TypeData}
+                    onChange={handleDraftChange as (d: TypeData) => void}
+                    globalData={globalData}
+                    contentType={activeSection as ContentTypeKey}
+                    brandId={brandId ?? ""}
+                  />
                 )}
                 {activeSection === "named-projects" && (
                   <div className="space-y-4">

@@ -195,6 +195,54 @@ export type TemplateVersionRow = {
 };
 
 /* -------------------------------------------------------------------------- */
+/* TEMPLATE CASCADE MAP                                                        */
+/*                                                                             */
+/* Explicit documentation of which per-type JSONB keys cascade to which       */
+/* global JSONB keys. Read this table first when modifying getResolvedTemplate */
+/* — the merge logic must stay consistent with these mappings.                 */
+/*                                                                             */
+/* Cascade rule for every entry:                                               */
+/*   null per-type value  → inherit the global value (provenance = "global")  */
+/*   explicit per-type value → use the override (provenance = "per_type")     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Each entry maps:
+ *   perTypePath  — dotted path into PerTypeTemplateData JSONB
+ *   globalPath   — dotted path into GlobalTemplateData JSONB (the fallback)
+ *   resolvedField — camelCase field on ResolvedTemplate that carries the result
+ */
+export const TEMPLATE_CASCADE_MAP = [
+  {
+    perTypePath:   "brand_mention_overrides.mentions_per_article_target",
+    globalPath:    "brand_voice_global.mentions_per_article_target",
+    resolvedField: "brandVoice.mentionsPerArticleTarget",
+  },
+  {
+    perTypePath:   "brand_mention_overrides.mentions_per_article_max",
+    globalPath:    "brand_voice_global.mentions_per_article_max",
+    resolvedField: "brandVoice.mentionsPerArticleMax",
+  },
+  {
+    perTypePath:   "citation_authority_overrides.dr_minimum",
+    globalPath:    "citation_authority.dr_minimum",
+    resolvedField: "citationAuthority.drMinimum",
+  },
+  {
+    perTypePath:   "citation_authority_overrides.max_age_years",
+    globalPath:    "citation_authority.max_age_years",
+    resolvedField: "citationAuthority.maxAgeYears",
+  },
+  {
+    perTypePath:   "citation_authority_overrides.max_per_article",
+    globalPath:    "citation_authority.max_per_article",
+    resolvedField: "citationAuthority.maxPerArticle",
+  },
+] as const;
+
+export type CascadeEntry = (typeof TEMPLATE_CASCADE_MAP)[number];
+
+/* -------------------------------------------------------------------------- */
 /* getResolvedTemplate                                                         */
 /* -------------------------------------------------------------------------- */
 
