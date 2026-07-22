@@ -779,10 +779,18 @@ function OverviewSection({ templates, onNavigate }: {
               article_structure?: { target_word_count?: number; section_kinds?: string[] };
               required_elements?: Record<string, unknown>;
             } | undefined;
-            const boolFlags = d?.required_elements
-              ? Object.entries(d.required_elements).filter(([, v]) => typeof v === "boolean" && v === true).map(([k]) => k)
-              : [];
+            // Use saved template's flags when configured; fall back to TYPE_DEFAULTS
+            // so unconfigured type cards still show meaningful "Requires:" info.
+            const boolFlags: string[] = d?.required_elements
+              ? Object.entries(d.required_elements)
+                  .filter(([, v]) => typeof v === "boolean" && v === true)
+                  .map(([k]) => k)
+              : Object.entries(TYPE_DEFAULTS[key].booleanFlags)
+                  .filter(([, v]) => v)
+                  .map(([k]) => k);
             const defaults = TYPE_DEFAULTS[key];
+            const wordCount = d?.article_structure?.target_word_count ?? defaults.wordCount;
+            const sectionCount = d?.article_structure?.section_kinds?.length ?? defaults.sectionKinds.length;
             return (
               <button key={key} onClick={() => onNavigate(key)}
                 className="text-left p-3.5 border border-rule rounded-md hover:border-accent/40 hover:bg-secondary/30 transition-colors">
@@ -796,11 +804,21 @@ function OverviewSection({ templates, onNavigate }: {
                     : <span className="text-[10px] px-1.5 py-0.5 bg-secondary text-ink-muted/60 rounded-full shrink-0">defaults</span>}
                 </div>
                 <p className="text-[11px] text-ink-muted leading-snug mb-2 line-clamp-2">{defaults.description}</p>
-                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-muted">
-                  <span>{(d?.article_structure?.target_word_count ?? defaults.wordCount).toLocaleString()}w</span>
-                  <span>{(d?.article_structure?.section_kinds?.length ?? defaults.sectionKinds.length)} sections</span>
-                  {boolFlags.length > 0 && <span>{boolFlags.length} required flag{boolFlags.length !== 1 ? "s" : ""}</span>}
-                  {t && <span className="text-ink-muted/50">{fmtShort(t.created_at)}</span>}
+                {/* Scannable stats — words · sections · required flags by name */}
+                <div className="space-y-0.5 text-[11px] text-ink-muted">
+                  <div className="flex gap-x-3">
+                    <span>Words: {wordCount.toLocaleString()}</span>
+                    <span>Sections: {sectionCount}</span>
+                    {t && <span className="text-ink-muted/50">{fmtShort(t.created_at)}</span>}
+                  </div>
+                  {boolFlags.length > 0 && (
+                    <div>
+                      <span>Requires: </span>
+                      <span className="text-ink/70">
+                        {boolFlags.map((f) => f.replace(/^must_include_/, "").replace(/_/g, " ")).join(", ")}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </button>
             );
