@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { TagAutocompleteInput } from "@/components/TagAutocompleteInput";
 import { Navigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -53,7 +54,6 @@ type FormState = {
   outcome_summary: string;
   industry_tags: string[];
   keyword_tags: string[];
-  kw_input: string;
   client_display_name: string;
   is_confidential: boolean;
   is_illustrative: boolean;
@@ -67,7 +67,6 @@ const EMPTY_FORM: FormState = {
   outcome_summary: "",
   industry_tags: [],
   keyword_tags: [],
-  kw_input: "",
   client_display_name: "",
   is_confidential: false,
   is_illustrative: false,
@@ -89,7 +88,6 @@ function formFromProject(p: NamedProject): FormState {
     outcome_summary: p.outcome_summary,
     industry_tags: [...p.industry_tags],
     keyword_tags: [...p.keyword_tags],
-    kw_input: "",
     client_display_name: p.client_display_name ?? "",
     is_confidential: p.is_confidential,
     is_illustrative: p.is_illustrative,
@@ -166,19 +164,6 @@ export default function AdminNamedProjects() {
         : [...f.industry_tags, tag],
     }));
 
-  const addKwFromInput = () => {
-    const newTags = form.kw_input
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (!newTags.length) return;
-    setForm((f) => ({
-      ...f,
-      keyword_tags: Array.from(new Set([...f.keyword_tags, ...newTags])),
-      kw_input: "",
-    }));
-  };
-
   const removeKw = (tag: string) =>
     setForm((f) => ({ ...f, keyword_tags: f.keyword_tags.filter((t) => t !== tag) }));
 
@@ -192,15 +177,6 @@ export default function AdminNamedProjects() {
       return;
     }
     setSaving(true);
-    const kwAll = Array.from(
-      new Set([
-        ...form.keyword_tags,
-        ...form.kw_input
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-      ]),
-    );
     const body = {
       brand_id: brandId,
       name: form.name.trim(),
@@ -209,7 +185,7 @@ export default function AdminNamedProjects() {
       approach_summary: form.approach_summary.trim(),
       outcome_summary: form.outcome_summary.trim(),
       industry_tags: form.industry_tags,
-      keyword_tags: kwAll,
+      keyword_tags: form.keyword_tags,
       client_display_name: form.client_display_name.trim() || null,
       is_confidential: form.is_confidential,
       is_illustrative: form.is_illustrative,
@@ -560,18 +536,15 @@ export default function AdminNamedProjects() {
                     </span>
                   ))}
                 </div>
-                <input
-                  type="text"
-                  value={form.kw_input}
-                  onChange={(e) => setField("kw_input", e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === ",") {
-                      e.preventDefault();
-                      addKwFromInput();
-                    }
-                  }}
-                  placeholder="Type a keyword, press Enter or comma to add"
-                  className="w-full border border-rule rounded-sm px-2 py-1.5 bg-background text-sm"
+                <TagAutocompleteInput
+                  brandId={brandId}
+                  existing={form.keyword_tags}
+                  onAdd={(tag) =>
+                    setForm((f) => ({
+                      ...f,
+                      keyword_tags: Array.from(new Set([...f.keyword_tags, tag])),
+                    }))
+                  }
                 />
               </div>
 

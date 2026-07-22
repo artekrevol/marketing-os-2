@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TagAutocompleteInput } from "@/components/TagAutocompleteInput";
 import { Navigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -86,7 +87,6 @@ export default function AdminReviewsBank() {
     industry: [],
     keyword: [],
   });
-  const [tagKwInput, setTagKwInput] = useState("");
   const [savingTags, setSavingTags] = useState(false);
 
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -94,8 +94,7 @@ export default function AdminReviewsBank() {
     industry: string[];
     keyword: string[];
     merge: boolean;
-    kwInput: string;
-  }>({ industry: [], keyword: [], merge: true, kwInput: "" });
+  }>({ industry: [], keyword: [], merge: true });
   const [applyingBulk, setApplyingBulk] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -237,29 +236,12 @@ export default function AdminReviewsBank() {
   const openTagEdit = (r: Review) => {
     setTagEditId(r.id);
     setTagDraft({ industry: [...r.industry_tags], keyword: [...r.keyword_tags] });
-    setTagKwInput("");
   };
-
-  const flushKwInput = (
-    draft: typeof tagDraft,
-    input: string,
-  ): typeof tagDraft => ({
-    ...draft,
-    keyword: Array.from(
-      new Set([
-        ...draft.keyword,
-        ...input
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-      ]),
-    ),
-  });
 
   const saveTags = async () => {
     if (!tagEditId) return;
     setSavingTags(true);
-    const finalDraft = flushKwInput(tagDraft, tagKwInput);
+    const finalDraft = tagDraft;
     try {
       const resp = await fetch(`/api/admin/reviews-bank/${tagEditId}`, {
         method: "PATCH",
@@ -311,15 +293,7 @@ export default function AdminReviewsBank() {
   const applyBulkTags = async () => {
     if (selected.size === 0) return;
     setApplyingBulk(true);
-    const kw = Array.from(
-      new Set([
-        ...bulkDraft.keyword,
-        ...bulkDraft.kwInput
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-      ]),
-    );
+    const kw = bulkDraft.keyword;
     const hasIndustry = bulkDraft.industry.length > 0;
     const hasKeyword = kw.length > 0;
     if (!hasIndustry && !hasKeyword) {
@@ -350,7 +324,7 @@ export default function AdminReviewsBank() {
       toast.success(`Tags applied to ${data.updated as number} review(s).`);
       setSelected(new Set());
       setBulkOpen(false);
-      setBulkDraft({ industry: [], keyword: [], merge: true, kwInput: "" });
+      setBulkDraft({ industry: [], keyword: [], merge: true });
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -677,28 +651,15 @@ export default function AdminReviewsBank() {
                       </span>
                     ))}
                   </div>
-                  <input
-                    type="text"
-                    value={tagKwInput}
-                    onChange={(e) => setTagKwInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === ",") {
-                        e.preventDefault();
-                        const newTags = tagKwInput
-                          .split(",")
-                          .map((t) => t.trim())
-                          .filter(Boolean);
-                        if (newTags.length) {
-                          setTagDraft((d) => ({
-                            ...d,
-                            keyword: Array.from(new Set([...d.keyword, ...newTags])),
-                          }));
-                          setTagKwInput("");
-                        }
-                      }
-                    }}
-                    placeholder="Type a keyword, press Enter or comma to add"
-                    className="w-full border border-rule rounded-sm px-2 py-1.5 bg-background text-sm"
+                  <TagAutocompleteInput
+                    brandId={brandId}
+                    existing={tagDraft.keyword}
+                    onAdd={(tag) =>
+                      setTagDraft((d) => ({
+                        ...d,
+                        keyword: Array.from(new Set([...d.keyword, tag])),
+                      }))
+                    }
                   />
                 </div>
 
@@ -820,28 +781,15 @@ export default function AdminReviewsBank() {
                   </span>
                 ))}
               </div>
-              <input
-                type="text"
-                value={bulkDraft.kwInput}
-                onChange={(e) => setBulkDraft((d) => ({ ...d, kwInput: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === ",") {
-                    e.preventDefault();
-                    const newTags = bulkDraft.kwInput
-                      .split(",")
-                      .map((t) => t.trim())
-                      .filter(Boolean);
-                    if (newTags.length) {
-                      setBulkDraft((d) => ({
-                        ...d,
-                        keyword: Array.from(new Set([...d.keyword, ...newTags])),
-                        kwInput: "",
-                      }));
-                    }
-                  }
-                }}
-                placeholder="Type a keyword, press Enter or comma to add"
-                className="w-full border border-rule rounded-sm px-2 py-1.5 bg-background text-sm"
+              <TagAutocompleteInput
+                brandId={brandId}
+                existing={bulkDraft.keyword}
+                onAdd={(tag) =>
+                  setBulkDraft((d) => ({
+                    ...d,
+                    keyword: Array.from(new Set([...d.keyword, tag])),
+                  }))
+                }
               />
             </div>
 

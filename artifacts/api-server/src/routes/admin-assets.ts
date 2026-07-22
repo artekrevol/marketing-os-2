@@ -1402,4 +1402,45 @@ router.delete("/named-projects/:id", async (req, res, next) => {
   }
 });
 
+/* ========================================================================== */
+/* Shared tag vocabulary (union of Reviews Bank + Named Projects)            */
+/* ========================================================================== */
+
+/**
+ * GET /api/admin/tag-vocab?brandId=
+ * Returns ranked keyword tag suggestions from the union of both surfaces.
+ * Sorted by usage count descending so high-frequency tags appear first.
+ */
+router.get("/tag-vocab", async (req, res, next) => {
+  try {
+    const brandId = await resolveBrandId(req.query.brandId);
+    if (!brandId) {
+      res.status(400).json({ error: "valid brandId is required" });
+      return;
+    }
+    const [rbRows, npRows] = await Promise.all([
+      db
+        .select({ tags: reviewsBankEntriesTable.keywordTags })
+        .from(reviewsBankEntriesTable)
+        .where(eq(reviewsBankEntriesTable.brandId, brandId)),
+      db
+        .select({ tags: namedProjectsTable.keywordTags })
+        .from(namedProjectsTable)
+        .where(eq(namedProjectsTable.brandId, brandId)),
+    ]);
+    const counts = new Map<string, number>();
+    for (const row of [...rbRows, ...npRows]) {
+      for (const tag of row.tags as string[]) {
+        if (tag) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    const keyword = Array.from(counts.entries())
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+    res.json({ keyword });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
