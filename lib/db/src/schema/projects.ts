@@ -11,7 +11,11 @@ export const projectsTable = pgTable(
       .notNull()
       .references(() => brandsTable.id, { onDelete: "restrict" }),
     topic: text("topic").notNull(),
-    contentType: text("content_type").notNull(),
+    // Nullable during the content-type transition (Phase 1.5). Old rows that
+    // had 'blog' (not in the typed enum) were nulled at migration time.
+    // Intake now sets this explicitly; auto-inference remains as a fallback.
+    // CHECK constraint: NULL or one of the 8 typed values (enforced in DB).
+    contentType: text("content_type"),
     mode: text("mode").notNull().default("research"),
     status: text("status").notNull().default("draft"),
     currentStage: integer("current_stage").notNull().default(0),

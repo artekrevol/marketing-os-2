@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
-import { Plus, NotebookPen, LayoutGrid, LogOut, Shield, Activity, DollarSign, Building2, ChevronDown, Server, LayoutDashboard, MessageSquareQuote, Link2 } from "lucide-react";
+import { Plus, NotebookPen, LayoutGrid, LogOut, Shield, Activity, DollarSign, Building2, ChevronDown, Server, LayoutDashboard, MessageSquareQuote, Link2, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import type { Project } from "@/lib/types";
@@ -154,6 +154,18 @@ export default function AppShell() {
                 }
               >
                 <Link2 className="h-4 w-4" /> Link targets
+              </NavLink>
+            )}
+            {isAdmin && (
+              <NavLink
+                to="/admin/rules-dashboard"
+                className={({ isActive }) =>
+                  `flex items-center gap-2 px-3 py-2 rounded-sm text-sm font-medium transition-colors ${
+                    isActive ? "bg-ink text-paper" : "hover:bg-secondary"
+                  }`
+                }
+              >
+                <Settings className="h-4 w-4" /> Rules dashboard
               </NavLink>
             )}
           </div>

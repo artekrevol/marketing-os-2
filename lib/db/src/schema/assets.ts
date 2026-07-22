@@ -57,6 +57,19 @@ export const reviewsBankEntriesTable = pgTable(
     vertical: text("vertical"),
     costBucket: text("cost_bucket"),
     outcomeMetrics: jsonb("outcome_metrics").notNull().default({}),
+    /**
+     * Industry tags for planner-driven testimonial selection.
+     * Values: 'healthcare','fintech','edtech','real_estate','retail',
+     *   'manufacturing','hospitality','legal','government','nonprofit'
+     * GIN-indexed (reviews_bank_industry_tags_idx) — query with ?| operator.
+     */
+    industryTags: jsonb("industry_tags").notNull().default([]),
+    /**
+     * Free-form service-topic keyword tags.
+     * e.g. ['hipaa_compliance','mobile_apps','payment_infrastructure']
+     * GIN-indexed (reviews_bank_keyword_tags_idx) — query with ?| operator.
+     */
+    keywordTags: jsonb("keyword_tags").notNull().default([]),
     isConfidential: boolean("is_confidential").notNull().default(false),
     confidentialReason: text("confidential_reason"),
     importedAt: timestamp("imported_at", { withTimezone: true })

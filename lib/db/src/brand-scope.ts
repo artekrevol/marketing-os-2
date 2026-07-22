@@ -61,6 +61,10 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "reviews_bank_entries",
   "link_targets",
   "linking_rules",
+  // Content Plan Architecture — planner templates, plans, named projects
+  "content_plan_templates",
+  "content_plans",
+  "named_projects",
 ]);
 
 /** Brand context attached to a scoped transaction. */

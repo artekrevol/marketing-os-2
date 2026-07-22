@@ -1,12 +1,14 @@
-import { and, asc, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { withBrandScope } from "../brand-scope";
 import {
   reviewsBankEntriesTable,
   linkTargetsTable,
   linkingRulesTable,
+  namedProjectsTable,
   type ReviewsBankEntry,
   type LinkTarget,
   type LinkingRule,
+  type NamedProject,
 } from "../schema";
 import type { DataSource, QueryResult } from "./types";
 
@@ -70,9 +72,19 @@ export async function findTestimonials(opts: {
   icp?: number;
   vertical?: string;
   costBucket?: string;
+  /**
+   * Filter by industry tags (any-overlap). Rows whose `industry_tags` JSON
+   * array contains AT LEAST ONE of the provided strings are included.
+   * Uses GIN index via @> containment OR chain. Empty array = no filter.
+   */
+  industryTags?: string[];
+  /**
+   * Filter by keyword tags (any-overlap). Same semantics as industryTags.
+   */
+  keywordTags?: string[];
   limit?: number;
 }): Promise<QueryResult<ReviewsBankEntry[]>> {
-  const { brandId, icp, vertical, costBucket, limit = 50 } = opts;
+  const { brandId, icp, vertical, costBucket, industryTags, keywordTags, limit = 50 } = opts;
   try {
     return await withBrandScope(brandId, async ({ scoped }) => {
       const conds = [eq(reviewsBankEntriesTable.isConfidential, false)];
@@ -80,6 +92,25 @@ export async function findTestimonials(opts: {
       if (vertical) conds.push(eq(reviewsBankEntriesTable.vertical, vertical));
       if (costBucket)
         conds.push(eq(reviewsBankEntriesTable.costBucket, costBucket));
+      // Tag filters: any-overlap via @> containment OR chain. GIN-indexed.
+      if (industryTags && industryTags.length > 0) {
+        conds.push(
+          or(
+            ...industryTags.map((tag) =>
+              sql`${reviewsBankEntriesTable.industryTags} @> ${JSON.stringify([tag])}::jsonb`,
+            ),
+          )!,
+        );
+      }
+      if (keywordTags && keywordTags.length > 0) {
+        conds.push(
+          or(
+            ...keywordTags.map((tag) =>
+              sql`${reviewsBankEntriesTable.keywordTags} @> ${JSON.stringify([tag])}::jsonb`,
+            ),
+          )!,
+        );
+      }
 
       const rows = (await scoped.select(reviewsBankEntriesTable, {
         where: and(...conds)!,
@@ -158,23 +189,35 @@ export async function getConfidentialCompanies(
 }
 
 /**
- * Distinct `project_name` values present in the reviews bank for a brand.
- * Backs the case-study narrative validator (dispatch §6.6): a case study's
- * `project_name` must exist in either the playbook portfolio or this list.
- * Confidential rows still count — provenance, not publishability. Fails closed
- * (returns [] on error) so an unknown project name is re-flagged, not passed.
+ * Distinct project names for the anti-fabrication validator.
+ *
+ * Merges two sources:
+ *  1. `project_name` values from `reviews_bank_entries` (legacy corpus)
+ *  2. `name` values from `named_projects` (new first-class corpus, Phase 1.4)
+ *
+ * The validator checks that a case study's `project_name` exists in EITHER
+ * the playbook portfolio OR this combined list. Fails closed ([] on error).
  */
 export async function getReviewsBankProjectNames(
   brandId: string,
 ): Promise<string[]> {
   try {
     return await withBrandScope(brandId, async ({ scoped }) => {
-      const rows = (await scoped.select(reviewsBankEntriesTable, {
-        where: sql`${reviewsBankEntriesTable.projectName} is not null`,
-      })) as ReviewsBankEntry[];
+      const [reviewRows, namedRows] = await Promise.all([
+        scoped.select(reviewsBankEntriesTable, {
+          where: sql`${reviewsBankEntriesTable.projectName} is not null`,
+        }) as Promise<ReviewsBankEntry[]>,
+        scoped.select(namedProjectsTable, {
+          where: eq(namedProjectsTable.isActive, true),
+        }) as Promise<NamedProject[]>,
+      ]);
       const set = new Set<string>();
-      for (const r of rows) {
+      for (const r of reviewRows) {
         const n = (r.projectName || "").trim();
+        if (n) set.add(n);
+      }
+      for (const p of namedRows) {
+        const n = (p.name || "").trim();
         if (n) set.add(n);
       }
       return Array.from(set).sort();
@@ -290,6 +333,87 @@ export async function getLinkingRulesForCluster(
         return { data: [], source: null, reason: "not-tracked" as const };
       }
       const generatedAt = latest(rows.map((r) => r.createdAt));
+      return { data: rows, source: assetSource(generatedAt), reason: null };
+    });
+  } catch {
+    return { data: [], source: null, reason: "system-error" };
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Named projects — first-class project case evidence corpus (Phase 1.4)      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Retrieve active named projects for a brand, optionally filtered by industry
+ * or keyword tags. Backed by GIN indexes on both tag columns.
+ *
+ * Used by the planner AI to select the most relevant project reference(s) for
+ * a given article, and by the Rules Dashboard to display the named projects
+ * corpus for Rabia to tag and manage.
+ *
+ * Tag filters use any-overlap semantics (OR): a project is included if its
+ * industry_tags or keyword_tags contain AT LEAST ONE of the provided values.
+ * Fails closed (empty array on error).
+ */
+export async function findNamedProjects(opts: {
+  brandId: string;
+  /**
+   * Any-overlap industry filter. e.g. ['healthcare', 'fintech']
+   * Returns projects tagged with ANY of these industries.
+   */
+  industryTags?: string[];
+  /**
+   * Any-overlap keyword filter. e.g. ['hipaa_compliance', 'mobile_apps']
+   * Returns projects tagged with ANY of these keyword tags.
+   */
+  keywordTags?: string[];
+  /** Include confidential rows (default false — only non-confidential). */
+  includeConfidential?: boolean;
+  limit?: number;
+}): Promise<QueryResult<NamedProject[]>> {
+  const {
+    brandId,
+    industryTags,
+    keywordTags,
+    includeConfidential = false,
+    limit = 50,
+  } = opts;
+  try {
+    return await withBrandScope(brandId, async ({ scoped }) => {
+      const conds = [eq(namedProjectsTable.isActive, true)];
+      if (!includeConfidential) {
+        conds.push(eq(namedProjectsTable.isConfidential, false));
+      }
+      if (industryTags && industryTags.length > 0) {
+        conds.push(
+          or(
+            ...industryTags.map((tag) =>
+              sql`${namedProjectsTable.industryTags} @> ${JSON.stringify([tag])}::jsonb`,
+            ),
+          )!,
+        );
+      }
+      if (keywordTags && keywordTags.length > 0) {
+        conds.push(
+          or(
+            ...keywordTags.map((tag) =>
+              sql`${namedProjectsTable.keywordTags} @> ${JSON.stringify([tag])}::jsonb`,
+            ),
+          )!,
+        );
+      }
+
+      const rows = (await scoped.select(namedProjectsTable, {
+        where: and(...conds)!,
+        orderBy: [asc(namedProjectsTable.name)],
+        limit,
+      })) as NamedProject[];
+
+      if (rows.length === 0) {
+        return { data: [], source: null, reason: "not-tracked" as const };
+      }
+      const generatedAt = latest(rows.map((r) => r.updatedAt));
       return { data: rows, source: assetSource(generatedAt), reason: null };
     });
   } catch {

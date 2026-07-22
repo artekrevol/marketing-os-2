@@ -34,3 +34,6 @@ export * from "./llm-citations";
 export * from "./cross-module";
 // ContentForge Quality Fix — asset corpora (reviews bank, link targets, rules)
 export * from "./assets";
+// Content Plan Architecture — planner templates, plans, named projects corpus
+export * from "./content-plans";
+export * from "./named-projects";

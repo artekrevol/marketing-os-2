@@ -6,12 +6,13 @@ import {
   linkTargetsTable,
   linkingRulesTable,
   moduleDataProvenanceTable,
+  contentPlanTemplatesTable,
   type InsertReviewsBankEntry,
   type InsertLinkTarget,
   type InsertLinkingRule,
 } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth.js";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, and, desc, asc, isNull } from "drizzle-orm";
 import ExcelJS from "exceljs";
 
 /**
@@ -841,6 +842,113 @@ router.delete("/link-targets/:id", async (req, res, next) => {
     });
 
     res.json({ deactivated: id, soft_delete: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* -------------------------------------------------------------------------- */
+/* Content Plan Templates — Rules Dashboard CRUD (Phase 2)                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * GET /api/admin/content-plan-templates?brandId=
+ *
+ * Returns all active templates for the brand (one global + up to 8 per-type)
+ * as { global: Template|null, byType: Record<string, Template> }.
+ * Admin-only (requireAdmin on this router).
+ */
+router.get("/content-plan-templates", async (req, res, next) => {
+  try {
+    const brandId = await resolveBrandId(req.query.brandId);
+    if (!brandId) { res.status(400).json({ error: "brandId required" }); return; }
+
+    const rows = await db
+      .select()
+      .from(contentPlanTemplatesTable)
+      .where(and(eq(contentPlanTemplatesTable.brandId, brandId), eq(contentPlanTemplatesTable.isActive, true)))
+      .orderBy(contentPlanTemplatesTable.scope, contentPlanTemplatesTable.contentType);
+
+    const globalRow = rows.find((r) => r.scope === "global") ?? null;
+    const byType: Record<string, typeof rows[0]> = {};
+    for (const r of rows.filter((r) => r.scope === "content_type")) {
+      if (r.contentType) byType[r.contentType] = r;
+    }
+    res.json({ global: globalRow, byType });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PUT /api/admin/content-plan-templates
+ *
+ * Creates a new template version for the given brand/scope/contentType.
+ * If no prior version exists, inserts version 1.
+ * If a prior active version exists, increments version and deactivates the old row.
+ * Returns the new template row.
+ *
+ * Body: { brandId, scope: 'global'|'content_type', contentType?: string, template_data: {...} }
+ */
+router.put("/content-plan-templates", async (req, res, next) => {
+  try {
+    const { brandId: rawBrandId, scope, contentType, template_data } = req.body as {
+      brandId?: string;
+      scope?: string;
+      contentType?: string | null;
+      template_data?: unknown;
+    };
+
+    const brandId = await resolveBrandId(rawBrandId);
+    if (!brandId) { res.status(400).json({ error: "brandId required" }); return; }
+    if (scope !== "global" && scope !== "content_type") {
+      res.status(400).json({ error: "scope must be 'global' or 'content_type'" });
+      return;
+    }
+    if (scope === "content_type" && !contentType) {
+      res.status(400).json({ error: "contentType required for scope=content_type" });
+      return;
+    }
+    if (!template_data || typeof template_data !== "object") {
+      res.status(400).json({ error: "template_data object required" });
+      return;
+    }
+
+    const tpl = contentPlanTemplatesTable;
+
+    const conds = [
+      eq(tpl.brandId, brandId),
+      eq(tpl.scope, scope),
+      eq(tpl.isActive, true),
+      scope === "global"
+        ? isNull(tpl.contentType)
+        : eq(tpl.contentType, contentType!),
+    ];
+
+    const existing = await db.select().from(tpl).where(and(...conds)).limit(1);
+    const current = existing[0] ?? null;
+    const nextVersion = current ? current.version + 1 : 1;
+    const actingUser = req.auth?.userId ?? null;
+
+    const [newRow] = await db.transaction(async (tx) => {
+      if (current) {
+        await tx.update(tpl).set({ isActive: false }).where(eq(tpl.id, current.id));
+      }
+      return tx
+        .insert(tpl)
+        .values({
+          brandId,
+          scope,
+          contentType: scope === "global" ? null : contentType!,
+          version: nextVersion,
+          templateData: template_data as Record<string, unknown>,
+          isActive: true,
+          createdBy: actingUser,
+        })
+        .returning();
+    });
+
+    res.json({ template: newRow, previous_version: current?.version ?? null });
   } catch (err) {
     next(err);
   }
