@@ -7,6 +7,7 @@ import {
   linkingRulesTable,
   moduleDataProvenanceTable,
   contentPlanTemplatesTable,
+  getResolvedTemplate,
   type InsertReviewsBankEntry,
   type InsertLinkTarget,
   type InsertLinkingRule,
@@ -875,6 +876,35 @@ router.get("/content-plan-templates", async (req, res, next) => {
       if (r.contentType) byType[r.contentType] = r;
     }
     res.json({ global: globalRow, byType });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/admin/content-plan-templates/resolve?brandId=&contentType=
+ *
+ * Returns the fully resolved template for a brand + content type — all null
+ * per-type overrides replaced by global cascade values, with provenance flags.
+ * This is the single source of truth for cascade logic. Preview mode, the
+ * planner AI, and the plan compliance report must all use this endpoint rather
+ * than re-implementing cascade independently.
+ *
+ * Returns 404 when no global template exists for the brand (unresolvable).
+ */
+router.get("/content-plan-templates/resolve", async (req, res, next) => {
+  try {
+    const brandId = await resolveBrandId(req.query.brandId);
+    if (!brandId) { res.status(400).json({ error: "brandId required" }); return; }
+    const contentType = typeof req.query.contentType === "string" ? req.query.contentType.trim() : "";
+    if (!contentType) { res.status(400).json({ error: "contentType required" }); return; }
+
+    const resolved = await getResolvedTemplate(brandId, contentType);
+    if (!resolved) {
+      res.status(404).json({ error: "No active global template found for this brand. Configure global rules first." });
+      return;
+    }
+    res.json(resolved);
   } catch (err) {
     next(err);
   }

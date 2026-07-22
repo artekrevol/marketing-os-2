@@ -19,6 +19,7 @@ export * from "./middleware";
 export * from "./queries/types";
 export * from "./queries/cross-module";
 export * from "./queries/assets";
+export * from "./queries/templates";
 
 import { createGuardedDb } from "./middleware";
 
