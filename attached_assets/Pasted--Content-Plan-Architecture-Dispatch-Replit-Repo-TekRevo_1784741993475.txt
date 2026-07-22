@@ -1,0 +1,757 @@
+# Content Plan Architecture Dispatch (Replit)
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Objective:** Replace the current validator-patch model with a Content Plan architecture: a planner AI produces a structured plan (specific selections, budgets, styles) between intake and generation; Rabia reviews and adjusts the plan before generation runs; generation writes to the plan; validation checks plan compliance rather than accumulating rules.
+**Dispatch type:** Substantial multi-phase architectural change. Comparable in scope to the SEO Integration + Shared Data Layer dispatches combined. Structured with an early pause point (after Phase 3) so Rabia can begin using admin surfaces while later phases build the operational core.
+
+---
+
+## Startup check (before any code)
+
+Before beginning: `ls -la .local/tasks/*.md 2>/dev/null`. Report results. Archive anything from cancelled or completed tasks to `.local/tasks/archive/` before proceeding.
+
+---
+
+## Context
+
+Cut A (candidate injection), Cut B (content-shaping prompt tightening), Playbook v2.5 upload, and the SEO Dashboard data migration have all shipped. Rabia tested through July 10 and left substantive review feedback on the architecture design document (July 17).
+
+The current architecture separates candidate selection (retrieve from DB), generation (LLM produces content), and validation (check output against accumulating rules). Every bug surfaced during Rabia's testing was addressable only as another validator patch — "reject nav-type page_types," "strip repeat URLs," "require citation path depth," "add brand mention floor." Each patch treats a symptom rather than a cause.
+
+This dispatch commits to the architectural alternative: a Content Plan sits between intake and generation. The plan makes explicit every decision the model would otherwise make on its own — how many links, which specific ones, how many brand mentions and what style, which testimonials, which specific report URLs for citations. Generation writes to specifications rather than freestyling.
+
+**Rabia's role transforms.** Today she reviews finished articles and fixes problems. Under this architecture, she reviews the plan before generation runs and adjusts every budget, swaps specific selections, sets template defaults through a Rules Dashboard. Editorial judgment gets applied upstream, not downstream.
+
+**Explicitly integrated feedback from Rabia (July 17 review):**
+- Brand mentions capped at 4-5 per article regardless of funnel stage, with mentions classified by *style* (project spotlight, service highlight, credential reference, first-person authority, team specificity) rather than counted uniformly
+- External citations: DR 80+ domains only, max 3 per article, no source older than 3 years
+- Named projects tagged by industry + keyword tags for planner-driven relevance matching
+- Content tone requirement: affirmative, definitive, solution-oriented (no hedging, no ambiguous neutrality)
+- Rules Dashboard: central admin surface where Rabia sees and edits every default the system uses, organized by content type
+
+**Explicitly out of scope for this dispatch:**
+- Competitor data quality audit (separate small hygiene dispatch — SEO team sanitizes competitor list, sanitized set becomes ground truth for future discovery)
+- AI Research module (LLM citation UI — 47K rows preserved in the platform from the migration, module builds later)
+- Infographic pipeline integration
+- Perplexity as research source
+- Multi-language or campaign-level planning
+
+---
+
+## Phase 0 — Pre-flight survey (read-only, report before continuing)
+
+Standard survey. No code, no schema changes.
+
+1. **The current `projects` table schema.** `\d projects`. Show all columns including the queue-related ones added earlier (if that dispatch shipped) and the current status/lifecycle fields.
+
+2. **The current `reviews_bank_entries` table schema.** `\d reviews_bank_entries`. Show all columns and constraints.
+
+3. **The current `link_targets` table schema.** `\d link_targets`. Show all columns.
+
+4. **The `playbook` table row count and the current active playbook version.** Confirm v2.5 is uploaded and active.
+
+5. **The candidate injection helpers.** Locate `findTestimonials`, `findLinkTargets`, `getReviewsBankProjectNames` in `lib/db/src/queries/assets.ts`. Show their current signatures.
+
+6. **The current validators list.** `ls lib/content-ai/src/validators/`. List all validator files.
+
+7. **The generation pipeline entry points.** Locate the outline-generate, draft-section, and final-stitch routes. Show their current top-level structure (imports, route definitions, no need for full bodies).
+
+8. **The current `module_data_provenance` table schema.** `\d module_data_provenance`.
+
+9. **Anthropic client wrapper.** Locate `callAnthropic` or equivalent in `lib/content-ai/`. Show current signature and error handling.
+
+10. **Admin UI patterns.** The `/admin/reviews-bank` and `/admin/link-targets` pages are established patterns. Show one file so subsequent admin UIs follow the same shape.
+
+Report findings. Pause for dispatcher review.
+
+---
+
+## Phase 1 — Schema foundation
+
+Scoped transactional DDL. No blanket `drizzle-kit push`.
+
+### 1.1 Content plans table
+
+```sql
+BEGIN;
+
+CREATE TABLE content_plans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE cascade,
+  template_id uuid REFERENCES content_plan_templates(id) ON DELETE set null,
+  status text NOT NULL DEFAULT 'draft',
+  plan_data jsonb NOT NULL,
+  provenance jsonb NOT NULL DEFAULT '{}'::jsonb,
+  planner_reasoning text,
+  estimated_cost_usd numeric(10,4),
+  approved_at timestamptz,
+  approved_by uuid REFERENCES users(id),
+  superseded_by uuid REFERENCES content_plans(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX content_plans_brand_project_idx ON content_plans(brand_id, project_id);
+CREATE INDEX content_plans_status_idx ON content_plans(brand_id, status);
+CREATE UNIQUE INDEX content_plans_active_per_project ON content_plans(project_id) 
+  WHERE status = 'approved' AND superseded_by IS NULL;
+
+COMMIT;
+```
+
+`status` values: `draft`, `under_review`, `approved`, `superseded`, `abandoned`. Only one approved plan per project at a time (partial unique index). Superseding a plan (regenerating with different parameters) creates a new row and updates the old row's `superseded_by`. Add to `BRAND_SCOPED_TABLES` allow-list.
+
+### 1.2 Content plan templates table
+
+```sql
+BEGIN;
+
+CREATE TABLE content_plan_templates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  content_type text NOT NULL,
+  version integer NOT NULL DEFAULT 1,
+  template_data jsonb NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (brand_id, content_type, version)
+);
+
+CREATE INDEX content_plan_templates_active_idx ON content_plan_templates(brand_id, content_type, is_active);
+
+COMMIT;
+```
+
+`content_type` enum values: `cost_guide`, `comparison_guide`, `how_to_guide`, `statistics_trends`, `explainer`, `case_study`, `vertical_deep_dive`, `thought_leadership`.
+
+Templates are versioned. When Rabia edits a template through the Rules Dashboard, a new version is created; old versions retained for plan lineage. Add to `BRAND_SCOPED_TABLES`.
+
+### 1.3 Reviews bank additions
+
+```sql
+BEGIN;
+
+ALTER TABLE reviews_bank_entries
+ADD COLUMN IF NOT EXISTS industry_tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+ADD COLUMN IF NOT EXISTS keyword_tags jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE INDEX reviews_bank_industry_tags_idx ON reviews_bank_entries USING gin (industry_tags);
+CREATE INDEX reviews_bank_keyword_tags_idx ON reviews_bank_entries USING gin (keyword_tags);
+
+COMMIT;
+```
+
+Industry tags: `healthcare`, `fintech`, `edtech`, `real_estate`, `retail`, `manufacturing`, `hospitality`, `legal`, `government`, `nonprofit`. Multi-select.
+
+Keyword tags: free-form strings tied to service topics — `ai_development`, `mobile_apps`, `hipaa_compliance`, `payment_infrastructure`, etc. Multi-select, no fixed vocabulary — Rabia adds as needed.
+
+Update Drizzle schema.
+
+### 1.4 Named projects table
+
+The named projects corpus currently lives in playbook text (Section 10). Elevate to first-class table.
+
+```sql
+BEGIN;
+
+CREATE TABLE named_projects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  name text NOT NULL,
+  slug text NOT NULL,
+  problem_summary text NOT NULL,
+  approach_summary text NOT NULL,
+  outcome_summary text NOT NULL,
+  industry_tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+  keyword_tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+  client_display_name text,
+  is_confidential boolean NOT NULL DEFAULT false,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (brand_id, slug)
+);
+
+CREATE INDEX named_projects_brand_active_idx ON named_projects(brand_id, is_active);
+CREATE INDEX named_projects_industry_tags_idx ON named_projects USING gin (industry_tags);
+CREATE INDEX named_projects_keyword_tags_idx ON named_projects USING gin (keyword_tags);
+
+COMMIT;
+```
+
+Add to `BRAND_SCOPED_TABLES`. Seed with the three illustrative entries from the playbook (Healthcare Scheduling Modernization, Fintech KYC Pipeline, Retail Inventory Sync). Rabia replaces these with real anonymized entries as she gains access to client recordings.
+
+### 1.5 Projects table addition — content_type
+
+```sql
+BEGIN;
+
+ALTER TABLE projects
+ADD COLUMN IF NOT EXISTS content_type text,
+ADD CONSTRAINT projects_content_type_check
+  CHECK (content_type IS NULL OR content_type IN (
+    'cost_guide', 'comparison_guide', 'how_to_guide', 'statistics_trends',
+    'explainer', 'case_study', 'vertical_deep_dive', 'thought_leadership'
+  ));
+
+COMMIT;
+```
+
+`content_type` becomes explicit at Intake instead of inferred from keyword patterns. Nullable during transition; auto-inference remains as a fallback for old rows.
+
+### 1.6 Rules dashboard settings — global rules
+
+```sql
+BEGIN;
+
+CREATE TABLE brand_rules (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  rule_type text NOT NULL,
+  rule_data jsonb NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  version integer NOT NULL DEFAULT 1,
+  updated_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (brand_id, rule_type, version)
+);
+
+CREATE INDEX brand_rules_active_idx ON brand_rules(brand_id, rule_type, is_active);
+
+COMMIT;
+```
+
+`rule_type` values: `citation_authority` (DR threshold, max age, whitelisted domains), `brand_voice_global` (mention styles vocabulary), `tone_requirements` (affirmative, banned phrases), `cost_budget` (per-article max, daily brand cap).
+
+Global rules apply across all content types. Template-level rules override for specific content types. Plan-level overrides apply for specific articles.
+
+Update Drizzle schema.
+
+**Pause after Phase 1.** Dispatcher confirms schemas look right, no unexpected data effects.
+
+---
+
+## Phase 2 — Rules Dashboard admin surface
+
+The primary configuration interface. Rabia's control surface for platform defaults.
+
+### 2.1 Layout
+
+New page: `/admin/rules-dashboard`
+
+**Left sidebar — sections:**
+- Overview (dashboard of active rules across all types)
+- Global rules (apply to all content types)
+- Per content type (8 types listed)
+- Named projects (tagging + CRUD)
+- Reviews bank tagging
+- Preview mode (see what a plan would look like with current settings)
+
+**Main area — form-based editors for the selected section.**
+
+### 2.2 Global rules section
+
+**Citation authority:**
+- Domain rating minimum: numeric input (default 80)
+- Max publication age: numeric input in years (default 3)
+- Domain whitelist: multi-select from a curated list, with an "add domain" affordance. Rabia can toggle domains on/off. Domains not meeting the DR threshold are grayed out but visible
+
+**Brand voice global:**
+- Total mentions per article target: numeric input (default 5)
+- Total mentions per article max: numeric input (default 5)
+- Mention styles vocabulary: multi-select with edit. Default: project_spotlight, service_highlight, credential_reference, first_person_authority, team_specificity. Rabia can add/remove styles
+
+**Tone requirements:**
+- Affirmative tone required: toggle (default on)
+- Banned phrases: textarea, one per line (seed from playbook Section 11)
+- Hedging phrases to avoid: textarea (may or may not, could potentially, might possibly, etc.)
+
+**Cost budget:**
+- Max cost per article: numeric input in USD (default $1.00)
+- Daily brand cap: numeric input (default $20 or 20 articles equivalent)
+- Warn threshold: numeric input as % of max (default 80%)
+
+Save button versions the rule set. Preview button shows how a plan changes with current settings.
+
+### 2.3 Per content type sections
+
+For each of the 8 content types, editable form:
+
+**Article structure:** Target word count range, section count range, required section kinds (multi-select).
+
+**Brand voice per type:** Total mentions target for this type (defaults to global setting but overridable). Mention style distribution — reorderable list (e.g., for Cost Guide: 1 project spotlight, 1 service highlight, 1 credential reference, 2 first-person authority).
+
+**Citation rules per type:** Target citation count (default 3), max citation count (default 3), overrides for DR threshold and max age.
+
+**Internal linking per type:** Target link count (default 3-5 depending on type), max link count, cluster requirements.
+
+**Required elements per type:** Table of required structural elements (e.g., Cost Guide: cost_bracket_table required, regional_rate_comparison required, team_model_comparison required, exclusions_section required, maintenance_cost_bracket optional). Each element has: name, required/optional, description. Add/remove elements via UI.
+
+**Cost budget per type:** Overrides for max cost, warn threshold if this type is more expensive than average.
+
+**Preview:** Every content type page has a "Preview a sample plan" button that shows what a plan for this content type would look like with current settings.
+
+### 2.4 Preview mode
+
+Full-page preview showing a synthetic plan generated from current rules. Uses a placeholder topic and defaults for everything not template-specified. Shows the plan structure exactly as it would appear at Plan Review stage. Read-only — no ability to approve, just to see. Not a live generation; it's a rules visualization.
+
+### 2.5 Overview dashboard
+
+Landing view when Rabia opens the Rules Dashboard:
+- Grid of active rule sets (global + per content type)
+- Each card shows: last updated date, updated by, key stats
+- Click a card to edit that rule set
+
+**Access:** Admin and lead roles only. Members see rules read-only through their content workflows.
+
+Commit: `Phase 2: Rules Dashboard admin surface`
+
+**End of Phase 2.** Run typecheck. Verify UI renders. Pause for dispatcher.
+
+---
+
+## Phase 3 — Tagging admin UIs
+
+Populate the tags that make the planner smart.
+
+### 3.1 Reviews Bank tagging
+
+Extend the existing `/admin/reviews-bank` page:
+- Each review row shows current industry_tags and keyword_tags as pill badges
+- Inline edit affordance to add/remove tags
+- Bulk-select rows for bulk-tag operations
+- Filter view by tag
+
+Existing 83 reviews start with empty tag arrays. Rabia tags them progressively — no requirement to tag everything upfront. Untagged reviews are still selectable by the planner (falls back to non-tag-based matching).
+
+### 3.2 Named projects admin UI
+
+New page: `/admin/named-projects`
+
+Standard table view: name, industry tags, keyword tags, is_active, is_confidential, last updated. Row actions: edit, mark inactive, mark confidential.
+
+Edit form: name, slug (auto-generated), problem summary, approach summary, outcome summary, industry tags (multi-select), keyword tags (multi-select, free-form), client display name (optional), confidential flag (toggle).
+
+Add new project via a form that follows the same shape. Seed rows from playbook Section 10 pre-populated.
+
+### 3.3 Bulk tagging affordance
+
+For reviews bank specifically, add a bulk-tag modal:
+- Select multiple rows via checkbox
+- "Bulk tag" button opens a modal
+- Choose which tag type (industry or keyword)
+- Choose action (add, remove, replace)
+- Choose tags to apply
+- Confirm
+
+Commit: `Phase 3: Tagging admin UIs for reviews bank and named projects`
+
+**End of Phase 3 — natural pause point.**
+
+At this point, Rabia has access to:
+- Rules Dashboard where she can configure defaults per content type
+- Reviews Bank with tagging
+- Named Projects admin with CRUD
+
+**Dispatcher pause for Rabia to begin using the admin surfaces.** She can spend a few days configuring rules, tagging existing reviews, adding named projects. This work happens in parallel with Phases 4-7 continuing. When she's populated the config and tags, the planner (Phase 4) has real data to work with rather than seed defaults.
+
+Practically: this dispatch pauses here for dispatcher confirmation before Phase 4 begins. Rabia does her config work during that pause. Phases 4-7 resume when dispatcher signals.
+
+---
+
+## Phase 4 — Planner AI stage
+
+The core intelligence.
+
+### 4.1 Planner service
+
+New service: `lib/content-ai/src/planner/`
+
+Entry point: `generatePlan(intakeParams, researchOutput, brandContext): Promise<ContentPlan>`
+
+Inputs:
+- Intake parameters (topic, keyword, location, content type, ICP, funnel stage, writer notes)
+- Research output (SEO context, SERP top-10, competitor URLs, LSI terms, SERP features)
+- Brand context: active template for the content type, global rules, playbook, reviews bank filtered by industry/keyword tags, link targets filtered by cluster/funnel, named projects filtered by industry/keyword tags
+
+Output: complete Content Plan JSON conforming to schema.
+
+### 4.2 Plan schema
+
+The plan is structured JSON stored in `content_plans.plan_data`. Structure includes:
+
+**meta:** schema_version, generated_at, template_id, template_version, global_rules_snapshot (frozen at plan draft time).
+
+**article_structure:** target_word_count, section_count, sections array with per-section: order, kind, heading, target_word_count, must_contain_primary_keyword, must_contain_direct_answer, required_elements.
+
+**brand_voice:** total_mention_target (default 5), mention_style_distribution (array of section+style pairs, with named_project_id if style is project_spotlight), voice_register, icp_calibration, affirmative_tone_required.
+
+**testimonials:** array with review_id, placement_section, reason, source.
+
+**internal_links:** array with link_target_id, url, anchor_text, placement_section, reason, source.
+
+**external_citations:** target_count (default 3), max_count (default 3), min_domain_rating (default 80), max_publication_age_years (default 3), selections array with domain, specific_url, publication_year, domain_rating, claim_supported, placement_section, reason, source.
+
+**project_matching:** industry_filters, keyword_filters, matched_projects array with project_id, match_score, match_reasons, spotlight_section.
+
+**seo:** primary_keyword, primary_keyword_target_occurrences, primary_keyword_placement_required, secondary_keywords, lsi_terms_available, lsi_terms_target_coverage, title_tag spec, meta_description spec.
+
+**cost:** estimated_input_tokens, estimated_output_tokens, estimated_cost_usd, max_cost_usd, model.
+
+**provenance:** per-field map tracking source of each value ("template.cost_guide:v3", "global_rules.citation_authority:v2", "planner_ai:decision_id:xyz", "rabia_manual_override").
+
+### 4.3 Planner AI call
+
+Model: Claude Haiku for cost efficiency (planner call is smaller than generation).
+
+Structured tool use pattern: the planner is prompted with all inputs and asked to emit the plan as a tool call with the plan JSON as the payload. Deterministic parsing, structural validation.
+
+System prompt (abbreviated):
+
+> You are the content planner for TekRevol Marketing OS. You produce Content Plans that specify exactly what an article will contain.
+>
+> Your inputs: intake parameters, research findings from SEO OS, the active template for this content type, brand rules, and the assets available (reviews bank filtered by relevant tags, link targets, named projects, authority citations).
+>
+> Your output is a complete Content Plan conforming to the schema. Every selection must reference a real entity ID from the provided assets. Every budget must respect the template and global rules unless the article specifically warrants deviation.
+>
+> Specific decisions you make:
+> 1. Which testimonials (specific review IDs) best serve which sections, considering vertical/industry match, recency, and quote content
+> 2. Which internal links (specific URLs) support which sections, considering cluster fit and no-repetition
+> 3. Which external citations (specific report URLs, not domains) support which claims, considering DR threshold and publication age
+> 4. Which brand mention style goes in which section, considering funnel stage and topic
+> 5. Which named project(s) to spotlight based on industry+keyword tag overlap
+> 6. What section structure best serves the topic given SERP competitors and content type template
+>
+> When you cannot find a good match for a required selection (e.g., no whitelisted testimonial fits the vertical), flag the gap in the plan for Rabia to resolve manually. Do not force a poor match.
+>
+> Every decision must include a `reason` field explaining why.
+
+### 4.4 Planner cost gate
+
+Before generating the plan, compute estimated cost. If estimated cost exceeds the template's max, flag for Rabia. If daily brand cap would be exceeded, flag. Not a hard block — surfaces as a warning in the Plan Review UI.
+
+Commit: `Phase 4: Planner AI service + plan schema`
+
+---
+
+## Phase 5 — Plan Review UI
+
+Rabia's control surface for approving/adjusting individual plans.
+
+### 5.1 Entry point
+
+After research completes for a project, the pipeline enqueues a `content.plan-draft` job. The job runs the planner and stores the resulting plan in `content_plans` with `status = 'draft'`.
+
+Rabia sees the project in her queue with status "Plan ready for review." Clicking opens the Plan Review UI at `/projects/:id/plan`.
+
+### 5.2 UI structure
+
+**Top panel — summary metrics:**
+- Target word count (editable)
+- Total sections (editable)
+- Total brand mentions (editable, default 5)
+- Total internal links (editable)
+- Total external citations (editable, default 3)
+- Estimated cost (read-only, recomputes on save)
+- Template used (link to template in Rules Dashboard)
+
+**Middle panel — section-by-section outline:**
+
+Each section as an expandable card: order + kind + heading (heading editable), target word count (editable slider), brand mention assigned to this section (dropdown of styles, or "none"), internal link assigned (if any) — swap button opens filtered list, citation assigned (if any) — swap button opens filtered list, required elements checklist (editable if template allows).
+
+Drag to reorder sections. Add/remove sections respects template min/max.
+
+**Right panel — asset selections summary:**
+
+*Testimonials selected:* list with reviewer name, company, quote excerpt, placement section, reason. Each has a "swap" button that opens a modal with: filter by industry tag, keyword tag, vertical, ICP; sort by recency, relevance score; preview quote content; confirm swap.
+
+*Internal links selected:* list with URL, anchor text, placement section, reason. Swap opens filtered link targets.
+
+*External citations selected:* list with domain, DR, publication year, specific URL, claim supported, placement section. Swap opens filtered whitelisted sources.
+
+*Project spotlights selected:* list with project name, industry tags, keyword tags, placement section. Swap opens filtered named projects.
+
+**Bottom panel — manual instructions:**
+
+Free-text field. Example uses:
+- "Don't emphasize timelines; client cares about compliance"
+- "Reference our recent healthcare AI whitepaper"
+- "Keep the closing softer than usual — this reader is early in the buying process"
+
+Manual instructions flow into generation prompts. Persisted with the plan for audit.
+
+**Action buttons:**
+- Save as draft (auto-saves on any edit)
+- Save as template override (if Rabia's adjustments reflect a pattern, save them back to the template — versions the template)
+- Approve plan (sets status = approved, triggers generation)
+- Discard and regenerate (creates a new plan with a note about what to change)
+
+### 5.3 Provenance visibility
+
+Small info icon next to every plan field. Hover shows provenance: "Set by template.cost_guide:v3", "Decided by planner AI: 'healthcare vertical match'", "Manually set by Rabia at 2026-08-15T14:23:00Z". Makes every decision auditable at the review stage.
+
+### 5.4 Regeneration mechanics
+
+If Rabia clicks "discard and regenerate," she can specify what changed. The old plan gets `status = 'abandoned'`. A new planner call runs with Rabia's notes as additional context. Rate limit: max 3 regenerations per project to prevent cost runaway.
+
+Commit: `Phase 5: Plan Review UI`
+
+**Pause after Phase 5.** Dispatcher and Rabia review the plan review flow with a real project. Verify plans render correctly, swapping works, approval triggers generation.
+
+---
+
+## Phase 6 — Generation writes to plan
+
+Rewrite the outline, draft-section, and final-stitch prompts to accept plan parameters explicitly.
+
+### 6.1 Outline stage
+
+Currently the outline stage figures out its own structure. Replace with: the outline is now taken directly from `plan.article_structure.sections`. No AI call needed — the outline is a deterministic transformation of the plan into the format the draft stage expects.
+
+Migration: keep the existing outline route as a fallback for legacy projects without plans, but new projects skip outline generation and use the plan's section list directly.
+
+### 6.2 Draft-section stage
+
+System prompt for each section becomes:
+
+> You are writing Section {order} of this article: {kind}, heading "{heading}".
+>
+> **Word budget:** Exactly {target_word_count} words (±10% tolerance).
+>
+> **Must contain primary keyword:** {yes/no}. Placement: {intro/H2/closing}.
+>
+> **Brand mention this section:** {style} — with style-specific instructions:
+> - project_spotlight: "Reference our work on {named_project.name}. The project was: {project.problem_summary} We: {project.approach_summary} Outcome: {project.outcome_summary}"
+> - service_highlight: "Highlight our {service_area} practice with specific capabilities"
+> - credential_reference: "Reference TekRevol's credentials — 280+ engagements, ISO 27001, specific vertical experience"
+> - first_person_authority: "Use first person authoritatively — 'we've seen', 'in our experience'"
+> - team_specificity: "Reference specific team characteristics — 'our Karachi delivery team', 'our AI practice'"
+>
+> **Internal link this section:** {specific URL} with anchor text "{anchor_text}"
+>
+> **External citation this section:** {specific URL} — supports claim: "{claim_supported}"
+>
+> **Testimonial this section:** From {reviewer_name} of {company}: "{quote}"
+>
+> **Required elements this section:** {list of elements the section must contain}
+>
+> **Tone:** Affirmative, definitive, solution-oriented. No hedging. Direct answers.
+>
+> Manual instructions from editor: {rabia_manual_instructions_relevant_to_this_section}
+
+The model no longer has choices about how many links or which testimonial. It writes the section using the specifications.
+
+### 6.3 Final-stitch stage
+
+Now handles:
+- Assembling sections into complete article
+- Extracting ARTICLE_TOOL schema (which now includes plan compliance data)
+- Generating meta_description within 150-155 char target
+- Generating title_tag within 50-60 char target
+- Generating FAQ block per plan spec (question count, answer word range)
+- Generating JSON-LD structured data
+- Generating author byline per plan spec
+
+Extractor prompt receives the plan and article. Its job is to assemble the article's structural output honoring the plan's targets exactly.
+
+Commit: `Phase 6: Generation writes to plan`
+
+### 6.4 Plan enforcement pass (deterministic)
+
+After generation, before validation, run a deterministic enforcement pass:
+
+- If article emits more internal links than plan allows: strip excess by section placement match
+- If article emits duplicate internal links (same URL twice): strip duplicates
+- If citation URL doesn't match plan's specific URL: strip citation, log deviation
+- If word count per section is off by >15%: log warning, no action
+- If required element missing: log critical, regenerate that section with reinforced instructions
+
+The enforcement pass runs before human review, so Rabia sees an article that already conforms to plan structure.
+
+Commit: `Phase 6.4: deterministic plan enforcement pass`
+
+---
+
+## Phase 7 — Validation as plan compliance
+
+Retire the 24-check matrix. Replace with Plan Compliance Report.
+
+### 7.1 Plan Compliance Report
+
+For each plan field, generate a compliance row:
+- Field name
+- Plan target
+- Article actual
+- Delta
+- Disposition: PASS, WARN, FAIL
+
+Dispositions:
+- **PASS:** actual matches plan target exactly or within tolerance
+- **WARN:** actual within tolerance but flagged (e.g., word count off by 12% is within 15% tolerance but worth noting)
+- **FAIL:** actual outside tolerance or required element missing
+
+FAIL dispositions block ship until Rabia manually accepts or regenerates.
+
+### 7.2 Universal validators (kept)
+
+Three rules stay as validators independent of the plan (they're never negotiable):
+
+1. **Fabricated testimonial validator** — every testimonial in the article must exist in `reviews_bank_entries` (exact match on reviewer_name + company, quote_excerpt within edit distance).
+
+2. **Confidentiality validator** — no client marked confidential in `reviews_bank_entries` appears in the article.
+
+3. **Banned phrase validator** — banned phrase list from global_rules is checked against article text.
+
+### 7.3 Retired validators
+
+Remove or subsume the following (they're now handled by plan enforcement):
+
+- Nav-page filter (subsumed by planner's link selection)
+- Internal link no-repeat rule (subsumed by plan enforcement pass)
+- Citation depth requirement (subsumed by planner's specific URL selection)
+- Brand mention range validator (subsumed by plan's style distribution)
+- H1 count validator (subsumed by plan structure)
+- Keyword placement validator (subsumed by plan's placement requirements)
+- Meta description length validator (subsumed by plan target)
+- Stat density validator (subsumed by plan section budgets)
+- Cross-section repetition validator (subsumed by plan section budgets and structure)
+
+Cut B's strip-and-repair pipeline (repetition-fix loop, density-repair pass, etc.) is removed. The plan makes these unnecessary.
+
+Commit: `Phase 7: Plan compliance validation + retire obsolete validators`
+
+### 7.4 Review UI update
+
+Draft Review page shows:
+- Article rendering (as today)
+- Plan Compliance Report tab (replaces the current Gates tab)
+- Plan summary tab (read-only view of the approved plan)
+- Provenance tab (which decisions came from where)
+
+Every asset-derived field still shows `<DataSourceTag>` attribution.
+
+Commit: `Phase 7.4: Review UI plan compliance panel`
+
+---
+
+## Phase 8 — Smoke tests and completion
+
+### 8.1 Smoke tests (all must pass)
+
+**Schema and admin:**
+1. `content_plans` table created with proper constraints and indexes
+2. `content_plan_templates` versioned correctly
+3. `reviews_bank_entries` tag columns added, GIN indexes work
+4. `named_projects` table with seed data from playbook
+5. `projects.content_type` accepts all 8 enum values, rejects invalid
+6. `brand_rules` table stores versioned rule sets
+
+**Rules Dashboard:**
+7. `/admin/rules-dashboard` renders overview with all rule sets
+8. Global rules editable and versioned on save
+9. Per-content-type rules editable, cascade correctly from global
+10. Preview mode shows synthetic plan matching current rules
+11. Access control: admin/lead can edit, member sees read-only
+
+**Tagging UIs:**
+12. Reviews bank tag editing (add/remove tags per row)
+13. Bulk tagging modal works on multiple selected rows
+14. Named projects CRUD full cycle (create, edit, mark inactive)
+15. Seed rows from playbook present and editable
+
+**Planner:**
+16. Planner generates valid plan for a Cost Guide (schema conforms)
+17. Planner respects DR 80 threshold on citation selection
+18. Planner respects 3-year max age on citation selection
+19. Planner respects 5-mention brand voice target
+20. Planner assigns styles across sections (not all same style)
+21. Planner filters testimonials by industry+keyword tags
+22. Planner filters named projects by tags
+23. Planner cost estimate matches actual cost within 20%
+
+**Plan Review UI:**
+24. Draft plan renders correctly with all sections
+25. Testimonial swap opens filtered list, confirms swap
+26. Link swap works
+27. Citation swap works
+28. Named project swap works
+29. Save as draft persists
+30. Save as template override versions the template
+31. Approve plan transitions status and triggers generation
+32. Discard and regenerate creates new plan lineage
+
+**Generation:**
+33. Generation with plan produces article respecting all specifications
+34. Word counts per section within 10% of plan target
+35. Brand mention count matches plan target exactly
+36. Brand mention styles match plan assignment
+37. Internal links match plan selections
+38. External citations match plan selections
+39. Testimonials in article are the ones the plan specified
+
+**Validation:**
+40. Plan compliance report generates for a completed article
+41. Fabricated testimonial validator still catches non-existent testimonial
+42. Confidentiality validator still catches confidential client
+43. Banned phrase validator works from global_rules
+44. Retired validators removed from execution
+
+**Cross-cutting:**
+45. `pnpm typecheck` passes across libs, api-server, both frontends
+46. Cross-brand isolation: ClaimShield admin cannot see TekRevol templates/plans
+47. Regression: single-project intake flow works end-to-end through new architecture
+48. Regression: Blog #1 topic regenerated through new architecture produces shippable output
+
+### 8.2 Architect review
+
+`git show --stat HEAD` before declaring complete. Treat architect feedback as authoritative.
+
+Three areas to scrutinize:
+
+**Plan schema validation.** The plan schema is complex JSON. Verify that plans validate structurally on write, that malformed plans can't reach generation, and that plan changes are tracked cleanly (provenance updates when fields change).
+
+**Template versioning correctness.** When Rabia edits a template, the new version must not affect in-flight plans that reference the old version. Verify that a plan generated under template v1 stays consistent even after template v2 is saved.
+
+**Retirement of obsolete validators.** Verify that removing the old validators doesn't break existing projects (legacy projects without plans should still validate against the old rule set as fallback). Cross-brand: verify that removing validators for TekRevol doesn't affect ClaimShield if that brand hasn't yet migrated to the plan architecture.
+
+---
+
+## Operational notes
+
+- **Order strict:** Phase 1 → 2 → 3 → *pause for Rabia's admin configuration* → 4 → 5 → 6 → 7 → 8. Do not reorder.
+
+- **Pause points:**
+  1. After Phase 0 survey
+  2. After Phase 1 completes (schema foundation)
+  3. After Phase 3 completes — **Rabia begins using Rules Dashboard, tags reviews, populates named projects.** This pause may be several days depending on her schedule.
+  4. After Phase 5 completes (Rabia sees first draft plans in Plan Review UI)
+  5. After Phase 6 completes (generation writing to plan verified with one real article)
+  6. After Phase 8 completion, before declaring done
+
+- **Templates seeded from playbook:** Phase 1 templates should be seeded from the current playbook Section 7 (content type specifications). Rabia then edits through the Rules Dashboard.
+
+- **Named projects seeded from playbook:** Phase 1 named projects should be seeded from playbook Section 10 (three illustrative entries). Flag them as `is_illustrative` if that column is added, or via naming convention.
+
+- **Backwards compatibility:** Existing projects without plans continue to work through the legacy pipeline. New projects use the plan architecture. Migration happens per-project as they're created.
+
+- **Cost hedges preserved:** Per-brand daily generation cap remains. Per-user concurrency limit remains. Rate limit handling remains.
+
+- **Playbook does not go away:** The playbook stays as the source of truth for brand voice, ICP definitions, banned phrases, credential blocks. The Rules Dashboard operates on top of playbook content — templates reference playbook sections; global rules are versioned copies of relevant playbook subsections. The playbook is upstream; the Rules Dashboard is downstream.
+
+- **Priority if time-constrained:** If any phase must be dropped, drop Phase 7.3 (retiring obsolete validators). The old validators can stay running alongside the new plan compliance validators temporarily. Cleanup happens in a follow-up dispatch. Do NOT drop Phase 6 (generation writes to plan) — that's where the value materializes.
+
+- **Follow-up dispatches queued (not this dispatch):**
+  - Competitor data quality audit (SEO team sanitizes competitor list, uses as ground truth)
+  - Generation queue (bulk topic queuing with rate-limit handling) — orthogonal to plan architecture, ships separately, may run in parallel with this dispatch
+  - AI Research module (UI for the 47K rows of preserved LLM citation data)
+  - Perplexity as research source option
+  - Infographic pipeline integration
+
+- **Scoped transactional DDL only.** No blanket `drizzle-kit push`. Existing schema drift untouched.
+
+---
+
+**Begin startup check → Phase 0 survey. Report findings before any code. Seven pause points across the dispatch. Phase 8's 48 smoke tests gate completion. Same operational rules as prior dispatches: `git show --stat HEAD` before declaring complete, treat architect feedback as authoritative, no scope creep.**
