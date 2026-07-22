@@ -9,9 +9,24 @@ import {
   ShieldOff,
   ShieldCheck,
   X,
+  Tag,
+  Tags,
 } from "lucide-react";
 import { useAuth } from "@/lib/useAuth";
 import { useActiveBrand } from "@/lib/brands";
+
+const INDUSTRY_TAGS = [
+  "healthcare",
+  "fintech",
+  "edtech",
+  "real_estate",
+  "retail",
+  "manufacturing",
+  "hospitality",
+  "legal",
+  "government",
+  "nonprofit",
+] as const;
 
 type Review = {
   id: string;
@@ -32,6 +47,8 @@ type Review = {
   is_confidential: boolean;
   confidential_reason: string | null;
   last_verified_at: string;
+  industry_tags: string[];
+  keyword_tags: string[];
 };
 
 const DELETE_REASONS = [
@@ -52,11 +69,34 @@ export default function AdminReviewsBank() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
-  const [deleting, setDeleting] = useState<{ id: string; reason: DeleteReason; note: string } | null>(null);
+  const [deleting, setDeleting] = useState<{
+    id: string;
+    reason: DeleteReason;
+    note: string;
+  } | null>(null);
 
   const [fIcp, setFIcp] = useState<string>("");
   const [fVertical, setFVertical] = useState<string>("");
   const [fConf, setFConf] = useState<"all" | "visible" | "confidential">("all");
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const [tagEditId, setTagEditId] = useState<string | null>(null);
+  const [tagDraft, setTagDraft] = useState<{ industry: string[]; keyword: string[] }>({
+    industry: [],
+    keyword: [],
+  });
+  const [tagKwInput, setTagKwInput] = useState("");
+  const [savingTags, setSavingTags] = useState(false);
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkDraft, setBulkDraft] = useState<{
+    industry: string[];
+    keyword: string[];
+    merge: boolean;
+    kwInput: string;
+  }>({ industry: [], keyword: [], merge: true, kwInput: "" });
+  const [applyingBulk, setApplyingBulk] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -86,17 +126,19 @@ export default function AdminReviewsBank() {
   }, [load]);
 
   const verticals = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.vertical).filter(Boolean))) as string[],
+    () =>
+      Array.from(new Set(rows.map((r) => r.vertical).filter(Boolean))) as string[],
     [rows],
   );
   const icps = useMemo(
     () =>
-      Array.from(new Set(rows.map((r) => r.icp).filter((x): x is number => x != null))).sort(
-        (a, b) => a - b,
-      ),
+      Array.from(
+        new Set(
+          rows.map((r) => r.icp).filter((x): x is number => x != null),
+        ),
+      ).sort((a, b) => a - b),
     [rows],
   );
-
   const filtered = useMemo(
     () =>
       rows.filter((r) => {
@@ -125,12 +167,15 @@ export default function AdminReviewsBank() {
       } catch {
         throw new Error("File is not valid JSON.");
       }
-      const resp = await fetch(`/api/admin/reviews-bank/import?brandId=${brandId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(parsed),
-      });
+      const resp = await fetch(
+        `/api/admin/reviews-bank/import?brandId=${brandId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(parsed),
+        },
+      );
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error ?? "import failed");
       toast.success(`Imported ${data.imported} review(s).`);
@@ -175,6 +220,11 @@ export default function AdminReviewsBank() {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error ?? "delete failed");
       setRows((rs) => rs.filter((x) => x.id !== deleting.id));
+      setSelected((s) => {
+        const n = new Set(s);
+        n.delete(deleting.id);
+        return n;
+      });
       toast.success("Review permanently deleted.");
       setDeleting(null);
     } catch (e) {
@@ -184,8 +234,132 @@ export default function AdminReviewsBank() {
     }
   };
 
+  const openTagEdit = (r: Review) => {
+    setTagEditId(r.id);
+    setTagDraft({ industry: [...r.industry_tags], keyword: [...r.keyword_tags] });
+    setTagKwInput("");
+  };
+
+  const flushKwInput = (
+    draft: typeof tagDraft,
+    input: string,
+  ): typeof tagDraft => ({
+    ...draft,
+    keyword: Array.from(
+      new Set([
+        ...draft.keyword,
+        ...input
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+      ]),
+    ),
+  });
+
+  const saveTags = async () => {
+    if (!tagEditId) return;
+    setSavingTags(true);
+    const finalDraft = flushKwInput(tagDraft, tagKwInput);
+    try {
+      const resp = await fetch(`/api/admin/reviews-bank/${tagEditId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          industry_tags: finalDraft.industry,
+          keyword_tags: finalDraft.keyword,
+        }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const updated = (await resp.json()) as Review;
+      setRows((rs) => rs.map((x) => (x.id === tagEditId ? updated : x)));
+      toast.success("Tags saved.");
+      setTagEditId(null);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSavingTags(false);
+    }
+  };
+
+  const toggleSelect = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((r) => selected.has(r.id));
+
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) {
+      setSelected((s) => {
+        const n = new Set(s);
+        filtered.forEach((r) => n.delete(r.id));
+        return n;
+      });
+    } else {
+      setSelected((s) => {
+        const n = new Set(s);
+        filtered.forEach((r) => n.add(r.id));
+        return n;
+      });
+    }
+  };
+
+  const applyBulkTags = async () => {
+    if (selected.size === 0) return;
+    setApplyingBulk(true);
+    const kw = Array.from(
+      new Set([
+        ...bulkDraft.keyword,
+        ...bulkDraft.kwInput
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+      ]),
+    );
+    const hasIndustry = bulkDraft.industry.length > 0;
+    const hasKeyword = kw.length > 0;
+    if (!hasIndustry && !hasKeyword) {
+      toast.error("Select at least one tag to apply.");
+      setApplyingBulk(false);
+      return;
+    }
+    try {
+      const body: Record<string, unknown> = {
+        brand_id: brandId,
+        ids: Array.from(selected),
+        merge: bulkDraft.merge,
+      };
+      if (hasIndustry) body.industry_tags = bulkDraft.industry;
+      if (hasKeyword) body.keyword_tags = kw;
+      const resp = await fetch("/api/admin/reviews-bank/bulk-tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error ?? "bulk tag failed");
+      const updatedMap = new Map(
+        (data.rows as Review[]).map((r: Review) => [r.id, r]),
+      );
+      setRows((rs) => rs.map((x) => updatedMap.get(x.id) ?? x));
+      toast.success(`Tags applied to ${data.updated as number} review(s).`);
+      setSelected(new Set());
+      setBulkOpen(false);
+      setBulkDraft({ industry: [], keyword: [], merge: true, kwInput: "" });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setApplyingBulk(false);
+    }
+  };
+
   return (
-    <div className="px-8 py-6 max-w-[1200px]">
+    <div className="px-8 py-6 max-w-[1400px]">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="font-serif text-2xl tracking-tight flex items-center gap-2">
@@ -194,7 +368,8 @@ export default function AdminReviewsBank() {
           <p className="text-sm text-ink-muted mt-1">
             The testimonial corpus for{" "}
             <span className="font-medium text-ink">{activeBrand?.name ?? "—"}</span>. Confidential
-            entries are excluded from generation.
+            entries are excluded from generation. Assign tags so the planner can match reviews to
+            article types.
           </p>
         </div>
         <div>
@@ -227,7 +402,9 @@ export default function AdminReviewsBank() {
       </div>
 
       {!brandId ? (
-        <p className="text-sm text-ink-muted">Select a brand from the switcher to view its reviews.</p>
+        <p className="text-sm text-ink-muted">
+          Select a brand from the switcher to view its reviews.
+        </p>
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-2 mb-4 text-sm">
@@ -264,8 +441,23 @@ export default function AdminReviewsBank() {
               <option value="visible">Visible only</option>
               <option value="confidential">Confidential only</option>
             </select>
+            {selected.size > 0 && (
+              <button
+                onClick={() => setBulkOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-accent text-white text-sm font-medium"
+              >
+                <Tags className="h-3.5 w-3.5" />
+                Bulk tag ({selected.size})
+              </button>
+            )}
             <span className="text-ink-muted ml-auto">
               {filtered.length} of {rows.length}
+              {selected.size > 0 && (
+                <>
+                  {" · "}
+                  <span className="font-medium">{selected.size} selected</span>
+                </>
+              )}
             </span>
           </div>
 
@@ -278,20 +470,41 @@ export default function AdminReviewsBank() {
               No reviews yet. Import a reviews_bank.json file to populate the bank.
             </p>
           ) : (
-            <div className="border border-rule rounded-sm overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="border border-rule rounded-sm overflow-x-auto">
+              <table className="w-full text-sm min-w-[960px]">
                 <thead className="bg-secondary text-ink-muted text-xs uppercase tracking-wide">
                   <tr>
+                    <th className="px-3 py-2 w-8">
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleSelectAll}
+                        className="rounded"
+                        title="Select all visible"
+                      />
+                    </th>
                     <th className="text-left px-3 py-2 font-medium">Reviewer / Company</th>
                     <th className="text-left px-3 py-2 font-medium">Quote</th>
                     <th className="text-left px-3 py-2 font-medium">ICP / Vertical</th>
+                    <th className="text-left px-3 py-2 font-medium">Tags</th>
                     <th className="text-left px-3 py-2 font-medium">Visibility</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((r) => (
-                    <tr key={r.id} className="border-t border-rule align-top">
+                    <tr
+                      key={r.id}
+                      className={`border-t border-rule align-top ${selected.has(r.id) ? "bg-accent/5" : ""}`}
+                    >
+                      <td className="px-3 py-2 w-8">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(r.id)}
+                          onChange={() => toggleSelect(r.id)}
+                          className="rounded"
+                        />
+                      </td>
                       <td className="px-3 py-2">
                         <div className="font-medium">{r.reviewer_name}</div>
                         <div className="text-ink-muted text-xs">
@@ -299,12 +512,46 @@ export default function AdminReviewsBank() {
                           {r.company}
                         </div>
                       </td>
-                      <td className="px-3 py-2 max-w-[360px]">
+                      <td className="px-3 py-2 max-w-[280px]">
                         <span className="line-clamp-3 text-ink-muted">{r.quote_excerpt}</span>
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         {r.icp != null ? `ICP ${r.icp}` : "—"}
                         <div className="text-ink-muted text-xs">{r.vertical ?? ""}</div>
+                      </td>
+                      <td className="px-3 py-2 min-w-[160px]">
+                        <div className="flex flex-wrap gap-1 mb-1">
+                          {r.industry_tags.slice(0, 2).map((t) => (
+                            <span
+                              key={t}
+                              className="inline-block px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-xs"
+                            >
+                              {t.replace(/_/g, " ")}
+                            </span>
+                          ))}
+                          {r.keyword_tags.slice(0, 2).map((t) => (
+                            <span
+                              key={t}
+                              className="inline-block px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded text-xs"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                          {r.industry_tags.length + r.keyword_tags.length > 4 && (
+                            <span className="text-xs text-ink-muted">
+                              +{r.industry_tags.length + r.keyword_tags.length - 4} more
+                            </span>
+                          )}
+                          {r.industry_tags.length === 0 && r.keyword_tags.length === 0 && (
+                            <span className="text-xs text-ink-muted italic">No tags</span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => openTagEdit(r)}
+                          className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
+                        >
+                          <Tag className="h-3 w-3" /> Edit tags
+                        </button>
                       </td>
                       <td className="px-3 py-2">
                         {r.is_confidential ? (
@@ -351,6 +598,279 @@ export default function AdminReviewsBank() {
         </>
       )}
 
+      {/* ---- Tag edit modal ---- */}
+      {tagEditId &&
+        (() => {
+          const review = rows.find((r) => r.id === tagEditId);
+          return (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+              <div className="bg-background rounded-md border border-rule w-[520px] p-5 shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-serif text-lg flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-accent" /> Edit tags
+                  </h2>
+                  <button
+                    onClick={() => setTagEditId(null)}
+                    className="text-ink-muted hover:text-ink"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                {review && (
+                  <p className="text-xs text-ink-muted mb-4">
+                    <span className="font-medium text-ink">{review.reviewer_name}</span> —{" "}
+                    {review.company}
+                  </p>
+                )}
+
+                <div className="mb-4">
+                  <label className="block text-xs uppercase tracking-wide text-ink-muted mb-2">
+                    Industry tags
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {INDUSTRY_TAGS.map((tag) => (
+                      <label
+                        key={tag}
+                        className="flex items-center gap-2 text-sm cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={tagDraft.industry.includes(tag)}
+                          onChange={(e) =>
+                            setTagDraft((d) => ({
+                              ...d,
+                              industry: e.target.checked
+                                ? [...d.industry, tag]
+                                : d.industry.filter((t) => t !== tag),
+                            }))
+                          }
+                          className="rounded"
+                        />
+                        {tag.replace(/_/g, " ")}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mb-5">
+                  <label className="block text-xs uppercase tracking-wide text-ink-muted mb-1">
+                    Keyword tags
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {tagDraft.keyword.map((t) => (
+                      <span
+                        key={t}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-xs"
+                      >
+                        {t}
+                        <button
+                          onClick={() =>
+                            setTagDraft((d) => ({
+                              ...d,
+                              keyword: d.keyword.filter((k) => k !== t),
+                            }))
+                          }
+                          className="hover:text-purple-900"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <input
+                    type="text"
+                    value={tagKwInput}
+                    onChange={(e) => setTagKwInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        const newTags = tagKwInput
+                          .split(",")
+                          .map((t) => t.trim())
+                          .filter(Boolean);
+                        if (newTags.length) {
+                          setTagDraft((d) => ({
+                            ...d,
+                            keyword: Array.from(new Set([...d.keyword, ...newTags])),
+                          }));
+                          setTagKwInput("");
+                        }
+                      }
+                    }}
+                    placeholder="Type a keyword, press Enter or comma to add"
+                    className="w-full border border-rule rounded-sm px-2 py-1.5 bg-background text-sm"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setTagEditId(null)}
+                    className="px-3 py-1.5 rounded-sm border border-rule text-sm hover:bg-secondary"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    disabled={savingTags}
+                    onClick={() => void saveTags()}
+                    className="px-3 py-1.5 rounded-sm bg-ink text-paper text-sm font-medium disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {savingTags ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
+                      </>
+                    ) : (
+                      "Save tags"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+      {/* ---- Bulk tag modal ---- */}
+      {bulkOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-background rounded-md border border-rule w-[520px] p-5 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-serif text-lg flex items-center gap-2">
+                <Tags className="h-4 w-4 text-accent" /> Bulk tag {selected.size} review
+                {selected.size !== 1 ? "s" : ""}
+              </h2>
+              <button
+                onClick={() => setBulkOpen(false)}
+                className="text-ink-muted hover:text-ink"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-4 text-sm mb-4">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="bulk-merge"
+                  checked={bulkDraft.merge}
+                  onChange={() => setBulkDraft((d) => ({ ...d, merge: true }))}
+                />
+                Merge with existing
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="bulk-merge"
+                  checked={!bulkDraft.merge}
+                  onChange={() => setBulkDraft((d) => ({ ...d, merge: false }))}
+                />
+                Replace existing
+              </label>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-xs uppercase tracking-wide text-ink-muted mb-2">
+                Industry tags
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {INDUSTRY_TAGS.map((tag) => (
+                  <label
+                    key={tag}
+                    className="flex items-center gap-2 text-sm cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={bulkDraft.industry.includes(tag)}
+                      onChange={(e) =>
+                        setBulkDraft((d) => ({
+                          ...d,
+                          industry: e.target.checked
+                            ? [...d.industry, tag]
+                            : d.industry.filter((t) => t !== tag),
+                        }))
+                      }
+                      className="rounded"
+                    />
+                    {tag.replace(/_/g, " ")}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-5">
+              <label className="block text-xs uppercase tracking-wide text-ink-muted mb-1">
+                Keyword tags
+              </label>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {bulkDraft.keyword.map((t) => (
+                  <span
+                    key={t}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-xs"
+                  >
+                    {t}
+                    <button
+                      onClick={() =>
+                        setBulkDraft((d) => ({
+                          ...d,
+                          keyword: d.keyword.filter((k) => k !== t),
+                        }))
+                      }
+                      className="hover:text-purple-900"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <input
+                type="text"
+                value={bulkDraft.kwInput}
+                onChange={(e) => setBulkDraft((d) => ({ ...d, kwInput: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    const newTags = bulkDraft.kwInput
+                      .split(",")
+                      .map((t) => t.trim())
+                      .filter(Boolean);
+                    if (newTags.length) {
+                      setBulkDraft((d) => ({
+                        ...d,
+                        keyword: Array.from(new Set([...d.keyword, ...newTags])),
+                        kwInput: "",
+                      }));
+                    }
+                  }
+                }}
+                placeholder="Type a keyword, press Enter or comma to add"
+                className="w-full border border-rule rounded-sm px-2 py-1.5 bg-background text-sm"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setBulkOpen(false)}
+                className="px-3 py-1.5 rounded-sm border border-rule text-sm hover:bg-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={applyingBulk}
+                onClick={() => void applyBulkTags()}
+                className="px-3 py-1.5 rounded-sm bg-ink text-paper text-sm font-medium disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                {applyingBulk ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Applying…
+                  </>
+                ) : (
+                  `Apply to ${selected.size}`
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Delete modal ---- */}
       {deleting && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-background rounded-md border border-rule w-[440px] p-5 shadow-xl">
@@ -358,7 +878,10 @@ export default function AdminReviewsBank() {
               <h2 className="font-serif text-lg flex items-center gap-2">
                 <Trash2 className="h-4 w-4 text-red-600" /> Permanently delete review
               </h2>
-              <button onClick={() => setDeleting(null)} className="text-ink-muted hover:text-ink">
+              <button
+                onClick={() => setDeleting(null)}
+                className="text-ink-muted hover:text-ink"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -400,7 +923,7 @@ export default function AdminReviewsBank() {
               </button>
               <button
                 disabled={busyId === deleting.id}
-                onClick={confirmDelete}
+                onClick={() => void confirmDelete()}
                 className="px-3 py-1.5 rounded-sm bg-red-600 text-white text-sm font-medium disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {busyId === deleting.id ? (

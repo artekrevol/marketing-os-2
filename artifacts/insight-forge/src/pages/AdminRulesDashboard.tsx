@@ -1310,11 +1310,10 @@ export default function AdminRulesDashboard() {
                 )}
                 {activeSection === "named-projects" && (
                   <div className="space-y-4">
-                    <p className="text-sm text-ink-muted">Manage named project case evidence — the portfolio the planner uses for project spotlights.</p>
+                    <p className="text-sm text-ink-muted">Manage named project case evidence — the portfolio the planner uses for project spotlights. Entries marked <span className="text-amber-700 font-medium">Placeholder</span> are illustrative seed data — replace them with real anonymised client projects.</p>
                     <Link to="/admin/named-projects" className="inline-flex items-center gap-2 px-4 py-2 border border-rule rounded text-sm hover:bg-secondary transition-colors">
                       <ChevronRight className="h-4 w-4" /> Open Named Projects admin
                     </Link>
-                    <p className="text-xs text-ink-muted">Full CRUD for named projects is available at the dedicated admin page (Phase 3).</p>
                   </div>
                 )}
                 {activeSection === "reviews-tagging" && (
@@ -1323,7 +1322,7 @@ export default function AdminRulesDashboard() {
                     <Link to="/admin/reviews-bank" className="inline-flex items-center gap-2 px-4 py-2 border border-rule rounded text-sm hover:bg-secondary transition-colors">
                       <ChevronRight className="h-4 w-4" /> Open Reviews Bank admin
                     </Link>
-                    <p className="text-xs text-ink-muted">Tagging UI extensions arrive in Phase 3.</p>
+                    <p className="text-xs text-ink-muted">Select individual reviews to edit tags inline, or use multi-select checkboxes to bulk-apply industry and keyword tags in one action.</p>
                   </div>
                 )}
                 {activeSection === "preview" && brandId && (

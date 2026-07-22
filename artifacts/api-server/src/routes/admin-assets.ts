@@ -7,14 +7,16 @@ import {
   linkingRulesTable,
   moduleDataProvenanceTable,
   contentPlanTemplatesTable,
+  namedProjectsTable,
   getResolvedTemplate,
   getTemplateVersionHistory,
   type InsertReviewsBankEntry,
   type InsertLinkTarget,
   type InsertLinkingRule,
+  type InsertNamedProject,
 } from "@workspace/db";
 import { requireAdmin } from "../middlewares/auth.js";
-import { eq, and, desc, asc, isNull } from "drizzle-orm";
+import { eq, and, desc, asc, isNull, inArray } from "drizzle-orm";
 import ExcelJS from "exceljs";
 
 /**
@@ -152,6 +154,8 @@ function reviewToSnake(r: typeof reviewsBankEntriesTable.$inferSelect) {
     confidential_reason: r.confidentialReason,
     imported_at: r.importedAt,
     last_verified_at: r.lastVerifiedAt,
+    industry_tags: r.industryTags as string[],
+    keyword_tags: r.keywordTags as string[],
   };
 }
 
@@ -376,6 +380,14 @@ router.patch("/reviews-bank/:id", async (req, res, next) => {
     if ("rating" in b) patch.rating = s(b.rating);
     if ("outcome_metrics" in b && typeof b.outcome_metrics === "object")
       patch.outcomeMetrics = b.outcome_metrics as Record<string, unknown>;
+    if ("industry_tags" in b && Array.isArray(b.industry_tags))
+      patch.industryTags = (b.industry_tags as unknown[]).filter(
+        (x): x is string => typeof x === "string",
+      );
+    if ("keyword_tags" in b && Array.isArray(b.keyword_tags))
+      patch.keywordTags = (b.keyword_tags as unknown[]).filter(
+        (x): x is string => typeof x === "string",
+      );
 
     if (Object.keys(patch).length === 0) {
       res.status(400).json({ error: "no editable fields supplied" });
@@ -466,6 +478,96 @@ router.delete("/reviews-bank/:id", async (req, res, next) => {
     });
 
     res.json({ deleted: id, reason: reasonRaw, hard_delete: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/admin/reviews-bank/bulk-tags
+ * Apply or merge industry_tags / keyword_tags on multiple reviews at once.
+ * Body: { brand_id, ids: string[], industry_tags?: string[], keyword_tags?: string[], merge?: boolean }
+ * merge=true (default false) → union with existing; false → replace.
+ */
+router.post("/reviews-bank/bulk-tags", async (req, res, next) => {
+  try {
+    const b = req.body as Record<string, unknown>;
+    const brandId = await resolveBrandId(b.brand_id ?? req.query.brandId);
+    if (!brandId) {
+      res.status(400).json({ error: "valid brand_id is required" });
+      return;
+    }
+    const rawIds = Array.isArray(b.ids) ? b.ids : [];
+    const ids = rawIds.filter(
+      (x): x is string => typeof x === "string" && UUID_RE.test(x),
+    );
+    if (ids.length === 0) {
+      res.status(400).json({ error: "ids must be a non-empty array of valid UUIDs" });
+      return;
+    }
+    const merge = b.merge === true;
+    const newIndustry = Array.isArray(b.industry_tags)
+      ? (b.industry_tags as unknown[]).filter((x): x is string => typeof x === "string")
+      : null;
+    const newKeyword = Array.isArray(b.keyword_tags)
+      ? (b.keyword_tags as unknown[]).filter((x): x is string => typeof x === "string")
+      : null;
+    if (!newIndustry && !newKeyword) {
+      res.status(400).json({
+        error: "at least one of industry_tags or keyword_tags is required",
+      });
+      return;
+    }
+
+    const results = await db.transaction(async (tx) => {
+      const existing = await tx
+        .select()
+        .from(reviewsBankEntriesTable)
+        .where(
+          and(
+            inArray(reviewsBankEntriesTable.id, ids),
+            eq(reviewsBankEntriesTable.brandId, brandId),
+          ),
+        );
+      const updated: (typeof reviewsBankEntriesTable.$inferSelect)[] = [];
+      for (const row of existing) {
+        const industryTags =
+          merge && newIndustry
+            ? Array.from(
+                new Set([...(row.industryTags as string[]), ...newIndustry]),
+              )
+            : (newIndustry ?? (row.industryTags as string[]));
+        const keywordTags =
+          merge && newKeyword
+            ? Array.from(
+                new Set([...(row.keywordTags as string[]), ...newKeyword]),
+              )
+            : (newKeyword ?? (row.keywordTags as string[]));
+        const [u] = await tx
+          .update(reviewsBankEntriesTable)
+          .set({ industryTags, keywordTags, lastVerifiedAt: new Date() })
+          .where(eq(reviewsBankEntriesTable.id, row.id))
+          .returning();
+        updated.push(u!);
+      }
+      await writeProvenance(tx as unknown as typeof db, {
+        brandId,
+        entityType: "reviews_bank_bulk_tags",
+        entityId: brandId,
+        sourceModule: "content-forge",
+        sourceUserId: req.auth?.userId ?? null,
+        generationMethod: "manual",
+        metadata: {
+          ids,
+          industry_tags: newIndustry,
+          keyword_tags: newKeyword,
+          merge,
+        },
+      });
+      return updated;
+    });
+
+    res.json({ updated: results.length, rows: results.map(reviewToSnake) });
   } catch (err) {
     next(err);
   }
@@ -1061,6 +1163,240 @@ router.post("/content-plan-templates/rollback", async (req, res, next) => {
     });
 
     res.json({ template: newRow, restored_from_version: src.version });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ========================================================================== */
+/* Named projects (content plan corpus)                                       */
+/* ========================================================================== */
+
+function toSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function projectToSnake(p: typeof namedProjectsTable.$inferSelect) {
+  return {
+    id: p.id,
+    brand_id: p.brandId,
+    name: p.name,
+    slug: p.slug,
+    problem_summary: p.problemSummary,
+    approach_summary: p.approachSummary,
+    outcome_summary: p.outcomeSummary,
+    industry_tags: p.industryTags as string[],
+    keyword_tags: p.keywordTags as string[],
+    client_display_name: p.clientDisplayName,
+    is_confidential: p.isConfidential,
+    is_active: p.isActive,
+    is_illustrative: p.isIllustrative,
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+  };
+}
+
+/** GET /api/admin/named-projects?brandId= — list all (active + inactive). */
+router.get("/named-projects", async (req, res, next) => {
+  try {
+    const brandId = await resolveBrandId(req.query.brandId);
+    if (!brandId) {
+      res.status(400).json({ error: "valid brandId is required" });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(namedProjectsTable)
+      .where(eq(namedProjectsTable.brandId, brandId))
+      .orderBy(asc(namedProjectsTable.name));
+    res.json(rows.map(projectToSnake));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** POST /api/admin/named-projects — create a new named project. */
+router.post("/named-projects", async (req, res, next) => {
+  try {
+    const b = req.body as Record<string, unknown>;
+    const brandId = await resolveBrandId(b.brand_id ?? req.query.brandId);
+    if (!brandId) {
+      res.status(400).json({ error: "valid brand_id is required" });
+      return;
+    }
+    const name = s(b.name);
+    if (!name) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const slug = s(b.slug) || toSlug(name);
+    const problemSummary = s(b.problem_summary) ?? "";
+    const approachSummary = s(b.approach_summary) ?? "";
+    const outcomeSummary = s(b.outcome_summary) ?? "";
+    const industryTags = Array.isArray(b.industry_tags)
+      ? (b.industry_tags as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    const keywordTags = Array.isArray(b.keyword_tags)
+      ? (b.keyword_tags as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    const clientDisplayName = s(b.client_display_name) ?? null;
+    const isConfidential = b.is_confidential === true;
+    const isIllustrative = b.is_illustrative === true;
+
+    const [row] = await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(namedProjectsTable)
+        .values({
+          brandId,
+          name,
+          slug,
+          problemSummary,
+          approachSummary,
+          outcomeSummary,
+          industryTags,
+          keywordTags,
+          clientDisplayName,
+          isConfidential,
+          isIllustrative,
+        })
+        .returning();
+      await writeProvenance(tx as unknown as typeof db, {
+        brandId,
+        entityType: "named_project",
+        entityId: inserted[0]!.id,
+        sourceModule: "content-forge",
+        sourceUserId: req.auth?.userId ?? null,
+        generationMethod: "manual",
+        metadata: { action: "create", name },
+      });
+      return inserted;
+    });
+
+    res.status(201).json(projectToSnake(row!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** PUT /api/admin/named-projects/:id — update a named project. */
+router.put("/named-projects/:id", async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "invalid id" });
+      return;
+    }
+    const existing = await db
+      .select()
+      .from(namedProjectsTable)
+      .where(eq(namedProjectsTable.id, id))
+      .limit(1);
+    const row = existing[0];
+    if (!row) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const patch: Partial<InsertNamedProject> = {};
+    if ("name" in b) {
+      const v = s(b.name);
+      if (v) patch.name = v;
+    }
+    if ("slug" in b) {
+      const v = s(b.slug);
+      if (v) patch.slug = v;
+    }
+    if ("problem_summary" in b) patch.problemSummary = s(b.problem_summary) ?? "";
+    if ("approach_summary" in b) patch.approachSummary = s(b.approach_summary) ?? "";
+    if ("outcome_summary" in b) patch.outcomeSummary = s(b.outcome_summary) ?? "";
+    if ("industry_tags" in b && Array.isArray(b.industry_tags))
+      patch.industryTags = (b.industry_tags as unknown[]).filter(
+        (x): x is string => typeof x === "string",
+      );
+    if ("keyword_tags" in b && Array.isArray(b.keyword_tags))
+      patch.keywordTags = (b.keyword_tags as unknown[]).filter(
+        (x): x is string => typeof x === "string",
+      );
+    if ("client_display_name" in b)
+      patch.clientDisplayName = s(b.client_display_name) ?? null;
+    if ("is_confidential" in b) patch.isConfidential = b.is_confidential === true;
+    if ("is_illustrative" in b) patch.isIllustrative = b.is_illustrative === true;
+    if ("is_active" in b) patch.isActive = b.is_active === true;
+
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: "no editable fields supplied" });
+      return;
+    }
+    patch.updatedAt = new Date();
+
+    const [updated] = await db.transaction(async (tx) => {
+      const u = await tx
+        .update(namedProjectsTable)
+        .set(patch)
+        .where(eq(namedProjectsTable.id, id))
+        .returning();
+      await writeProvenance(tx as unknown as typeof db, {
+        brandId: row.brandId,
+        entityType: "named_project",
+        entityId: id,
+        sourceModule: "content-forge",
+        sourceUserId: req.auth?.userId ?? null,
+        generationMethod: "manual",
+        metadata: { action: "update", fields: Object.keys(patch) },
+      });
+      return u;
+    });
+
+    res.json(projectToSnake(updated!));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * DELETE /api/admin/named-projects/:id — soft delete (is_active = false).
+ * The project record is retained; the planner stops selecting it for new plans.
+ */
+router.delete("/named-projects/:id", async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    if (!UUID_RE.test(id)) {
+      res.status(400).json({ error: "invalid id" });
+      return;
+    }
+    const existing = await db
+      .select()
+      .from(namedProjectsTable)
+      .where(eq(namedProjectsTable.id, id))
+      .limit(1);
+    const row = existing[0];
+    if (!row) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+
+    const [updated] = await db.transaction(async (tx) => {
+      const u = await tx
+        .update(namedProjectsTable)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(eq(namedProjectsTable.id, id))
+        .returning();
+      await writeProvenance(tx as unknown as typeof db, {
+        brandId: row.brandId,
+        entityType: "named_project",
+        entityId: id,
+        sourceModule: "content-forge",
+        sourceUserId: req.auth?.userId ?? null,
+        generationMethod: "manual",
+        metadata: { action: "deactivate", name: row.name },
+      });
+      return u;
+    });
+
+    res.json(projectToSnake(updated!));
   } catch (err) {
     next(err);
   }

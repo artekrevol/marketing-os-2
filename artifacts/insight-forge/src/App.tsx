@@ -23,6 +23,7 @@ import AdminSystem from "./pages/AdminSystem.tsx";
 import AdminReviewsBank from "./pages/AdminReviewsBank.tsx";
 import AdminLinkTargets from "./pages/AdminLinkTargets.tsx";
 import AdminRulesDashboard from "./pages/AdminRulesDashboard.tsx";
+import AdminNamedProjects from "./pages/AdminNamedProjects.tsx";
 import Auth from "./pages/Auth.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -52,6 +53,7 @@ const App = () => (
               <Route path="/admin/reviews-bank" element={<AdminReviewsBank />} />
               <Route path="/admin/link-targets" element={<AdminLinkTargets />} />
               <Route path="/admin/rules-dashboard" element={<AdminRulesDashboard />} />
+              <Route path="/admin/named-projects" element={<AdminNamedProjects />} />
               <Route path="/project/:id" element={<ProjectLayout />}>
                 <Route index element={<Navigate to="brief" replace />} />
                 <Route path="brief" element={<BriefProposal />} />

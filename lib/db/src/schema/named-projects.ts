@@ -56,6 +56,12 @@ export const namedProjectsTable = pgTable(
     /** Confidential projects are excluded from published article citations. */
     isConfidential: boolean("is_confidential").notNull().default(false),
     isActive: boolean("is_active").notNull().default(true),
+    /**
+     * Illustrative seed entries created during onboarding to show the data model.
+     * Displayed with an amber "Placeholder" badge in the admin list.
+     * Rabia should replace these with real anonymized client project entries.
+     */
+    isIllustrative: boolean("is_illustrative").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
