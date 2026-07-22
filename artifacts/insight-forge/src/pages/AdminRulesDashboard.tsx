@@ -725,112 +725,331 @@ function VersionHistoryPanel({ versions, onClose, onRestore, saving }: {
 function OverviewSection({ templates, onNavigate }: {
   templates: TemplatesState; onNavigate: (s: ActiveSection) => void;
 }) {
+  const configuredCount = CONTENT_TYPES.filter(({ key }) => !!templates.byType[key]).length;
+  const gd = templates.global?.template_data as {
+    citation_authority?: { dr_minimum?: number };
+    brand_voice_global?: { mentions_per_article_target?: number };
+    tone_requirements?: { banned_phrases?: string[] };
+  } | undefined;
+
   return (
-    <div>
-      <p className="text-sm text-ink-muted mb-6">Active rule sets for this brand. Click any card to edit.</p>
-      <div className="grid grid-cols-3 gap-4">
-        <button onClick={() => onNavigate("global")}
-          className="text-left p-4 border border-rule rounded-md hover:border-accent/50 hover:bg-secondary/40 transition-colors">
-          <div className="flex items-center gap-2 mb-2"><Globe className="h-4 w-4 text-accent" /><span className="text-sm font-semibold">Global rules</span></div>
-          <div className="text-xs text-ink-muted space-y-0.5">
-            {templates.global ? (
-              <><div>v{templates.global.version} · {fmtShort(templates.global.created_at)}</div>
-              <div>DR ≥ {(templates.global.template_data as { citation_authority?: { dr_minimum?: number } }).citation_authority?.dr_minimum ?? "—"}</div></>
-            ) : <div className="text-ink-muted/50">No template yet</div>}
+    <div className="space-y-6">
+      {/* Coverage banner */}
+      <div className="flex items-center gap-4 p-3 bg-secondary/40 rounded-md border border-rule text-sm">
+        <div className="flex items-center gap-1.5">
+          <span className={`h-2 w-2 rounded-full ${configuredCount === 8 ? "bg-green-500" : "bg-amber-400"}`} />
+          <span className="font-medium">{configuredCount}/8 types configured</span>
+        </div>
+        <span className="text-ink-muted/40">·</span>
+        <span className="text-ink-muted">
+          Global rules: {templates.global ? <>v{templates.global.version} · saved {fmtShort(templates.global.created_at)}</> : <span className="text-ink-muted/50">not configured</span>}
+        </span>
+      </div>
+
+      {/* Global rules card */}
+      <button onClick={() => onNavigate("global")}
+        className="w-full text-left p-4 border border-rule rounded-md hover:border-accent/40 hover:bg-secondary/30 transition-colors">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Globe className="h-4 w-4 text-accent" />
+            <span className="text-sm font-semibold">Global rules</span>
           </div>
-        </button>
-        {CONTENT_TYPES.map(({ key, label }) => {
-          const t = templates.byType[key] ?? null;
-          const d = t?.template_data as { article_structure?: { target_word_count?: number; section_kinds?: string[] } } | undefined;
-          return (
-            <button key={key} onClick={() => onNavigate(key)}
-              className="text-left p-4 border border-rule rounded-md hover:border-accent/50 hover:bg-secondary/40 transition-colors">
-              <div className="flex items-center gap-2 mb-2"><BookOpen className="h-4 w-4 text-ink-muted" /><span className="text-sm font-semibold">{label}</span></div>
-              <div className="text-xs text-ink-muted space-y-0.5">
-                {t ? (
-                  <><div>v{t.version} · {fmtShort(t.created_at)}</div>
-                  <div>{d?.article_structure?.target_word_count?.toLocaleString() ?? "—"}w · {d?.article_structure?.section_kinds?.length ?? "—"} sections</div></>
-                ) : <div className="text-ink-muted/50">No template yet</div>}
-              </div>
-            </button>
-          );
-        })}
+          {templates.global
+            ? <span className="text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent rounded-full font-medium">v{templates.global.version}</span>
+            : <span className="text-[10px] text-ink-muted/50">not configured</span>}
+        </div>
+        {gd ? (
+          <div className="grid grid-cols-3 gap-3 text-xs text-ink-muted">
+            <div><span className="block text-ink font-medium">DR ≥ {gd.citation_authority?.dr_minimum ?? "—"}</span>Min domain rating</div>
+            <div><span className="block text-ink font-medium">{gd.brand_voice_global?.mentions_per_article_target ?? "—"} mentions</span>Target per article</div>
+            <div><span className="block text-ink font-medium">{gd.tone_requirements?.banned_phrases?.length ?? 0} phrases</span>Banned</div>
+          </div>
+        ) : (
+          <p className="text-xs text-ink-muted/50">No global template yet — save one to unlock per-type cascades.</p>
+        )}
+      </button>
+
+      {/* Per-type cards */}
+      <div>
+        <p className="text-xs font-medium text-ink-muted uppercase tracking-wider mb-3">By content type</p>
+        <div className="grid grid-cols-2 gap-3">
+          {CONTENT_TYPES.map(({ key, label }) => {
+            const t = templates.byType[key] ?? null;
+            const d = t?.template_data as {
+              article_structure?: { target_word_count?: number; section_kinds?: string[] };
+              required_elements?: Record<string, unknown>;
+            } | undefined;
+            const boolFlags = d?.required_elements
+              ? Object.entries(d.required_elements).filter(([, v]) => typeof v === "boolean" && v === true).map(([k]) => k)
+              : [];
+            const defaults = TYPE_DEFAULTS[key];
+            return (
+              <button key={key} onClick={() => onNavigate(key)}
+                className="text-left p-3.5 border border-rule rounded-md hover:border-accent/40 hover:bg-secondary/30 transition-colors">
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="h-3.5 w-3.5 text-ink-muted shrink-0 mt-0.5" />
+                    <span className="text-sm font-semibold leading-tight">{label}</span>
+                  </div>
+                  {t
+                    ? <span className="text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent rounded-full font-medium shrink-0">v{t.version}</span>
+                    : <span className="text-[10px] px-1.5 py-0.5 bg-secondary text-ink-muted/60 rounded-full shrink-0">defaults</span>}
+                </div>
+                <p className="text-[11px] text-ink-muted leading-snug mb-2 line-clamp-2">{defaults.description}</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-muted">
+                  <span>{(d?.article_structure?.target_word_count ?? defaults.wordCount).toLocaleString()}w</span>
+                  <span>{(d?.article_structure?.section_kinds?.length ?? defaults.sectionKinds.length)} sections</span>
+                  {boolFlags.length > 0 && <span>{boolFlags.length} required flag{boolFlags.length !== 1 ? "s" : ""}</span>}
+                  {t && <span className="text-ink-muted/50">{fmtShort(t.created_at)}</span>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
-function PreviewSection({ brandId }: { brandId: string }) {
+/**
+ * Phase 2.4 — Preview mode with per-type selector.
+ *
+ * Replaces the old "fetch all 8 at load" approach with a tab-strip that
+ * resolves a single selected content type on demand. This means:
+ *   - Fast initial paint (no 8-parallel fetches on mount)
+ *   - Heading reads "Sample [Label] Plan" for the selected type
+ *   - initialContentType lets the sidebar carry context from the last-edited
+ *     per-type editor so Rabia lands on the right type without extra clicks
+ *   - "All types" compact view available via a toggle for quick scanning
+ *
+ * Source of truth: persisted DB state via /resolve. Consistent with the
+ * inline ResolvedPreviewPanel in each TypeForm — both read the same endpoint.
+ */
+function PreviewSection({ brandId, initialContentType }: { brandId: string; initialContentType?: ContentTypeKey }) {
+  const [selectedType, setSelectedType] = useState<ContentTypeKey>(initialContentType ?? "cost_guide");
   const [loading, setLoading] = useState(false);
-  const [resolved, setResolved] = useState<Record<string, ResolvedTemplate>>({});
+  const [resolved, setResolved] = useState<ResolvedTemplate | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [allView, setAllView] = useState(false);
+  const [allResolved, setAllResolved] = useState<Record<string, ResolvedTemplate>>({});
+  const [allLoading, setAllLoading] = useState(false);
 
-  useEffect(() => {
-    setLoading(true); setError(null);
-    Promise.all(
-      CONTENT_TYPES.map(async ({ key }) => {
-        const r = await fetch(`/api/admin/content-plan-templates/resolve?brandId=${brandId}&contentType=${key}`, { credentials: "include" });
-        if (!r.ok) return null;
-        return [key, await r.json()] as [string, ResolvedTemplate];
-      })
-    ).then((results) => {
-      const map: Record<string, ResolvedTemplate> = {};
-      for (const r of results) { if (r) map[r[0]] = r[1]; }
-      setResolved(map);
-    }).catch((e) => setError((e as Error).message)).finally(() => setLoading(false));
+  const fetchType = useCallback(async (type: ContentTypeKey) => {
+    setLoading(true); setError(null); setResolved(null);
+    try {
+      const r = await fetch(
+        `/api/admin/content-plan-templates/resolve?brandId=${brandId}&contentType=${type}`,
+        { credentials: "include" },
+      );
+      if (!r.ok) throw new Error(await r.text());
+      setResolved(await r.json());
+    } catch (e) { setError((e as Error).message); }
+    finally { setLoading(false); }
   }, [brandId]);
 
-  if (loading) return <div className="flex items-center gap-2 text-sm text-ink-muted"><Loader2 className="h-4 w-4 animate-spin" />Loading resolved templates…</div>;
-  if (error) return <div className="text-sm text-red-500">{error}</div>;
+  useEffect(() => { fetchType(selectedType); }, [fetchType, selectedType]);
+
+  const loadAllView = async () => {
+    setAllView(true);
+    if (Object.keys(allResolved).length === 8) return;
+    setAllLoading(true);
+    try {
+      const results = await Promise.all(
+        CONTENT_TYPES.map(async ({ key }) => {
+          const r = await fetch(`/api/admin/content-plan-templates/resolve?brandId=${brandId}&contentType=${key}`, { credentials: "include" });
+          if (!r.ok) return null;
+          return [key, await r.json()] as [string, ResolvedTemplate];
+        })
+      );
+      const map: Record<string, ResolvedTemplate> = {};
+      for (const r of results) { if (r) map[r[0]] = r[1]; }
+      setAllResolved(map);
+    } finally { setAllLoading(false); }
+  };
+
+  const prov = (p: "global" | "per_type") =>
+    p === "per_type"
+      ? <span className="text-[10px] text-accent font-medium ml-1">override</span>
+      : <span className="text-[10px] text-ink-muted/50 ml-1">global</span>;
+
+  const selectedLabel = CONTENT_TYPES.find((ct) => ct.key === selectedType)?.label ?? selectedType;
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-ink-muted">Resolved values your plans will actually use — after applying all per-type overrides and global cascades.</p>
-      {CONTENT_TYPES.map(({ key, label }) => {
-        const r = resolved[key];
-        if (!r) return <div key={key} className="p-3 border border-rule rounded text-xs text-ink-muted">{label}: No global template configured.</div>;
-        return (
-          <div key={key} className="p-4 border border-rule rounded-md">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">{label}</h4>
-              <span className="text-[10px] text-ink-muted">global v{r.versions.global}{r.versions.perType !== null ? ` · type v${r.versions.perType}` : ""}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-              <span className="text-ink-muted">Word count:</span>
-              <span>{r.articleStructure?.targetWordCount.toLocaleString() ?? "—"}</span>
-              <span className="text-ink-muted">Sections:</span>
-              <span className="truncate">{r.articleStructure?.sectionKinds.join(" → ") ?? "—"}</span>
-              <span className="text-ink-muted">Mentions target / max:</span>
-              <span>
-                {r.brandVoice.mentionsPerArticleTarget}{" "}
-                <span className={`text-[10px] ${r.provenance.mentionsPerArticleTarget === "per_type" ? "text-accent" : "text-ink-muted/60"}`}>
-                  ({r.provenance.mentionsPerArticleTarget === "per_type" ? "override" : "global"})
-                </span>
-                {" / "}
-                {r.brandVoice.mentionsPerArticleMax}{" "}
-                <span className={`text-[10px] ${r.provenance.mentionsPerArticleMax === "per_type" ? "text-accent" : "text-ink-muted/60"}`}>
-                  ({r.provenance.mentionsPerArticleMax === "per_type" ? "override" : "global"})
-                </span>
-              </span>
-              <span className="text-ink-muted">DR minimum:</span>
-              <span>
-                ≥ {r.citationAuthority.drMinimum}{" "}
-                <span className={`text-[10px] ${r.provenance.drMinimum === "per_type" ? "text-accent" : "text-ink-muted/60"}`}>
-                  ({r.provenance.drMinimum === "per_type" ? "override" : "global"})
-                </span>
-              </span>
-              {r.citationAuthority.whitelistedDomains.length > 0 && (
-                <>
-                  <span className="text-ink-muted">Domains:</span>
-                  <span className="text-xs">{r.citationAuthority.whitelistedDomains.map(d => `${d.domain} (DR ${d.effectiveDrMinimum})`).join(", ")}</span>
-                </>
-              )}
-              <span className="text-ink-muted">Links / citations:</span>
-              <span>{r.requiredElements?.minInternalLinks ?? "—"} internal · {r.requiredElements?.minExternalCitations ?? "—"} external</span>
-            </div>
+    <div className="space-y-5">
+      {/* Header + view toggle */}
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-ink-muted">
+          Resolved values your plans receive — after all per-type overrides and global cascades.
+        </p>
+        <button
+          onClick={() => allView ? setAllView(false) : loadAllView()}
+          className="text-xs text-ink-muted hover:text-ink underline-offset-2 hover:underline shrink-0 ml-4"
+        >
+          {allView ? "← Detail view" : "All types ↓"}
+        </button>
+      </div>
+
+      {!allView && (
+        <>
+          {/* Type tab strip */}
+          <div className="flex flex-wrap gap-1.5">
+            {CONTENT_TYPES.map(({ key, label }) => (
+              <button key={key} onClick={() => setSelectedType(key)}
+                className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                  selectedType === key
+                    ? "bg-ink text-paper border-ink"
+                    : "bg-background border-rule text-ink-muted hover:border-ink/30 hover:text-ink"
+                }`}>
+                {label}
+              </button>
+            ))}
           </div>
-        );
-      })}
+
+          {/* Detail card */}
+          <div className="border border-rule rounded-md overflow-hidden">
+            <div className="px-4 py-3 bg-secondary/30 border-b border-rule flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold">Sample {selectedLabel} Plan</h3>
+                <p className="text-xs text-ink-muted mt-0.5">{TYPE_DEFAULTS[selectedType]?.description}</p>
+              </div>
+              {resolved && (
+                <span className="text-[10px] text-ink-muted shrink-0 ml-4">
+                  global v{resolved.versions.global}
+                  {resolved.versions.perType !== null ? ` · type v${resolved.versions.perType}` : ""}
+                </span>
+              )}
+            </div>
+
+            {loading && (
+              <div className="flex items-center gap-2 text-sm text-ink-muted px-4 py-6">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+              </div>
+            )}
+            {error && <div className="text-sm text-red-500 px-4 py-4">{error}</div>}
+
+            {resolved && !loading && (
+              <div className="p-4 space-y-5">
+                {/* Article structure */}
+                <section>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">Article structure</h4>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
+                    <span className="text-ink-muted text-xs">Word count</span>
+                    <span className="text-xs">{resolved.articleStructure?.targetWordCount.toLocaleString() ?? "—"}</span>
+                    <span className="text-ink-muted text-xs">H2 count</span>
+                    <span className="text-xs">{resolved.articleStructure?.h2CountTarget ?? "—"}</span>
+                    <span className="text-ink-muted text-xs">Section flow</span>
+                    <span className="text-xs leading-relaxed">
+                      {resolved.articleStructure?.sectionKinds.map((s, i, arr) => (
+                        <span key={s}>{s.replace(/_/g, " ")}{i < arr.length - 1 ? <span className="text-ink-muted/40 mx-1">→</span> : null}</span>
+                      )) ?? "—"}
+                    </span>
+                  </div>
+                </section>
+
+                {/* Required elements */}
+                {resolved.requiredElements && (
+                  <section>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">Required elements</h4>
+                    <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-xs">
+                      <span className="text-ink-muted">Named projects</span><span>≥ {resolved.requiredElements.minNamedProjects}</span>
+                      <span className="text-ink-muted">Internal links</span><span>≥ {resolved.requiredElements.minInternalLinks}</span>
+                      <span className="text-ink-muted">External citations</span><span>≥ {resolved.requiredElements.minExternalCitations}</span>
+                      {Object.entries(resolved.requiredElements.booleanFlags).map(([k, v]) => (
+                        <span key={k} className={v ? "text-ink-muted" : "text-ink-muted/40 line-through col-span-2 hidden"}>
+                          {k.replace(/_/g, " ")}
+                        </span>
+                      ))}
+                      {Object.entries(resolved.requiredElements.booleanFlags).filter(([, v]) => v).map(([k]) => (
+                        <span key={`v-${k}`} className="text-accent font-medium">required</span>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* Brand voice */}
+                <section>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">Brand voice</h4>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-xs">
+                    <span className="text-ink-muted">Mentions target</span>
+                    <span>{resolved.brandVoice.mentionsPerArticleTarget} {prov(resolved.provenance.mentionsPerArticleTarget)}</span>
+                    <span className="text-ink-muted">Mentions max</span>
+                    <span>{resolved.brandVoice.mentionsPerArticleMax} {prov(resolved.provenance.mentionsPerArticleMax)}</span>
+                  </div>
+                </section>
+
+                {/* Citation authority */}
+                <section>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">Citation authority</h4>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-xs">
+                    <span className="text-ink-muted">DR minimum</span>
+                    <span>≥ {resolved.citationAuthority.drMinimum} {prov(resolved.provenance.drMinimum)}</span>
+                    <span className="text-ink-muted">Max age</span>
+                    <span>≤ {resolved.citationAuthority.maxAgeYears}y {prov(resolved.provenance.maxAgeYears)}</span>
+                    <span className="text-ink-muted">Max per article</span>
+                    <span>{resolved.citationAuthority.maxPerArticle} {prov(resolved.provenance.maxPerArticle)}</span>
+                    {resolved.citationAuthority.whitelistedDomains.length > 0 && (
+                      <>
+                        <span className="text-ink-muted">Domain overrides</span>
+                        <span className="leading-relaxed">
+                          {resolved.citationAuthority.whitelistedDomains
+                            .map((d) => `${d.domain} (DR ${d.effectiveDrMinimum})`)
+                            .join(", ")}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </section>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* All-types compact view */}
+      {allView && (
+        <div className="space-y-3">
+          {allLoading && (
+            <div className="flex items-center gap-2 text-sm text-ink-muted">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading all types…
+            </div>
+          )}
+          {CONTENT_TYPES.map(({ key, label }) => {
+            const r = allResolved[key];
+            if (!r) return (
+              <div key={key} className="p-3 border border-rule rounded text-xs text-ink-muted">
+                {label}: No global template configured.
+              </div>
+            );
+            return (
+              <div key={key} className="p-3 border border-rule rounded-md">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold">{label}</h4>
+                  <span className="text-[10px] text-ink-muted">
+                    global v{r.versions.global}{r.versions.perType !== null ? ` · type v${r.versions.perType}` : ""}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-0.5 text-xs text-ink-muted">
+                  <span>Word count:</span><span className="text-ink">{r.articleStructure?.targetWordCount.toLocaleString() ?? "—"}</span>
+                  <span>Mentions:</span>
+                  <span className="text-ink">
+                    {r.brandVoice.mentionsPerArticleTarget}
+                    <span className={`ml-1 text-[10px] ${r.provenance.mentionsPerArticleTarget === "per_type" ? "text-accent" : "text-ink-muted/50"}`}>
+                      ({r.provenance.mentionsPerArticleTarget === "per_type" ? "override" : "global"})
+                    </span>
+                  </span>
+                  <span>DR min:</span>
+                  <span className="text-ink">
+                    ≥ {r.citationAuthority.drMinimum}
+                    <span className={`ml-1 text-[10px] ${r.provenance.drMinimum === "per_type" ? "text-accent" : "text-ink-muted/50"}`}>
+                      ({r.provenance.drMinimum === "per_type" ? "override" : "global"})
+                    </span>
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -854,6 +1073,9 @@ export default function AdminRulesDashboard() {
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<VersionRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // Tracks the last content-type section Rabia visited so Preview mode can
+  // open on the right type without an extra click.
+  const [lastVisitedType, setLastVisitedType] = useState<ContentTypeKey | null>(null);
 
   if (user && !user.isAdmin) return <Navigate to="/projects" replace />;
 
@@ -891,6 +1113,9 @@ export default function AdminRulesDashboard() {
 
   const switchSection = (s: ActiveSection) => {
     if (dirty && !window.confirm("You have unsaved changes. Discard them?")) return;
+    if (CONTENT_TYPES.some((ct) => ct.key === activeSection)) {
+      setLastVisitedType(activeSection as ContentTypeKey);
+    }
     setActiveSection(s);
     setLocalDraft(null);
     setDirty(false);
@@ -1083,7 +1308,9 @@ export default function AdminRulesDashboard() {
                     <p className="text-xs text-ink-muted">Tagging UI extensions arrive in Phase 3.</p>
                   </div>
                 )}
-                {activeSection === "preview" && brandId && <PreviewSection brandId={brandId} />}
+                {activeSection === "preview" && brandId && (
+                  <PreviewSection brandId={brandId} initialContentType={lastVisitedType ?? undefined} />
+                )}
               </div>
             </main>
 
