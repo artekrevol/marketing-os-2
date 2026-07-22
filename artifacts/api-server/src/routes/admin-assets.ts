@@ -8,6 +8,7 @@ import {
   moduleDataProvenanceTable,
   contentPlanTemplatesTable,
   getResolvedTemplate,
+  getTemplateVersionHistory,
   type InsertReviewsBankEntry,
   type InsertLinkTarget,
   type InsertLinkingRule,
@@ -979,6 +980,87 @@ router.put("/content-plan-templates", async (req, res, next) => {
     });
 
     res.json({ template: newRow, previous_version: current?.version ?? null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/admin/content-plan-templates/versions?brandId=&scope=&contentType=
+ *
+ * Returns all versions (active + inactive) for a template in newest-first order.
+ * Powers the version history panel in the Rules Dashboard.
+ */
+router.get("/content-plan-templates/versions", async (req, res, next) => {
+  try {
+    const brandId = await resolveBrandId(req.query.brandId);
+    if (!brandId) { res.status(400).json({ error: "brandId required" }); return; }
+    const scope = req.query.scope;
+    if (scope !== "global" && scope !== "content_type") {
+      res.status(400).json({ error: "scope must be 'global' or 'content_type'" }); return;
+    }
+    const contentType = scope === "content_type"
+      ? (typeof req.query.contentType === "string" ? req.query.contentType.trim() : null)
+      : null;
+    if (scope === "content_type" && !contentType) {
+      res.status(400).json({ error: "contentType required for scope=content_type" }); return;
+    }
+    const rows = await getTemplateVersionHistory({ brandId, scope, contentType });
+    res.json({ versions: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/admin/content-plan-templates/rollback
+ *
+ * Restores a prior version by copying its template_data into a new active version.
+ * The old version is NOT reactivated — a new row is inserted so history stays intact.
+ * Body: { brandId, templateId }
+ */
+router.post("/content-plan-templates/rollback", async (req, res, next) => {
+  try {
+    const { brandId: rawBrandId, templateId } = req.body as {
+      brandId?: string; templateId?: string;
+    };
+    const brandId = await resolveBrandId(rawBrandId);
+    if (!brandId) { res.status(400).json({ error: "brandId required" }); return; }
+    if (!templateId) { res.status(400).json({ error: "templateId required" }); return; }
+
+    const tpl = contentPlanTemplatesTable;
+    const target = await db.select().from(tpl)
+      .where(and(eq(tpl.id, templateId), eq(tpl.brandId, brandId)))
+      .limit(1);
+    if (!target[0]) { res.status(404).json({ error: "Template version not found" }); return; }
+    const src = target[0];
+
+    const conds = [
+      eq(tpl.brandId, brandId),
+      eq(tpl.scope, src.scope),
+      eq(tpl.isActive, true),
+      src.scope === "global" ? isNull(tpl.contentType) : eq(tpl.contentType, src.contentType!),
+    ];
+    const existing = await db.select().from(tpl).where(and(...conds)).limit(1);
+    const current = existing[0] ?? null;
+    const nextVersion = current ? current.version + 1 : 1;
+
+    const [newRow] = await db.transaction(async (tx) => {
+      if (current) {
+        await tx.update(tpl).set({ isActive: false }).where(eq(tpl.id, current.id));
+      }
+      return tx.insert(tpl).values({
+        brandId,
+        scope: src.scope,
+        contentType: src.contentType,
+        version: nextVersion,
+        templateData: src.templateData as Record<string, unknown>,
+        isActive: true,
+        createdBy: req.auth?.userId ?? null,
+      }).returning();
+    });
+
+    res.json({ template: newRow, restored_from_version: src.version });
   } catch (err) {
     next(err);
   }

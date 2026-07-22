@@ -1,9 +1,9 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../index";
 import { contentPlanTemplatesTable } from "../schema";
 
 /* -------------------------------------------------------------------------- */
-/* Raw JSONB shape contracts (mirrors the seed + Phase 2 form binding)        */
+/* Raw JSONB shape contracts (mirrors seed data + Phase 2 form binding)       */
 /* -------------------------------------------------------------------------- */
 
 type GlobalTemplateData = {
@@ -11,6 +11,8 @@ type GlobalTemplateData = {
     dr_minimum: number;
     max_age_years: number;
     max_per_article: number;
+    /** Plain domain-name strings. All inherit the global dr_minimum unless a
+     *  per-type domain_min_dr override is present for that domain. */
     whitelisted_domains: string[];
   };
   brand_voice_global: {
@@ -45,6 +47,41 @@ type PerTypeTemplateData = {
     mentions_per_article_target: number | null;
     mentions_per_article_max: number | null;
   };
+  /**
+   * Optional per-type citation authority overrides.
+   * All sub-fields are optional and null means "inherit from global".
+   *
+   * domain_min_dr: sparse map of domain → effective DR minimum for THIS content
+   * type only. Used for the domain whitelist deep merge (see getResolvedTemplate).
+   */
+  citation_authority_overrides?: {
+    dr_minimum?: number | null;
+    max_age_years?: number | null;
+    max_per_article?: number | null;
+    /**
+     * Per-domain DR minimum overrides. Keys are domain names that appear in the
+     * global whitelisted_domains list (or new domains added for this type only).
+     * Values are the effective DR minimum for that domain in this content type.
+     *
+     * Domain whitelist deep merge semantics (per-type wins for conflicts):
+     *
+     * 1. Start with all domains from the global whitelist. Each gets the
+     *    resolved dr_minimum for this type (per-type override ?? global default).
+     *
+     * 2. Overlay domain_min_dr entries on top:
+     *    - Same domain → per-type value replaces the global entry (per-type wins,
+     *      lower or higher thresholds are both valid for type-specific standards).
+     *    - New domain (not in global list) → appended to the resolved list.
+     *
+     * 3. The result is deduplicated by domain (Map ensures one entry per domain).
+     *    Output is sorted alphabetically for deterministic ordering.
+     *
+     * Example: global has statista.com at DR 80. Cost Guide has
+     *   domain_min_dr: { "statista.com": 75 }. Resolved output: one entry for
+     *   statista.com at DR 75. No duplicate statista.com entries.
+     */
+    domain_min_dr?: Record<string, number>;
+  };
 };
 
 /* -------------------------------------------------------------------------- */
@@ -52,11 +89,11 @@ type PerTypeTemplateData = {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Whether a resolved field's value came from the global template or was explicitly
+ * Whether a resolved field came from the global template or was explicitly
  * set on the per-type template. Consumed by:
- *  - UI toggles ("Inherit from global" vs "Override") — no cascade logic in the browser
+ *  - UI toggles ("Inherit from global" vs "Override")
  *  - Plan provenance map at review time
- *  - Plan compliance checks (distinguish "Rabia cleared this" from "template default")
+ *  - Plan compliance checks (distinguish explicit clear from template default)
  */
 export type FieldProvenance = "global" | "per_type";
 
@@ -64,33 +101,26 @@ export type FieldProvenance = "global" | "per_type";
  * Fully resolved template for a given brand + content type.
  *
  * All null per-type overrides have been replaced by the corresponding global
- * cascade value. Consumers MUST use this type rather than re-implementing
- * cascade logic independently. The `provenance` map records which fields came
- * from global vs. per-type so callers can surface the distinction without
- * accessing raw JSONB.
+ * cascade value. Every consumer (planner AI, Rules Dashboard preview mode,
+ * plan compliance report) MUST use this type rather than reimplementing
+ * cascade logic independently.
  *
- * Fail-closed: `getResolvedTemplate` returns null if no global template exists
- * for the brand (an article cannot be planned without global rules).
+ * Fail-closed: getResolvedTemplate returns null if no active global template
+ * exists for the brand (an article cannot be planned without global rules).
  */
 export type ResolvedTemplate = {
   contentType: string;
   /**
-   * Row versions used to construct this resolved view. Planner AI stamps these
-   * into plan_data.meta.template_version and plan_data.meta.global_rules_snapshot
-   * so every plan is auditable back to the exact rule versions in effect.
+   * Row versions used to construct this view. Planner AI stamps these into
+   * plan_data.meta so every plan is auditable back to the exact rule versions
+   * that were active when the plan was drafted.
    */
   versions: {
     global: number;
     perType: number | null;
   };
 
-  /* ── Always from global (no per-type override supported in v1) ─────────── */
-  citationAuthority: {
-    drMinimum: number;
-    maxAgeYears: number;
-    maxPerArticle: number;
-    whitelistedDomains: string[];
-  };
+  /* ── Global-only fields (no per-type override supported in v1) ─────────── */
   toneRequirements: {
     affirmativeToneRequired: boolean;
     bannedPhrases: string[];
@@ -98,17 +128,29 @@ export type ResolvedTemplate = {
   costBudget: {
     estimatedUsdPerArticle: number | null;
     dailyBrandCapUsd: number | null;
+    /** Always from global — mentionStylesVocabulary has no per-type concept. */
   };
 
   /* ── Cascadable: global default, overridable per-type ──────────────────── */
+  citationAuthority: {
+    drMinimum: number;
+    maxAgeYears: number;
+    maxPerArticle: number;
+    /**
+     * Merged domain whitelist. Each entry carries its effective DR minimum
+     * after applying per-type domain_min_dr overrides (per-type wins for
+     * same-domain conflicts; see PerTypeTemplateData.citation_authority_overrides
+     * JSDoc for full merge semantics). Sorted alphabetically.
+     */
+    whitelistedDomains: Array<{ domain: string; effectiveDrMinimum: number }>;
+  };
   brandVoice: {
     mentionsPerArticleTarget: number;
     mentionsPerArticleMax: number;
-    /** Always from global — per-type style distribution is planned by AI. */
     mentionStylesVocabulary: string[];
   };
 
-  /* ── Per-type only (null = template not yet configured for this type) ──── */
+  /* ── Per-type only (null = not yet configured for this type) ───────────── */
   articleStructure: {
     targetWordCount: number;
     h2CountTarget: number;
@@ -119,42 +161,53 @@ export type ResolvedTemplate = {
     minTestimonials: number;
     minInternalLinks: number;
     minExternalCitations: number;
-    /** Type-specific boolean flags (e.g. must_include_price_table). */
     booleanFlags: Record<string, boolean>;
   } | null;
 
   /**
    * Per-field provenance for every field that can be inherited OR explicitly
-   * overridden at the per-type level. Fields with no per-type override concept
-   * are omitted — they're always "global" and don't need a toggle.
+   * overridden per-type. Fields with no per-type override concept are omitted.
    *
-   * UI contract:
-   *   provenance.X === "global"   → toggle is "Inherit from global" (on), field
-   *                                 shows global value greyed-out / read-only
-   *   provenance.X === "per_type" → toggle is "Override" (on), field is editable
-   *                                 and shows the explicit per-type value
+   * UI toggle contract:
+   *   provenance.X === "global"    → show "Inherit from global" toggle (on);
+   *                                  display global value greyed-out
+   *   provenance.X === "per_type"  → show "Override" toggle (on);
+   *                                  field is editable with explicit per-type value
    */
   provenance: {
     mentionsPerArticleTarget: FieldProvenance;
     mentionsPerArticleMax: FieldProvenance;
+    drMinimum: FieldProvenance;
+    maxAgeYears: FieldProvenance;
+    maxPerArticle: FieldProvenance;
   };
 };
 
+/** Lightweight version history row (for the version history panel). */
+export type TemplateVersionRow = {
+  id: string;
+  version: number;
+  isActive: boolean;
+  createdAt: Date;
+  createdBy: string | null;
+  scope: string;
+  contentType: string | null;
+};
+
 /* -------------------------------------------------------------------------- */
-/* Helper                                                                      */
+/* getResolvedTemplate                                                         */
 /* -------------------------------------------------------------------------- */
 
 /**
  * Returns the fully resolved template for a brand + content type, with all
- * null per-type overrides replaced by global cascade values.
+ * null per-type overrides replaced by global cascade values and domain
+ * whitelists deep-merged (per-type wins for conflicts).
  *
- * Single source of truth for cascade logic. Every consumer (planner AI,
- * Rules Dashboard preview mode, plan compliance report) MUST use this helper
- * instead of implementing cascade independently.
+ * Single source of truth for cascade logic. Every consumer MUST use this
+ * helper. Never duplicate cascade logic in callers.
  *
- * Returns null if no active global template exists for the brand — the caller
- * must treat this as a hard blocker (you cannot plan an article without global
- * rules configured).
+ * Returns null if no active global template exists for the brand — treat as
+ * a hard blocker (you cannot plan an article without global rules configured).
  */
 export async function getResolvedTemplate(
   brandId: string,
@@ -190,17 +243,39 @@ export async function getResolvedTemplate(
   const globalRow = globalRows[0] ?? null;
   const typeRow = typeRows[0] ?? null;
 
-  // Fail closed — no global template = unresolvable
-  if (!globalRow) return null;
+  if (!globalRow) return null; // fail closed
 
   const g = globalRow.templateData as unknown as GlobalTemplateData;
   const t = typeRow?.templateData as unknown as PerTypeTemplateData | undefined;
 
-  const typeTarget =
-    t?.brand_mention_overrides?.mentions_per_article_target ?? null;
-  const typeMax =
-    t?.brand_mention_overrides?.mentions_per_article_max ?? null;
+  /* ── Brand voice cascade ─────────────────────────────────────────────── */
+  const typeTarget = t?.brand_mention_overrides?.mentions_per_article_target ?? null;
+  const typeMax = t?.brand_mention_overrides?.mentions_per_article_max ?? null;
 
+  /* ── Citation authority cascade ──────────────────────────────────────── */
+  const citOverride = t?.citation_authority_overrides;
+  const typedrMinimum = citOverride?.dr_minimum ?? null;
+  const typeMaxAge = citOverride?.max_age_years ?? null;
+  const typeMaxPerArticle = citOverride?.max_per_article ?? null;
+
+  const resolvedDrMinimum = typedrMinimum ?? g.citation_authority.dr_minimum;
+
+  /* ── Domain whitelist deep merge (per-type wins for same-domain) ─────── */
+  const domainMap = new Map<string, number>();
+  for (const domain of g.citation_authority.whitelisted_domains) {
+    // Global domain inherits the resolved dr_minimum for this type
+    domainMap.set(domain, resolvedDrMinimum);
+  }
+  const perTypeDomainOverrides = citOverride?.domain_min_dr ?? {};
+  for (const [domain, minDr] of Object.entries(perTypeDomainOverrides)) {
+    // Per-type entry wins: replaces same-domain global entry or adds new domain
+    domainMap.set(domain, minDr);
+  }
+  const whitelistedDomains = Array.from(domainMap.entries())
+    .map(([domain, effectiveDrMinimum]) => ({ domain, effectiveDrMinimum }))
+    .sort((a, b) => a.domain.localeCompare(b.domain));
+
+  /* ── Required elements boolean flags ─────────────────────────────────── */
   const booleanFlags: Record<string, boolean> = {};
   if (t?.required_elements) {
     for (const [k, v] of Object.entries(t.required_elements)) {
@@ -214,12 +289,6 @@ export async function getResolvedTemplate(
       global: globalRow.version,
       perType: typeRow?.version ?? null,
     },
-    citationAuthority: {
-      drMinimum: g.citation_authority.dr_minimum,
-      maxAgeYears: g.citation_authority.max_age_years,
-      maxPerArticle: g.citation_authority.max_per_article,
-      whitelistedDomains: g.citation_authority.whitelisted_domains,
-    },
     toneRequirements: {
       affirmativeToneRequired: g.tone_requirements.affirmative_tone_required,
       bannedPhrases: g.tone_requirements.banned_phrases,
@@ -228,13 +297,18 @@ export async function getResolvedTemplate(
       estimatedUsdPerArticle: g.cost_budget.estimated_usd_per_article,
       dailyBrandCapUsd: g.cost_budget.daily_brand_cap_usd,
     },
+    citationAuthority: {
+      drMinimum: resolvedDrMinimum,
+      maxAgeYears: typeMaxAge ?? g.citation_authority.max_age_years,
+      maxPerArticle: typeMaxPerArticle ?? g.citation_authority.max_per_article,
+      whitelistedDomains,
+    },
     brandVoice: {
       mentionsPerArticleTarget:
         typeTarget ?? g.brand_voice_global.mentions_per_article_target,
       mentionsPerArticleMax:
         typeMax ?? g.brand_voice_global.mentions_per_article_max,
-      mentionStylesVocabulary:
-        g.brand_voice_global.mention_styles_vocabulary,
+      mentionStylesVocabulary: g.brand_voice_global.mention_styles_vocabulary,
     },
     articleStructure: t?.article_structure
       ? {
@@ -253,10 +327,49 @@ export async function getResolvedTemplate(
         }
       : null,
     provenance: {
-      mentionsPerArticleTarget:
-        typeTarget !== null ? "per_type" : "global",
-      mentionsPerArticleMax:
-        typeMax !== null ? "per_type" : "global",
+      mentionsPerArticleTarget: typeTarget !== null ? "per_type" : "global",
+      mentionsPerArticleMax: typeMax !== null ? "per_type" : "global",
+      drMinimum: typedrMinimum !== null ? "per_type" : "global",
+      maxAgeYears: typeMaxAge !== null ? "per_type" : "global",
+      maxPerArticle: typeMaxPerArticle !== null ? "per_type" : "global",
     },
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* getTemplateVersionHistory                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Returns all versions of a template (active and inactive) for the version
+ * history panel in the Rules Dashboard. Ordered newest-first.
+ */
+export async function getTemplateVersionHistory(opts: {
+  brandId: string;
+  scope: "global" | "content_type";
+  contentType: string | null;
+}): Promise<TemplateVersionRow[]> {
+  const { brandId, scope, contentType } = opts;
+  const rows = await db
+    .select({
+      id: contentPlanTemplatesTable.id,
+      version: contentPlanTemplatesTable.version,
+      isActive: contentPlanTemplatesTable.isActive,
+      createdAt: contentPlanTemplatesTable.createdAt,
+      createdBy: contentPlanTemplatesTable.createdBy,
+      scope: contentPlanTemplatesTable.scope,
+      contentType: contentPlanTemplatesTable.contentType,
+    })
+    .from(contentPlanTemplatesTable)
+    .where(
+      and(
+        eq(contentPlanTemplatesTable.brandId, brandId),
+        eq(contentPlanTemplatesTable.scope, scope),
+        scope === "global"
+          ? isNull(contentPlanTemplatesTable.contentType)
+          : eq(contentPlanTemplatesTable.contentType, contentType!),
+      ),
+    )
+    .orderBy(desc(contentPlanTemplatesTable.version));
+  return rows;
 }
