@@ -1,0 +1,723 @@
+# Ahrefs MCP Integration Dispatch (Replit)
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Objective:** Give ContentForge generation on-demand access to Ahrefs data via MCP — Domain Rating lookups, backlink summaries, keyword data — during draft-section and final-stitch stages. Cache-first architecture with Redis + Postgres persistence. Every call provenanced and unit-tracked against the 400K/month Ahrefs API budget.
+**Dispatch type:** Focused integration. Smaller than the plan architecture but introduces MCP as a new protocol pattern to the codebase. Comparable in scope to the SEO Integration + Cut A combined.
+
+---
+
+## Startup check (before any code)
+
+Before beginning: `ls -la .local/tasks/*.md 2>/dev/null`. Report results. Archive anything from cancelled or completed tasks to `.local/tasks/archive/` before proceeding.
+
+---
+
+## Context
+
+Ahrefs API access is on the existing TekRevol plan (400,000 units/month, currently 11,313 used). API key generated 22 Jul 2026, stored in Replit Secrets as `AHREFS_API_KEY`. A separate MCP-scope key needs to be generated and stored as `AHREFS_MCP_KEY` — dispatcher confirms this before Phase 0 executes.
+
+This dispatch does NOT do bulk data import into SEO OS (that's a separate dispatch after Ahtesham audits the Rank Tracker). This dispatch adds on-demand tool access during content generation so that when the model needs external SEO context, it can query Ahrefs directly rather than relying on stale platform data.
+
+**Architecture:** Ahrefs MCP server acts as data source. Our api-server acts as MCP client. Our api-server ALSO exposes custom tools to Anthropic during generation. When Anthropic invokes one of our tools, we check cache first, hit Ahrefs MCP on cache miss, persist result, return to Anthropic. This gives us cache control, budget enforcement, provenance, and precise tool scoping — none of which we'd have if we passed Ahrefs MCP directly to Anthropic.
+
+**Data flow:**
+```
+Anthropic API ← [our tools] ← api-server ← [MCP client] ← Ahrefs MCP Server
+                                    ↓
+                                Redis cache (Upstash)
+                                    ↓
+                                Postgres cache tables
+```
+
+**Three tools exposed to Anthropic:**
+- `get_domain_authority(domain)` — cache-first DR/UR lookup, 7-day cache
+- `get_backlink_summary(url)` — cache-first backlink profile summary, 24-hour cache
+- `get_keyword_data(keyword, country)` — cache-first keyword volume/KD/CPC, 7-day cache
+
+**Per-generation call budget:** 5 tool invocations maximum per generation cycle (draft-section + final-stitch combined). Excess calls fail with clear error message to the model.
+
+**Explicitly out of scope for this dispatch:**
+- Bulk Ahrefs data import into `keywords`, `link_targets`, `competitor_insights` (separate dispatch after Ahtesham audit)
+- SEO OS Backlinks page or Referring Domains page (separate SEO module workstream)
+- Weekly rank refresh via Ahrefs API (separate dispatch after bulk import)
+- Content gap analysis or site audit tools (skip for MVP scope)
+- Ahtesham-facing admin surface (this dispatch is Marketing-OS-consumer only)
+
+---
+
+## Phase 0 — Pre-flight survey (read-only, report before continuing)
+
+Standard survey. No code, no schema changes.
+
+1. **Verify secrets exist.** Confirm `AHREFS_API_KEY` is set in Replit Secrets (already stored per dispatcher). Confirm `AHREFS_MCP_KEY` is set (dispatcher generates and adds before Phase 0 executes). Report both as "present" or "missing" without echoing values.
+
+2. **Verify Ahrefs MCP endpoint URL.** The dispatch assumes `https://mcp.ahrefs.com/sse` as the standard endpoint. Fetch Ahrefs' official MCP documentation to confirm current URL. If different, report the correct URL and use it throughout.
+
+3. **Verify Redis (Upstash) connection.** Confirm `REDIS_URL` or equivalent is present in Replit Secrets. Verify BullMQ's existing Redis client is reusable for cache operations. If separate Redis client is needed, note the pattern.
+
+4. **Verify `module_data_provenance` schema** is accessible. `\d module_data_provenance`. Confirm the columns match what earlier dispatches established: id, brand_id, entity_type, entity_id, source_module, source_user_id, generated_at, generation_method, metadata.
+
+5. **Verify `callAnthropicRaw` signature and callsites.** The function is at approximately line 102 of `artifacts/api-server/src/routes/ai/index.ts` per prior surveys. Report current signature and identify all callsites in `/routes/ai/` that would benefit from tool exposure (expected: outline-generate, draft-section, final-stitch).
+
+6. **Check Node MCP SDK availability.** `pnpm ls @modelcontextprotocol/sdk` in the api-server workspace. If not present, verify it can be added as a dependency without conflicts.
+
+7. **Check current Ahrefs unit consumption.** Query Ahrefs `/subscription/limits-and-usage` endpoint (if available) or report the 11,313 baseline. This becomes the starting point for post-dispatch consumption tracking.
+
+Report findings. Pause for dispatcher review before Phase 1.
+
+---
+
+## Phase 1 — Schema foundation
+
+Scoped transactional DDL only. No blanket `drizzle-kit push`.
+
+### 1.1 `domain_authority_cache` table
+
+Persistent cache for DR/UR values. Feeds get_domain_authority tool.
+
+```sql
+BEGIN;
+
+CREATE TABLE domain_authority_cache (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  domain text NOT NULL,
+  dr numeric(5,2),
+  ur numeric(5,2),
+  ref_domains_count integer,
+  backlinks_count integer,
+  last_measured timestamptz NOT NULL DEFAULT now(),
+  source_provider text NOT NULL DEFAULT 'ahrefs_mcp',
+  source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (brand_id, domain)
+);
+
+CREATE INDEX domain_authority_cache_brand_domain_idx
+  ON domain_authority_cache(brand_id, domain);
+CREATE INDEX domain_authority_cache_last_measured_idx
+  ON domain_authority_cache(last_measured);
+
+COMMIT;
+```
+
+Add to `BRAND_SCOPED_TABLES`. Update Drizzle schema in `lib/db/src/schema/`.
+
+### 1.2 `ahrefs_mcp_usage` table
+
+Per-call unit consumption tracking. Enables per-brand budget monitoring and admin visibility.
+
+```sql
+BEGIN;
+
+CREATE TABLE ahrefs_mcp_usage (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  called_at timestamptz NOT NULL DEFAULT now(),
+  tool_name text NOT NULL,
+  params_hash text NOT NULL,
+  cache_hit boolean NOT NULL DEFAULT false,
+  units_consumed integer NOT NULL DEFAULT 0,
+  response_status text NOT NULL,
+  error_message text,
+  project_id uuid REFERENCES projects(id) ON DELETE set null,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX ahrefs_mcp_usage_brand_called_idx
+  ON ahrefs_mcp_usage(brand_id, called_at DESC);
+CREATE INDEX ahrefs_mcp_usage_project_idx
+  ON ahrefs_mcp_usage(project_id) WHERE project_id IS NOT NULL;
+
+COMMIT;
+```
+
+Add to `BRAND_SCOPED_TABLES`. Update Drizzle schema.
+
+**Pause after Phase 1.** Dispatcher confirms schema looks right, no unexpected effects on existing tables.
+
+---
+
+## Phase 2 — MCP client infrastructure
+
+New library path: `lib/integrations/ahrefs/`
+
+### 2.1 Package setup
+
+Add dependency to `lib/integrations/ahrefs/package.json`:
+
+```json
+{
+  "name": "@workspace/ahrefs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
+```
+
+Register in workspace via `pnpm-workspace.yaml` if not already covered by the `lib/*` glob.
+
+### 2.2 `AhrefsMCPClient` class
+
+File: `lib/integrations/ahrefs/src/mcp-client.ts`
+
+Responsibilities:
+- Manage connection to Ahrefs MCP server via SSE transport
+- Handle authentication via `AHREFS_MCP_KEY` bearer token
+- Expose typed tool invocation methods
+- Track raw unit consumption per call
+- Retry logic on transient failures (max 2 retries with exponential backoff)
+- Clear error surfacing on non-recoverable errors
+
+Interface:
+
+```typescript
+export interface MCPCallResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  unitsConsumed: number;
+  latencyMs: number;
+}
+
+export class AhrefsMCPClient {
+  constructor(config: { mcpKey: string; mcpUrl: string });
+  
+  async callDomainAuthority(domain: string): Promise<MCPCallResult<{
+    dr: number;
+    ur: number;
+    refDomainsCount: number;
+    backlinksCount: number;
+  }>>;
+  
+  async callBacklinkSummary(url: string): Promise<MCPCallResult<{
+    totalBacklinks: number;
+    referringDomains: number;
+    dofollowBacklinks: number;
+    topAnchors: Array<{ anchor: string; count: number }>;
+  }>>;
+  
+  async callKeywordData(keyword: string, country: string): Promise<MCPCallResult<{
+    volume: number;
+    keywordDifficulty: number;
+    cpc: number;
+    parentTopic: string | null;
+  }>>;
+  
+  async close(): Promise<void>;
+}
+```
+
+Singleton instance managed at api-server startup, injected into route handlers.
+
+### 2.3 Connection lifecycle
+
+- Client instantiated once at api-server boot
+- Connection pooled; reconnect on transport errors
+- Graceful shutdown handled on SIGTERM
+
+**Pause after Phase 2.** Dispatcher confirms MCP client instantiates without errors, one manual call succeeds against Ahrefs MCP server (test with `get_domain_authority` for a known domain like `statista.com` — expect DR ~92).
+
+---
+
+## Phase 3 — Cached tool helpers
+
+File: `lib/content-ai/src/tools/ahrefs/`
+
+Three helper functions that Anthropic's tool_use will invoke via the api-server. Each implements cache-first, MCP-fallback logic.
+
+### 3.1 `getDomainAuthority(brandId, domain)`
+
+```typescript
+export async function getDomainAuthority(
+  brandId: string,
+  domain: string
+): Promise<DomainAuthorityResult> {
+  // 1. Normalize domain (strip protocol, www, trailing slash)
+  const normalizedDomain = normalizeDomain(domain);
+  
+  // 2. Check Redis cache first (5-minute TTL for hot cache)
+  const redisKey = `ahrefs:dr:${brandId}:${normalizedDomain}`;
+  const cached = await redis.get(redisKey);
+  if (cached) {
+    await logUsage(brandId, 'get_domain_authority', normalizedDomain, {
+      cacheHit: true, source: 'redis'
+    });
+    return JSON.parse(cached);
+  }
+  
+  // 3. Check Postgres cache (7-day staleness threshold)
+  const dbCached = await withBrandScope(brandId, async (db) => {
+    return db.select().from(domainAuthorityCache)
+      .where(and(
+        eq(domainAuthorityCache.brandId, brandId),
+        eq(domainAuthorityCache.domain, normalizedDomain),
+        gte(domainAuthorityCache.lastMeasured, subDays(new Date(), 7))
+      )).limit(1);
+  });
+  
+  if (dbCached[0]) {
+    // Refresh Redis
+    await redis.set(redisKey, JSON.stringify(dbCached[0]), 'EX', 300);
+    await logUsage(brandId, 'get_domain_authority', normalizedDomain, {
+      cacheHit: true, source: 'postgres'
+    });
+    return dbCached[0];
+  }
+  
+  // 4. Cache miss — call MCP
+  const mcpResult = await ahrefsMCPClient.callDomainAuthority(normalizedDomain);
+  
+  if (!mcpResult.success) {
+    await logUsage(brandId, 'get_domain_authority', normalizedDomain, {
+      cacheHit: false, error: mcpResult.error, unitsConsumed: mcpResult.unitsConsumed
+    });
+    throw new Error(`Ahrefs DR lookup failed: ${mcpResult.error}`);
+  }
+  
+  // 5. Persist to Postgres cache
+  await withBrandScope(brandId, async (db) => {
+    await db.insert(domainAuthorityCache).values({
+      brandId, domain: normalizedDomain, ...mcpResult.data,
+      sourceProvider: 'ahrefs_mcp', sourceMetadata: { latencyMs: mcpResult.latencyMs }
+    }).onConflictDoUpdate({
+      target: [domainAuthorityCache.brandId, domainAuthorityCache.domain],
+      set: { ...mcpResult.data, lastMeasured: new Date() }
+    });
+  });
+  
+  // 6. Refresh Redis
+  await redis.set(redisKey, JSON.stringify(mcpResult.data), 'EX', 300);
+  
+  // 7. Log usage
+  await logUsage(brandId, 'get_domain_authority', normalizedDomain, {
+    cacheHit: false, source: 'mcp', unitsConsumed: mcpResult.unitsConsumed
+  });
+  
+  return mcpResult.data;
+}
+```
+
+### 3.2 `getBacklinkSummary(brandId, url)`
+
+Same pattern as 3.1, but:
+- Cache TTL: 24 hours (backlinks change faster than DR)
+- Redis TTL: 5 minutes
+- Uses Redis-only cache (no Postgres persistence unless dispatcher requests — backlink data is volatile)
+- Returns backlink profile summary, not individual backlinks
+
+### 3.3 `getKeywordData(brandId, keyword, country)`
+
+Same pattern:
+- Cache TTL: 7 days
+- Uses Redis-only cache (keyword data cached as JSON string)
+- Cache key includes country to avoid cross-country collisions
+
+### 3.4 Common `logUsage` helper
+
+Logs every call attempt to `ahrefs_mcp_usage` table:
+
+```typescript
+async function logUsage(brandId: string, toolName: string, params: string, metadata: {
+  cacheHit: boolean;
+  source?: 'redis' | 'postgres' | 'mcp';
+  unitsConsumed?: number;
+  error?: string;
+  projectId?: string;
+}) {
+  await withBrandScope(brandId, async (db) => {
+    await db.insert(ahrefsMcpUsage).values({
+      brandId,
+      toolName,
+      paramsHash: hashParams(params),
+      cacheHit: metadata.cacheHit,
+      unitsConsumed: metadata.unitsConsumed ?? 0,
+      responseStatus: metadata.error ? 'error' : 'success',
+      errorMessage: metadata.error,
+      projectId: metadata.projectId,
+      metadata: { source: metadata.source }
+    });
+  });
+  
+  // Also emit provenance row for downstream tracing
+  await emitProvenance({
+    entityType: 'ahrefs_mcp_call',
+    entityId: metadata.projectId || 'system',
+    sourceModule: 'content-ai',
+    sourceProvider: 'ahrefs_mcp',
+    generationMethod: toolName,
+    metadata: { cacheHit: metadata.cacheHit, source: metadata.source }
+  });
+}
+```
+
+**Pause after Phase 3.** Dispatcher smoke-tests the helpers directly via a small test script or REPL — call `getDomainAuthority('<TEKREVOL_BRAND_ID>', 'statista.com')`. First call should hit MCP and persist. Second call within 5 minutes should hit Redis. After 7 days simulated staleness, should re-hit MCP.
+
+---
+
+## Phase 4 — Anthropic tool exposure in generation pipeline
+
+Anthropic's Messages API supports tool use via the `tools` parameter. When the model wants to invoke a tool, response includes a `tool_use` block; we execute the tool, return result via `tool_result` block in the next request; loop until model produces final text.
+
+### 4.1 Tool definitions
+
+File: `lib/content-ai/src/tools/ahrefs/definitions.ts`
+
+```typescript
+export const AHREFS_TOOL_DEFINITIONS = [
+  {
+    name: 'get_domain_authority',
+    description: 'Get Domain Rating (DR) and URL Rating (UR) for a domain. Use this to verify citation authority before referencing a domain. Only cite domains with DR ≥ 80 per brand rules.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: 'The domain to look up (e.g., "statista.com", "hbr.org"). Do not include protocol or path.'
+        }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'get_backlink_summary',
+    description: 'Get backlink profile summary for a specific URL. Returns total backlinks, referring domains, dofollow count, and top anchor texts. Use this when evaluating whether to reference a competitor page or external resource.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The full URL to analyze (e.g., "https://example.com/page")'
+        }
+      },
+      required: ['url']
+    }
+  },
+  {
+    name: 'get_keyword_data',
+    description: 'Get search volume, keyword difficulty, and CPC for a keyword. Use this when writing about a topic and needing to verify search demand or difficulty for a specific term not already tracked in the platform.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        keyword: {
+          type: 'string',
+          description: 'The keyword phrase to look up'
+        },
+        country: {
+          type: 'string',
+          description: 'ISO 3166-1 alpha-2 country code (default: "us")',
+          default: 'us'
+        }
+      },
+      required: ['keyword']
+    }
+  }
+];
+```
+
+### 4.2 Tool execution handler
+
+File: `lib/content-ai/src/tools/ahrefs/handler.ts`
+
+```typescript
+export async function executeAhrefsTool(
+  brandId: string,
+  projectId: string,
+  toolUse: { name: string; input: any; id: string },
+  callBudget: { remaining: number; used: number }
+): Promise<{ toolResultBlock: any; budgetUsed: number }> {
+  
+  // Enforce call budget
+  if (callBudget.remaining <= 0) {
+    return {
+      toolResultBlock: {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: `Error: Ahrefs tool budget exceeded for this generation (${callBudget.used}/5 calls used). Continue without additional Ahrefs data.`,
+        is_error: true
+      },
+      budgetUsed: 0
+    };
+  }
+  
+  try {
+    let result: any;
+    switch (toolUse.name) {
+      case 'get_domain_authority':
+        result = await getDomainAuthority(brandId, toolUse.input.domain);
+        break;
+      case 'get_backlink_summary':
+        result = await getBacklinkSummary(brandId, toolUse.input.url);
+        break;
+      case 'get_keyword_data':
+        result = await getKeywordData(brandId, toolUse.input.keyword, toolUse.input.country || 'us');
+        break;
+      default:
+        throw new Error(`Unknown Ahrefs tool: ${toolUse.name}`);
+    }
+    
+    return {
+      toolResultBlock: {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: JSON.stringify(result)
+      },
+      budgetUsed: 1
+    };
+  } catch (err) {
+    return {
+      toolResultBlock: {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: `Error: ${err.message}. Continue without this data.`,
+        is_error: true
+      },
+      budgetUsed: 1 // Failed calls still count against budget
+    };
+  }
+}
+```
+
+### 4.3 Update `callAnthropicRaw` to support tool loop
+
+Extend the function at line ~102 of `artifacts/api-server/src/routes/ai/index.ts`:
+
+```typescript
+async function callAnthropicRaw(body: Record<string, unknown>, options?: {
+  toolContext?: {
+    brandId: string;
+    projectId: string;
+    enabledTools: 'ahrefs' | 'none';
+  };
+}): Promise<any> {
+  const enabledTools = options?.toolContext?.enabledTools === 'ahrefs'
+    ? AHREFS_TOOL_DEFINITIONS
+    : undefined;
+  
+  const callBudget = { remaining: 5, used: 0 };
+  let currentBody = { ...body, tools: enabledTools };
+  let messages = [...(body.messages as any[])];
+  
+  for (let iteration = 0; iteration < 10; iteration++) {
+    const response = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      headers: { /* existing headers */ },
+      body: JSON.stringify({ ...currentBody, messages })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Anthropic ${response.status}: ${(await response.text()).slice(0, 500)}`);
+    }
+    
+    const data = await response.json();
+    
+    // Check for tool_use in response
+    const toolUseBlocks = data.content?.filter((c: any) => c.type === 'tool_use') ?? [];
+    
+    if (toolUseBlocks.length === 0) {
+      // Model finished — return final response
+      return data;
+    }
+    
+    // Execute all tool uses in parallel
+    const toolResults = await Promise.all(
+      toolUseBlocks.map(async (toolUse: any) => {
+        const { toolResultBlock, budgetUsed } = await executeAhrefsTool(
+          options!.toolContext!.brandId,
+          options!.toolContext!.projectId,
+          toolUse,
+          callBudget
+        );
+        callBudget.remaining -= budgetUsed;
+        callBudget.used += budgetUsed;
+        return toolResultBlock;
+      })
+    );
+    
+    // Append assistant message with tool_use and user message with tool_results
+    messages.push({ role: 'assistant', content: data.content });
+    messages.push({ role: 'user', content: toolResults });
+  }
+  
+  throw new Error('Tool loop exceeded 10 iterations');
+}
+```
+
+### 4.4 Enable in generation routes
+
+Update the three generation route handlers to pass toolContext when appropriate:
+
+**`draft-section` route:**
+```typescript
+const response = await callAnthropicRaw(body, {
+  toolContext: {
+    brandId: project.brand_id,
+    projectId: project.id,
+    enabledTools: 'ahrefs'
+  }
+});
+```
+
+**`final-stitch` route:** same pattern.
+
+**`outline-generate` route:** enabledTools stays 'none' — outline generation shouldn't burn MCP units on speculative queries.
+
+### 4.5 System prompt updates
+
+Update the system prompt builder to instruct the model on tool availability:
+
+Append to system prompt when Ahrefs tools enabled:
+
+> You have access to three Ahrefs tools during this generation:
+> - `get_domain_authority(domain)` — verify DR/UR before citing a domain. Only cite domains with DR ≥ 80.
+> - `get_backlink_summary(url)` — check backlink profile for a competitor page or resource before referencing it.
+> - `get_keyword_data(keyword, country)` — get search volume and difficulty for a keyword not already provided.
+>
+> Budget: You may make up to 5 total tool calls across this generation. Prioritize domain authority checks for citations. Do not use tools speculatively — only when the data materially affects the article. Failed or budget-exceeded calls: continue without the data.
+
+**Pause after Phase 4.** Dispatcher runs one full generation with Ahrefs tools enabled. Verify at least one tool_use block appears in provenance logs. Verify budget enforcement (attempt 6th call should return budget-exceeded error).
+
+---
+
+## Phase 5 — Admin visibility
+
+Small admin endpoint and dashboard card. Ahtesham-facing surface deferred to separate dispatch; this is Marketing OS operator visibility only.
+
+### 5.1 API endpoint
+
+**GET `/api/admin/ahrefs-usage?brandId=&days=30`**
+
+Returns:
+```json
+{
+  "period_start": "2026-06-23",
+  "period_end": "2026-07-23",
+  "total_calls": 47,
+  "cache_hits": 32,
+  "cache_hit_rate": 0.68,
+  "mcp_calls": 15,
+  "estimated_units_consumed": 750,
+  "monthly_budget": 400000,
+  "budget_used_pct": 0.19,
+  "top_tools": [
+    { "tool": "get_domain_authority", "calls": 28, "cache_hit_rate": 0.75 },
+    { "tool": "get_backlink_summary", "calls": 12, "cache_hit_rate": 0.50 },
+    { "tool": "get_keyword_data", "calls": 7, "cache_hit_rate": 0.71 }
+  ],
+  "recent_errors": [
+    { "tool": "get_domain_authority", "params": "example.com", "error": "...", "at": "..." }
+  ]
+}
+```
+
+Protected by `requireAdmin`. Reads from `ahrefs_mcp_usage` table with brand scoping.
+
+### 5.2 Admin dashboard card
+
+Small card added to existing admin surface at `/admin` (or wherever admin landing lives):
+
+- Title: "Ahrefs MCP Usage"
+- Current month: X calls, Y% cache hit rate
+- Estimated units consumed vs. budget
+- Amber warning if budget used > 60%
+- Red warning if budget used > 80%
+- Link to detailed view (optional; can be deferred)
+
+Follows the existing admin card pattern from AdminReviewsBank / AdminRulesDashboard cards.
+
+Commit: `Phase 5: Ahrefs usage admin surface`
+
+---
+
+## Phase 6 — Smoke tests and completion
+
+### 6.1 Smoke tests (all must pass)
+
+**Infrastructure:**
+1. `AhrefsMCPClient` instantiates without errors
+2. Direct `callDomainAuthority('statista.com')` returns DR value close to 92 (known baseline)
+3. Direct `callBacklinkSummary('https://www.statista.com/')` returns non-zero backlink count
+4. Direct `callKeywordData('mobile app development', 'us')` returns non-zero volume
+
+**Cache behavior:**
+5. First call to `getDomainAuthority(brandId, 'statista.com')` hits MCP, persists to Postgres, warms Redis
+6. Second call within 5 minutes hits Redis (verified via logUsage metadata source='redis')
+7. After Redis TTL expires but Postgres still fresh, third call hits Postgres, refreshes Redis
+8. After 8 days (simulated by manipulating `last_measured`), fourth call re-hits MCP
+
+**Tool execution:**
+9. `executeAhrefsTool` returns proper tool_result block on success
+10. `executeAhrefsTool` returns is_error tool_result block on failure
+11. Budget enforcement: 6th call in same generation returns budget-exceeded error
+
+**Generation integration:**
+12. `draft-section` route with toolContext enables tool_use blocks in response
+13. Full generation with 3 tool calls completes end-to-end, article produced
+14. Provenance logs show one row per tool call in `module_data_provenance`
+15. Usage logs show correct cache_hit flag in `ahrefs_mcp_usage`
+
+**Admin surface:**
+16. GET `/api/admin/ahrefs-usage` returns valid structure with correct aggregations
+17. Admin dashboard card renders with current month stats
+18. Cross-brand isolation: ClaimShield admin cannot see TekRevol usage
+
+**Cross-cutting:**
+19. `pnpm typecheck` passes across libs, api-server, both frontends
+20. Regression: single-project intake flow without Ahrefs tools works unchanged
+21. Regression: Blog #1 generation without Ahrefs tools produces same output as pre-dispatch
+
+### 6.2 Architect review
+
+`git show --stat HEAD` before declaring complete. Treat architect feedback as authoritative.
+
+Three areas to scrutinize:
+
+**Tool loop termination.** The tool_use / tool_result loop has a hard cap of 10 iterations. Verify the cap actually prevents runaway loops when the model gets confused and keeps requesting tools. Also verify graceful degradation when tool calls fail — model should continue with error-informed responses, not crash the generation.
+
+**Cache invalidation edge cases.** Domain normalization must be consistent between cache write and cache read. Verify `statista.com`, `Statista.com`, `www.statista.com`, and `https://statista.com/` all resolve to the same cache key. Verify Postgres UNIQUE constraint doesn't reject legitimate cross-brand entries for the same domain.
+
+**Unit consumption accuracy.** The dispatch estimates units per tool call based on Ahrefs' published rates. Verify actual consumption in Ahrefs UI matches recorded units in `ahrefs_mcp_usage`. Divergence > 20% indicates the tracking logic needs adjustment.
+
+---
+
+## Operational notes
+
+- **Order strict:** Phase 1 → 2 → 3 → 4 → 5 → 6. Each phase has pause point for dispatcher review.
+
+- **Pause points:**
+  1. After Phase 0 survey (verify secrets, endpoints, dependencies)
+  2. After Phase 1 completes (schema check)
+  3. After Phase 2 completes (MCP client working)
+  4. After Phase 3 completes (cache helpers working)
+  5. After Phase 4 completes (full generation with tools working end-to-end)
+  6. After Phase 6 completion, before declaring done
+
+- **Cost hedges:**
+  - Per-generation budget: 5 tool calls maximum
+  - Monthly budget: 400K units (tracked in ahrefs_mcp_usage, alerts at 60/80/95%)
+  - Cache-first architecture: 60%+ cache hit rate expected after warm-up
+  - Redis cache 5 min TTL, Postgres cache 7 days (DR), Redis-only 24 hours (backlinks)
+
+- **What this dispatch does NOT do:**
+  - Bulk data import (organic keywords, top pages, competitors, backlinks)
+  - SEO OS UI surfaces (Backlinks page, Referring Domains page)
+  - Ahtesham-facing admin surface for SEO team
+  - Weekly rank refresh via Ahrefs API
+  - MCP tool exposure to the Planner AI (that's part of the plan architecture dispatch)
+
+- **Planner AI compatibility:** When the plan architecture dispatch reaches Phase 4 (Planner AI service), it will use the same `AhrefsMCPClient` and cached tool helpers established here. No duplication; planner just consumes the same infrastructure. Budget applies per-generation for both content generation and plan drafting.
+
+- **Follow-up dispatches queued:**
+  - Comprehensive Ahrefs bulk pull for SEO OS (Dispatch A of Ahrefs-replacement workstream)
+  - SEO OS Backlinks page + Referring Domains page (Dispatch B)
+  - Weekly rank refresh via API (Dispatch D)
+  - Ahtesham's daily dashboard (Dispatch E)
+
+- **Scoped transactional DDL only.** No blanket `drizzle-kit push`. Existing schema drift untouched.
+
+- **Priority if time-constrained:** Drop Phase 5 (admin surface) if the dispatch runs long. The core value is Phases 1-4 (tools work during generation). Admin visibility can ship in a follow-up. Do NOT drop Phase 3 (cache) — without it, every DR check hits MCP and burns units unnecessarily.
+
+---
+
+**Begin startup check → Phase 0 survey. Report findings before any code. Six pause points across the dispatch. Phase 6's 21 smoke tests gate completion. Same operational rules as prior dispatches: `git show --stat HEAD` before declaring complete, treat architect feedback as authoritative, no scope creep.**
