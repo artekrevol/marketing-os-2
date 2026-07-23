@@ -142,7 +142,7 @@ async function fetchAnthropic(body: Record<string, unknown>): Promise<any> {
  */
 async function callAnthropicRaw(
   body: Record<string, unknown>,
-  options?: { toolContext?: AhrefsToolContext },
+  options?: { toolContext?: AhrefsToolContext; ahrefsBudget?: number },
 ): Promise<any> {
   const toolContext = options?.toolContext;
 
@@ -152,7 +152,7 @@ async function callAnthropicRaw(
   }
 
   // ── Tool-loop path ─────────────────────────────────────────────────────
-  const callBudget = { remaining: 5, used: 0 };
+  const callBudget = { remaining: options?.ahrefsBudget ?? 5, used: 0 };
 
   // Merge Ahrefs tool definitions (prepend so model sees them before any forced tool)
   const existingTools = Array.isArray(body["tools"]) ? (body["tools"] as unknown[]) : [];
@@ -804,6 +804,65 @@ NON-NEGOTIABLE:
   return { block, linkHosts, linkTargetList };
 }
 
+interface AhrefsPrePassResult {
+  citation_candidates: Array<{ domain: string; dr: number; ur: number; is_authoritative: boolean }>;
+  keyword_context: Array<{ keyword: string; volume: number; difficulty: number }>;
+}
+
+/**
+ * Phase 6 — Ahrefs pre-pass for draft-section.
+ *
+ * Runs a small unconstrained HAIKU call (budget: 3 Ahrefs tool calls) before
+ * the forced-tool draft call. Lets the model verify DR for candidate citation
+ * domains and check keyword data for related terms. The result is injected as
+ * an AHREFS_RESEARCH_CONTEXT block into draft-section's system prompt so the
+ * forced draft call can act on pre-verified authority data.
+ *
+ * Non-blocking: returns null on any error (missing key, network failure, bad JSON).
+ * Skipped entirely for revision passes — revisions refine prose, not citations.
+ */
+async function runAhrefsPrePass(opts: {
+  topic: string;
+  keyword: string;
+  brandId: string;
+  projectId: string;
+  suggestedDomains: string[];
+}): Promise<AhrefsPrePassResult | null> {
+  if (!process.env["AHREFS_MCP_KEY"]) return null;
+  try {
+    const { topic, keyword, brandId, projectId, suggestedDomains } = opts;
+    const domainHint = suggestedDomains.length
+      ? `\n\nCandidate citation domains to verify (check these first): ${suggestedDomains.slice(0, 5).join(", ")}`
+      : "";
+    const systemPrompt =
+      `You are gathering research context for an article on "${topic}" targeting the keyword "${keyword}". ` +
+      `Use Ahrefs tools to verify Domain Rating for up to 3 candidate citation domains that fit this article. ` +
+      `Also check keyword data for 1-2 candidate related keywords if useful. ` +
+      `Return findings as JSON only, no markdown fences: ` +
+      `{"citation_candidates":[{"domain":"...","dr":0,"ur":0,"is_authoritative":false}],"keyword_context":[{"keyword":"...","volume":0,"difficulty":0}]}. ` +
+      `is_authoritative is true when DR ≥ 80. Budget: 3 tool calls total.${domainHint}`;
+
+    const data = await callAnthropicRaw(
+      {
+        model: HAIKU,
+        max_tokens: 800,
+        system: systemPrompt,
+        messages: [{ role: "user", content: "Gather Ahrefs data now and return the JSON." }],
+      },
+      { toolContext: { brandId, projectId }, ahrefsBudget: 3 },
+    );
+
+    const textBlock = ((data.content as any[]) ?? []).find((b: any) => b.type === "text");
+    if (!textBlock?.text) return null;
+    const raw = (textBlock.text as string).replace(/```[a-z]*\n?/gi, "").trim();
+    const parsed = JSON.parse(raw) as AhrefsPrePassResult;
+    if (!Array.isArray(parsed.citation_candidates)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 router.post("/draft-section", requireAuth, requireProjectAccess, async (req, res) => {
   try {
     const { project_id, section_id, revision_instruction } = req.body as {
@@ -841,11 +900,25 @@ router.post("/draft-section", requireAuth, requireProjectAccess, async (req, res
       : "(no verified sources for this project — do not invent any citations)";
 
     const draftIcp = Array.isArray(project.icps) && project.icps.length ? (project.icps[0] as number) : undefined;
-    const { block: draftAssetBlock, linkHosts: draftLinkHosts } = await buildAssetCandidates({
-      brandId: project.brandId,
-      icp: draftIcp,
-      funnelStage: project.funnelStage || undefined,
-    });
+    // Phase 6: pre-pass runs concurrently with asset-candidate fetch.
+    // Seed candidate domains from the already-normalized whitelist sources.
+    const suggestedDomains = whitelist.sources.slice(0, 5).map((s) => s.host);
+    const [{ block: draftAssetBlock, linkHosts: draftLinkHosts }, ahrefsPrePass] = await Promise.all([
+      buildAssetCandidates({
+        brandId: project.brandId,
+        icp: draftIcp,
+        funnelStage: project.funnelStage || undefined,
+      }),
+      revision_instruction
+        ? Promise.resolve(null)
+        : runAhrefsPrePass({
+            topic: project.topic || "",
+            keyword: project.keyword || "",
+            brandId: project.brandId,
+            projectId: project_id,
+            suggestedDomains,
+          }),
+    ]);
     // Authority-citation domains and internal-link target hosts must survive
     // enforceCitationWhitelist below, or the asset-derived citations (#16) and
     // internal links (#15) get stripped before they ever reach the validators.
@@ -900,6 +973,15 @@ This article's funnel stage: ${project.funnelStage || "unknown"}.
 HARD BUDGET for this section: at most TWO sentences that use "we"/"our"/"TekRevol" — write everything else in third person or passive-free neutral voice. Exceeding the cap blocks ship. But do not go to zero: at least one brand mention somewhere in the article is required, so if this section is the natural place for a client story or CTA, spend the budget here.
 
 ${draftAssetBlock}
+${ahrefsPrePass ? `=== AHREFS RESEARCH CONTEXT (pre-verified, cache-fresh) ===
+Citation candidates (use DR/UR data to inform which domains to prioritize):
+${JSON.stringify(ahrefsPrePass.citation_candidates, null, 2)}
+
+Keyword context:
+${JSON.stringify(ahrefsPrePass.keyword_context, null, 2)}
+
+AUTHORITY RULE UPGRADE: When choosing external citations, prefer domains where is_authoritative=true (DR ≥ 80). Do not cite a domain from this list where is_authoritative=false unless no authoritative alternative exists.
+=== END AHREFS RESEARCH CONTEXT ===` : ""}
 === END PROJECT CONTEXT ===`;
 
     const projectCacheTag = `project:${project_id}|outline:${outline?.updatedAt || ""}|brief:${brief?.updatedAt || ""}|proofs:${proofs.length}`;

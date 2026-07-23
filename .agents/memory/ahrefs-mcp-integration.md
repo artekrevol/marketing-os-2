@@ -26,9 +26,17 @@ description: Architecture decisions and constraints for the Ahrefs MCP integrati
 ## Tool loop constraint (IMPORTANT)
 - `callAnthropicRaw` in api-server/routes/ai/index.ts only intercepts Ahrefs `tool_use` blocks
 - Non-Ahrefs tool_use blocks (submit_draft, submit_article_schema) are TERMINAL — loop returns immediately
-- `tool_choice: { type: "tool", name: "submit_draft" }` prevents model from calling Ahrefs tools
-- draft-section toolContext is a no-op currently (forced-tool constraint); real value is in final-stitch repetition-rewrite pass (free tool choice)
-- Pre-pass approach for draft-section (run Ahrefs pass before forced draft call) is a future enhancement
+- `tool_choice: { type: "tool", name: "submit_draft" }` prevents model from calling Ahrefs tools in the main draft call
+- `ahrefsBudget` option on `callAnthropicRaw` makes the per-call cap configurable (default 5)
+
+## Phase 6 — Ahrefs pre-pass for draft-section
+- `runAhrefsPrePass` runs BEFORE the forced-tool draft call — HAIKU, budget 3, no forced tool_choice
+- Runs concurrently with `buildAssetCandidates` via `Promise.all` — zero added latency when AHREFS_MCP_KEY absent
+- Seed domains come from `whitelist.sources.slice(0,5)` (already URL-normalized)
+- Result injected as `AHREFS_RESEARCH_CONTEXT` block in `projectContext` string (inside `buildRoutedSystemWithProject` system)
+- Skipped entirely when `revision_instruction` is present — revisions refine prose, not citations
+- Non-blocking: catches all errors, returns null (never throws)
+- Budget split per section: 3 calls pre-pass + up to 5 calls repetition-rewrite (independent invocations)
 
 ## Sentinel UUID
 - `module_data_provenance.entity_id` is uuid NOT NULL
