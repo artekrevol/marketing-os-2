@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Download, ArrowRight, Upload, BookOpen, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
+import { Download, ArrowRight, Upload, BookOpen, Loader2, CheckCircle2, RefreshCw, BarChart2 } from "lucide-react";
 import { toast } from "sonner";
 import { aiClient } from "@/lib/ai-client";
 import { useAuth } from "@/lib/useAuth";
@@ -16,6 +16,7 @@ export default function AdminDashboard() {
   const [reparsing, setReparsing] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState({ pod: "", stage: "", status: "" });
+  const [ahrefsUsage, setAhrefsUsage] = useState<any>(null);
 
   const loadPlaybook = async () => {
     const resp = await fetch("/api/admin/playbook", { credentials: "include" });
@@ -33,8 +34,13 @@ export default function AdminDashboard() {
         setVoice(body.voice || []);
       }
     };
+    const loadAhrefs = async () => {
+      const resp = await fetch("/api/admin/ahrefs-usage?days=30", { credentials: "include" });
+      if (resp.ok) setAhrefsUsage(await resp.json());
+    };
     void load();
     void loadPlaybook();
+    void loadAhrefs();
   }, []);
 
   const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -243,6 +249,107 @@ export default function AdminDashboard() {
             <p className="text-sm text-ink-muted italic">
               No playbook uploaded yet. The AI will operate on generic best practices until one is added.
             </p>
+          </div>
+        )}
+      </section>
+
+      {/* AHREFS MCP USAGE CARD */}
+      <section className="mb-10">
+        <div className="flex items-end justify-between mb-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">Integrations</p>
+            <h2 className="font-serif text-2xl mt-1 flex items-center gap-2">
+              <BarChart2 className="h-5 w-5 text-accent" /> Ahrefs MCP Usage
+            </h2>
+          </div>
+        </div>
+        {ahrefsUsage ? (
+          <div className="notebook-card p-5">
+            {/* Budget warning banner */}
+            {ahrefsUsage.budget_used_pct >= 0.8 && (
+              <div className="mb-4 px-3 py-2 rounded-sm bg-destructive/10 border border-destructive/30 text-xs text-destructive font-medium">
+                ⚠ Budget alert: {Math.round(ahrefsUsage.budget_used_pct * 100)}% of monthly units consumed. Contact Ahrefs to check plan limits.
+              </div>
+            )}
+            {ahrefsUsage.budget_used_pct >= 0.6 && ahrefsUsage.budget_used_pct < 0.8 && (
+              <div className="mb-4 px-3 py-2 rounded-sm bg-amber-50 border border-amber-200 text-xs text-amber-700 font-medium">
+                ⚡ Budget notice: {Math.round(ahrefsUsage.budget_used_pct * 100)}% of monthly units consumed.
+              </div>
+            )}
+            {/* Top metrics row */}
+            <div className="grid grid-cols-4 gap-4 mb-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-ink-muted mb-0.5">Total calls (30d)</p>
+                <p className="text-2xl font-mono font-medium">{(ahrefsUsage.total_calls ?? 0).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-ink-muted mb-0.5">Cache hit rate</p>
+                <p className="text-2xl font-mono font-medium">{Math.round((ahrefsUsage.cache_hit_rate ?? 0) * 100)}%</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-ink-muted mb-0.5">MCP calls (live)</p>
+                <p className="text-2xl font-mono font-medium">{(ahrefsUsage.mcp_calls ?? 0).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-ink-muted mb-0.5">Units consumed</p>
+                <p className="text-2xl font-mono font-medium">{(ahrefsUsage.estimated_units_consumed ?? 0).toLocaleString()}</p>
+              </div>
+            </div>
+            {/* Budget bar */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-[10px] uppercase tracking-widest text-ink-muted">Monthly budget</p>
+                <p className="text-xs text-ink-muted font-mono">
+                  {Math.round(ahrefsUsage.budget_used_pct * 100)}% of {(ahrefsUsage.monthly_budget ?? 0).toLocaleString()} units
+                </p>
+              </div>
+              <div className="w-full h-1.5 bg-secondary rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    ahrefsUsage.budget_used_pct >= 0.8
+                      ? "bg-destructive"
+                      : ahrefsUsage.budget_used_pct >= 0.6
+                      ? "bg-amber-400"
+                      : "bg-verified"
+                  }`}
+                  style={{ width: `${Math.min(ahrefsUsage.budget_used_pct * 100, 100)}%` }}
+                />
+              </div>
+            </div>
+            {/* Per-tool breakdown */}
+            {ahrefsUsage.top_tools?.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-rule">
+                <p className="text-[10px] uppercase tracking-widest text-ink-muted mb-2">By tool</p>
+                <div className="space-y-1">
+                  {ahrefsUsage.top_tools.map((t: any) => (
+                    <div key={t.tool} className="flex items-center justify-between text-xs">
+                      <span className="font-mono text-ink-muted">{t.tool}</span>
+                      <span className="text-ink-muted">
+                        {t.calls} calls · {Math.round(t.cache_hit_rate * 100)}% cached
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Recent errors */}
+            {ahrefsUsage.recent_errors?.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-rule">
+                <p className="text-[10px] uppercase tracking-widest text-ink-muted mb-2">Recent errors</p>
+                <div className="space-y-1">
+                  {ahrefsUsage.recent_errors.slice(0, 3).map((e: any, i: number) => (
+                    <div key={i} className="text-xs text-destructive font-mono truncate">
+                      {e.tool}: {e.error}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <p className="mt-3 text-[10px] text-ink-muted">Period: {ahrefsUsage.period_start} → {ahrefsUsage.period_end}</p>
+          </div>
+        ) : (
+          <div className="notebook-card p-5 text-center">
+            <p className="text-sm text-ink-muted italic">No Ahrefs usage data yet — tools activate during draft-section and final-stitch generation.</p>
           </div>
         )}
       </section>

@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
     "declaration": true,
@@ -11,8 +11,7 @@
   },
   "include": ["src"],
   "references": [
-    { "path": "../db" },
-    { "path": "../jobs" },
-    { "path": "../integrations/ahrefs" }
+    { "path": "../../db" },
+    { "path": "../../jobs" }
   ]
 }

@@ -14,6 +14,10 @@ import {
   getCredentialBlock,
   computeLsiCoverage,
   AUTHORITY_WHITELIST,
+  AHREFS_TOOL_DEFINITIONS,
+  AHREFS_TOOL_NAME_SET,
+  AHREFS_SYSTEM_ADDENDUM,
+  executeAhrefsTool,
   type StageKey,
   type ValidatorDeps,
   type ArticleSchema,
@@ -99,7 +103,13 @@ function apiKey(): string {
   return k;
 }
 
-async function callAnthropicRaw(body: Record<string, unknown>): Promise<any> {
+interface AhrefsToolContext {
+  brandId: string;
+  projectId: string;
+}
+
+/** Single raw fetch to Anthropic — no tool loop. */
+async function fetchAnthropic(body: Record<string, unknown>): Promise<any> {
   const resp = await fetch(ANTHROPIC_URL, {
     method: "POST",
     headers: {
@@ -111,6 +121,103 @@ async function callAnthropicRaw(body: Record<string, unknown>): Promise<any> {
   });
   if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${(await resp.text()).slice(0, 400)}`);
   return resp.json() as Promise<any>;
+}
+
+/**
+ * Call Anthropic with an optional Ahrefs tool loop.
+ *
+ * When `options.toolContext` is provided:
+ * - Ahrefs tool definitions are merged into body.tools.
+ * - AHREFS_SYSTEM_ADDENDUM is appended to a string system prompt.
+ * - The response loop intercepts ONLY Ahrefs tool_use blocks.
+ * - Non-Ahrefs tool_use blocks (submit_draft, submit_article_schema, etc.)
+ *   are treated as terminal and returned immediately — forced-tool calls
+ *   (draft-section, review) are unaffected.
+ * - Budget: 5 Ahrefs calls max per generation cycle.
+ *
+ * NOTE: calls that use `tool_choice: { type:"tool", name:"submit_*" }` are
+ * functionally unaffected — the forced tool prevents the model from calling
+ * Ahrefs tools, so the loop returns after the first fetch. The toolContext
+ * path is most impactful for free-tool calls (e.g. repetition-rewrite).
+ */
+async function callAnthropicRaw(
+  body: Record<string, unknown>,
+  options?: { toolContext?: AhrefsToolContext },
+): Promise<any> {
+  const toolContext = options?.toolContext;
+
+  // ── Fast path — no Ahrefs tool loop ───────────────────────────────────
+  if (!toolContext) {
+    return fetchAnthropic(body);
+  }
+
+  // ── Tool-loop path ─────────────────────────────────────────────────────
+  const callBudget = { remaining: 5, used: 0 };
+
+  // Merge Ahrefs tool definitions (prepend so model sees them before any forced tool)
+  const existingTools = Array.isArray(body["tools"]) ? (body["tools"] as unknown[]) : [];
+  const mergedTools = [...(AHREFS_TOOL_DEFINITIONS as unknown as unknown[]), ...existingTools];
+
+  // Append Ahrefs system addendum (string system prompts only; cache-block arrays are left intact)
+  let augmentedSystem = body["system"];
+  if (typeof augmentedSystem === "string") {
+    augmentedSystem = augmentedSystem + AHREFS_SYSTEM_ADDENDUM;
+  }
+
+  const augmentedBody: Record<string, unknown> = {
+    ...body,
+    tools: mergedTools,
+    system: augmentedSystem,
+  };
+
+  let messages: unknown[] = Array.isArray(body["messages"]) ? [...(body["messages"] as unknown[])] : [];
+
+  for (let iteration = 0; iteration < 10; iteration++) {
+    const data = await fetchAnthropic({ ...augmentedBody, messages });
+
+    // Identify Ahrefs tool_use blocks only — all others are terminal
+    const ahrefsBlocks = ((data.content as any[]) ?? []).filter(
+      (c: any) => c.type === "tool_use" && AHREFS_TOOL_NAME_SET.has(c.name as string),
+    );
+
+    if (ahrefsBlocks.length === 0) {
+      // No Ahrefs tools used this turn — return as-is (may be submit_draft / text / etc.)
+      return data;
+    }
+
+    // Cap to remaining budget
+    const toExecute = ahrefsBlocks.slice(0, callBudget.remaining);
+
+    // Execute in parallel
+    const results = await Promise.all(
+      toExecute.map((toolUse: any) =>
+        executeAhrefsTool(
+          toolContext.brandId,
+          toolContext.projectId,
+          toolUse as { name: string; input: Record<string, unknown>; id: string },
+          { remaining: callBudget.remaining, used: callBudget.used },
+        ),
+      ),
+    );
+
+    const totalUsed = results.reduce((sum: number, r) => sum + r.budgetUsed, 0);
+    callBudget.remaining -= totalUsed;
+    callBudget.used += totalUsed;
+
+    // Append assistant turn + tool results for next iteration
+    messages = [
+      ...messages,
+      { role: "assistant", content: data.content },
+      { role: "user", content: results.map((r: { toolResultBlock: unknown; budgetUsed: number }) => r.toolResultBlock) },
+    ];
+
+    // Budget exhausted — one final call to let model finish
+    if (callBudget.remaining <= 0) {
+      return fetchAnthropic({ ...augmentedBody, messages });
+    }
+  }
+
+  throw new Error("Ahrefs tool loop exceeded 10 iterations without completing");
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -872,6 +979,8 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
       tools: [DRAFT_TOOL],
       tool_choice: { type: "tool", name: "submit_draft" },
       messages: [{ role: "user", content: userMessage }],
+    }, {
+      toolContext: { brandId: project.brandId, projectId: project_id },
     });
     await logUsage({ project_id, stage: "draft", sub_stage: section_id, model: SONNET, metadata_user_id: metadataUserId, usage: draftData.usage, duration_ms: Date.now() - t0, ok: true });
 
@@ -1427,6 +1536,8 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
           metadata: { user_id: rwMetaUserId },
           system: rwSystem,
           messages: [{ role: "user", content: rwUser }],
+        }, {
+          toolContext: { brandId: (project as any).brandId, projectId: project_id },
         });
         await logUsage({ project_id, stage: "final-stitch", sub_stage: `repetition-rewrite-${rwPass}`, model: SONNET, metadata_user_id: rwMetaUserId, usage: rwData.usage, duration_ms: Date.now() - tRw, ok: true });
         const rwText = (rwData.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();

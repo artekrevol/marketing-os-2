@@ -10,6 +10,7 @@
     { "path": "./lib/jobs" },
     { "path": "./lib/integrations/dataforseo" },
     { "path": "./lib/integrations/originality-ai" },
+    { "path": "./lib/integrations/ahrefs" },
     { "path": "./lib/services/quality-gate" },
     { "path": "./lib/services/recovery" },
     { "path": "./lib/worker" },

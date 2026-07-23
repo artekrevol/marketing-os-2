@@ -41,3 +41,17 @@ export {
   type SerpSignalInput,
   type LsiCoverageResult,
 } from "./serp-signals.js";
+// Ahrefs MCP — cached tool helpers, Anthropic tool definitions, and handler
+export {
+  getDomainAuthority,
+  getBacklinkSummary,
+  getKeywordData,
+  logAhrefsUsage,
+  normalizeDomain,
+  AHREFS_TOOL_DEFINITIONS,
+  AHREFS_TOOL_NAME_SET,
+  AHREFS_SYSTEM_ADDENDUM,
+  executeAhrefsTool,
+  type AhrefsToolUse,
+  type CallBudget,
+} from "./tools/ahrefs/index.js";

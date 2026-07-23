@@ -1,5 +1,5 @@
 {
-  "name": "@workspace/content-ai",
+  "name": "@workspace/ahrefs",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,18 +7,16 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@workspace/ahrefs": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@workspace/db": "workspace:*",
     "@workspace/jobs": "workspace:*",
     "drizzle-orm": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "vitest": "^2.1.9"
+    "@types/node": "catalog:"
   }
 }

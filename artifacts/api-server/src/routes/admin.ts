@@ -11,6 +11,7 @@ import {
   usageLogsTable,
   playbookTable,
   playbookSectionsTable,
+  ahrefsMcpUsageTable,
   USER_ROLES,
   USER_DEPARTMENTS,
   type UserDepartment,
@@ -483,6 +484,112 @@ router.get("/usage", async (req, res, next) => {
         calls: Number(r.calls),
         cost_usd: Number(r.costUsd),
         total_tokens: Number(r.totalTokens),
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/admin/ahrefs-usage?brandId=&days=30
+ *
+ * Operator-facing Ahrefs MCP usage summary. Returns call totals, cache hit
+ * rate, estimated units consumed, and per-tool breakdowns.
+ * Protected by requireAdmin (applied on this router).
+ */
+router.get("/ahrefs-usage", async (req, res, next) => {
+  try {
+    const { brandId, days } = req.query as { brandId?: string; days?: string };
+    const periodDays = Math.min(Math.max(Number(days) || 30, 1), 365);
+    const since = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+
+    const MONTHLY_BUDGET = 400_000; // Ahrefs plan units/month
+
+    const baseWhere = brandId
+      ? and(eq(ahrefsMcpUsageTable.brandId, brandId), gte(ahrefsMcpUsageTable.calledAt, since))
+      : gte(ahrefsMcpUsageTable.calledAt, since);
+
+    const [totalsRows, byToolRows, recentErrorRows] = await Promise.all([
+      // Aggregate totals
+      db
+        .select({
+          totalCalls: count(),
+          cacheHits: sum(sql<number>`CASE WHEN ${ahrefsMcpUsageTable.cacheHit} THEN 1 ELSE 0 END`),
+          unitsConsumed: sum(ahrefsMcpUsageTable.unitsConsumed),
+        })
+        .from(ahrefsMcpUsageTable)
+        .where(baseWhere),
+
+      // Per-tool breakdown
+      db
+        .select({
+          toolName: ahrefsMcpUsageTable.toolName,
+          calls: count(),
+          cacheHits: sum(sql<number>`CASE WHEN ${ahrefsMcpUsageTable.cacheHit} THEN 1 ELSE 0 END`),
+        })
+        .from(ahrefsMcpUsageTable)
+        .where(baseWhere)
+        .groupBy(ahrefsMcpUsageTable.toolName)
+        .orderBy(desc(count())),
+
+      // Recent errors (last 10)
+      db
+        .select({
+          toolName: ahrefsMcpUsageTable.toolName,
+          errorMessage: ahrefsMcpUsageTable.errorMessage,
+          calledAt: ahrefsMcpUsageTable.calledAt,
+        })
+        .from(ahrefsMcpUsageTable)
+        .where(
+          brandId
+            ? and(
+                eq(ahrefsMcpUsageTable.brandId, brandId),
+                gte(ahrefsMcpUsageTable.calledAt, since),
+                eq(ahrefsMcpUsageTable.responseStatus, "error"),
+              )
+            : and(
+                gte(ahrefsMcpUsageTable.calledAt, since),
+                eq(ahrefsMcpUsageTable.responseStatus, "error"),
+              ),
+        )
+        .orderBy(desc(ahrefsMcpUsageTable.calledAt))
+        .limit(10),
+    ]);
+
+    const t = totalsRows[0] ?? { totalCalls: 0, cacheHits: 0, unitsConsumed: 0 };
+    const totalCalls = Number(t.totalCalls) || 0;
+    const cacheHits = Number(t.cacheHits) || 0;
+    const mcpCalls = totalCalls - cacheHits;
+    const estimatedUnitsConsumed = Number(t.unitsConsumed) || 0;
+
+    // Approximate remaining monthly budget (resets 2026-08-19, ~400k/mo)
+    const USED_BEFORE_INTEGRATION = 11_413; // units used before integration (from dispatch)
+    const totalUnitsInMonth = USED_BEFORE_INTEGRATION + estimatedUnitsConsumed;
+
+    res.json({
+      period_start: since.toISOString().slice(0, 10),
+      period_end: new Date().toISOString().slice(0, 10),
+      total_calls: totalCalls,
+      cache_hits: cacheHits,
+      cache_hit_rate: totalCalls > 0 ? Number((cacheHits / totalCalls).toFixed(4)) : 0,
+      mcp_calls: mcpCalls,
+      estimated_units_consumed: estimatedUnitsConsumed,
+      monthly_budget: MONTHLY_BUDGET,
+      budget_used_pct: Number((totalUnitsInMonth / MONTHLY_BUDGET).toFixed(4)),
+      top_tools: byToolRows.map((r) => {
+        const calls = Number(r.calls) || 0;
+        const hits = Number(r.cacheHits) || 0;
+        return {
+          tool: r.toolName,
+          calls,
+          cache_hit_rate: calls > 0 ? Number((hits / calls).toFixed(4)) : 0,
+        };
+      }),
+      recent_errors: recentErrorRows.map((r) => ({
+        tool: r.toolName,
+        error: r.errorMessage ?? "",
+        at: r.calledAt,
       })),
     });
   } catch (err) {

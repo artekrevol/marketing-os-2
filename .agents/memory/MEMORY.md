@@ -2,3 +2,4 @@
 - [GitHub remote](github-remote.md) — push destination is artekrevol/marketing-os-2 (marketing-os is 404); a 403 on push usually means wrong repo name, not perms.
 - [Asset-candidate injection](asset-candidate-injection.md) — injected candidate blocks feed CACHED prompts: need DB id-tiebreak + caller id-sort for byte-identical output; LSI check is N/A when lsi_retrieved is empty, mirroring the SERP-driven table checks.
 - [Surgical rewrite live offenders](surgical-rewrite-live-offenders.md) — final-stitch per-paragraph nets must recompute offenders from LIVE stitched, not plan-time snapshots; a para hit by two nets silently no-ops the second.
+- [Ahrefs MCP integration](ahrefs-mcp-integration.md) — StreamableHTTP only; forced-tool draft-section blocks Ahrefs tool calls; AHREFS_TOOL_NAME_SET must be Set<string> not narrow union.

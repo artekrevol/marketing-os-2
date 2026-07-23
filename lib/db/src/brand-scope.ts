@@ -65,6 +65,9 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "content_plan_templates",
   "content_plans",
   "named_projects",
+  // Ahrefs MCP Integration — cache and usage tracking
+  "domain_authority_cache",
+  "ahrefs_mcp_usage",
 ]);
 
 /** Brand context attached to a scoped transaction. */
