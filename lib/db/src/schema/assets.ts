@@ -126,6 +126,16 @@ export const linkTargetsTable = pgTable(
     lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // Ahrefs Bulk Import — additive columns (Phase 1.2)
+    ahrefsSumTraffic: integer("ahrefs_sum_traffic"),
+    ahrefsKeywordsCount: integer("ahrefs_keywords_count"),
+    ahrefsTrafficValueUsd: numeric("ahrefs_traffic_value_usd", { precision: 12, scale: 2 }),
+    ahrefsReferringDomains: integer("ahrefs_referring_domains"),
+    ahrefsUr: numeric("ahrefs_ur", { precision: 5, scale: 2 }),
+    /** Ahrefs hierarchical page classification, e.g. /Article/News_Update. Preserved as-is. */
+    ahrefsPageType: text("ahrefs_page_type"),
+    ahrefsTopKeyword: text("ahrefs_top_keyword"),
+    ahrefsLastUpdated: timestamp("ahrefs_last_updated", { withTimezone: true }),
   },
   (t) => [
     unique("link_targets_brand_url_uq").on(t.brandId, t.url),
