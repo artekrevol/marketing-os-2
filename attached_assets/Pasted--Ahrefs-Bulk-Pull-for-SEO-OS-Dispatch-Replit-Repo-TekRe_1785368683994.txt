@@ -1,0 +1,816 @@
+# Ahrefs Bulk Pull for SEO OS Dispatch (Replit)
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Objective:** One-time comprehensive bulk pull of Ahrefs data into SEO OS as foundational data. Organic keywords (all ~2,731 with automated priority classification), top pages (~200-500), organic competitors (top 20), referring domains (~7,200 with DR/UR). Coexists with existing DataForSEO data via source attribution. Enables the SEO team to work against a richer keyword corpus and enables the Planner AI's citation validation to query real DR values from the platform.
+**Dispatch type:** Foundational data import. Larger than the MCP integration but smaller than the plan architecture. Comparable in scope to the SEO Dashboard migration.
+
+---
+
+## Startup check (before any code)
+
+Before beginning: `ls -la .local/tasks/*.md 2>/dev/null`. Report results. Archive anything from cancelled or completed tasks to `.local/tasks/archive/` before proceeding.
+
+---
+
+## Context
+
+The Ahrefs MCP integration shipped (Phases 1-6) — provides on-demand DR/backlink/keyword lookups during content generation. This dispatch is different: bulk REST API pull of the entire Ahrefs data footprint for tekrevol.com into SEO OS tables.
+
+**Why bulk vs. on-demand:**
+- SEO OS Keywords page needs comprehensive coverage, not just what content generation happens to query
+- Planner AI's citation validation benefits from a warm domain_authority_cache seeded with ~7,200 pre-known DR values rather than hitting MCP for every citation URL
+- Ahtesham's SEO strategy work needs the full keyword corpus available, not just the migrated 425 from the SEO Dashboard
+
+**Real API field structure verified via probe (2026-07-23):**
+- Organic keywords: `keyword`, `volume`, `best_position`, `keyword_difficulty`, `cpc`, `best_position_url`, `sum_traffic`, plus 5 intent booleans (`is_informational`, `is_transactional`, `is_commercial`, `is_navigational`, `is_branded`)
+- Top pages: `url`, `sum_traffic`, `keywords`, `value`, `referring_domains`, `ur`, `top_keyword`, `page_type` (hierarchical: `/Article/News_Update`, `/Core_Page/Services_Page`)
+- Organic competitors: `competitor_domain`, `keywords_common`, `keywords_competitor`, `domain_rating`, `traffic`, `share`, `pages`
+- Referring domains: schema TBD via Phase 0 probe
+
+**Classification decisions locked:**
+- `is_branded: true` → hard-drop to P3 regardless of other metrics (off-vertical traffic like Fortnite stats)
+- P0: `is_commercial: true` AND `best_position ≤ 10` AND `volume ≥ 300` AND NOT `is_branded`
+- P1: (`is_commercial: true` OR `is_transactional: true`) AND `best_position ≤ 20` AND `volume ≥ 100` AND NOT `is_branded`
+- P2: `best_position ≤ 30` AND `volume ≥ 50` AND NOT `is_branded`
+- P3: everything else including all `is_branded: true`
+- `is_high_value_target`: top 20% by `sum_traffic × cpc` across the corpus (excluding branded)
+
+**Conflict resolution locked:**
+- Merge preserves original priority in `priority_pre_ahrefs_import` column (auditability)
+- Overwrite semantics: heuristic-derived priority replaces existing on import
+- Metrics (position, volume, KD) always overwritten with Ahrefs' fresh values
+- Ahtesham can bulk-reclassify via SEO OS Keywords page after import if heuristic result feels wrong
+
+**Cost budget:**
+- Hard stop at 10,000 units for this entire dispatch (env var `AHREFS_BULK_PULL_MAX_UNITS`)
+- Estimated actual consumption: ~2,500-5,000 units across all phases
+- Consumption tracked per API call in new `ahrefs_rest_usage` table
+
+**Explicitly out of scope:**
+- Backlinks bulk pull (51.9K rows, deferred until SEO OS Backlinks page is designed)
+- Content gap analysis (on-demand, better via MCP or REST spot-checks)
+- Site audit data (separate workstream)
+- SEO OS UI surfaces for imported data (this dispatch is data-only; UI extensions ship as follow-ups)
+- Other brands (TekRevol only for this dispatch; ClaimShield/Reverto/CensusFlow follow separately)
+
+---
+
+## Phase 0 — Pre-flight survey (read-only)
+
+Standard survey. No code, no schema changes.
+
+1. **Verify secrets.** Confirm `AHREFS_API_KEY` is present in Replit Secrets (different from `AHREFS_MCP_KEY` — both should exist post-MCP dispatch). Report present/missing without echoing values.
+
+2. **Verify Ahrefs API baseline consumption.** The `/subscription/limits-and-usage` REST endpoint returned 404 during the probe. Consumption tracking is via in-app logging only. For this dispatch: dispatcher manually reads current unit consumption from Ahrefs UI (Account → Limits and usage) and provides the baseline number before Phase 3 begins. Report baseline in the Phase 0 output.
+
+3. **Verify existing schema state.** Check current columns on `keywords`, `link_targets`, `competitor_insights` for any Ahrefs-related columns that may already exist. Some may have been partially added during MCP dispatch. Report state before Phase 1 modifies.
+
+4. **Verify `domain_authority_cache` table exists** (created during MCP dispatch). Row count report — should be small (only entries created during MCP tool calls to date). Phase 6 will seed this table heavily.
+
+5. **Probe `/site-explorer/refdomains` endpoint** to determine referring domains response schema. The MCP integration used `site-explorer-backlinks-stats` which returns aggregate counts; REST refdomains endpoint returns per-domain rows. Confirm field names via one small call (limit 5), report schema.
+
+6. **Confirm 4th endpoint via probe.** The organic keywords, top pages, competitors endpoints confirmed via prior probe. Referring domains endpoint needs verification. Run: `GET /v3/site-explorer/refdomains?target=tekrevol.com&date=<today>&limit=5&country=us`. Report response field names, expected pagination shape.
+
+7. **Check Node HTTP client patterns.** Existing DataForSEO REST client wrapper should provide the pattern for the new Ahrefs REST client. Show its signature and error handling briefly.
+
+Report findings. Pause for dispatcher review before Phase 1 begins.
+
+---
+
+## Phase 1 — Schema additions
+
+Scoped transactional DDL only. No blanket `drizzle-kit push`.
+
+### 1.1 `keywords` additive columns
+
+```sql
+BEGIN;
+
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS ahrefs_best_position integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_keyword_difficulty numeric(5,2),
+  ADD COLUMN IF NOT EXISTS ahrefs_sum_traffic integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_best_position_url text,
+  ADD COLUMN IF NOT EXISTS ahrefs_intent_flags jsonb DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS ahrefs_cpc numeric(10,2),
+  ADD COLUMN IF NOT EXISTS ahrefs_last_updated timestamptz,
+  ADD COLUMN IF NOT EXISTS is_branded boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS is_high_value_target boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS priority_pre_ahrefs_import text;
+
+CREATE INDEX IF NOT EXISTS keywords_ahrefs_position_idx ON keywords(brand_id, ahrefs_best_position) WHERE ahrefs_best_position IS NOT NULL;
+CREATE INDEX IF NOT EXISTS keywords_high_value_idx ON keywords(brand_id, is_high_value_target) WHERE is_high_value_target = true;
+
+COMMIT;
+```
+
+`ahrefs_intent_flags` shape:
+```json
+{
+  "informational": true,
+  "transactional": false,
+  "commercial": true,
+  "navigational": false,
+  "branded": false
+}
+```
+
+Update Drizzle schema in `lib/db/src/schema/keywords.ts`.
+
+### 1.2 `link_targets` additive columns
+
+```sql
+BEGIN;
+
+ALTER TABLE link_targets
+  ADD COLUMN IF NOT EXISTS ahrefs_sum_traffic integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_keywords_count integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_traffic_value_usd numeric(12,2),
+  ADD COLUMN IF NOT EXISTS ahrefs_referring_domains integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_ur numeric(5,2),
+  ADD COLUMN IF NOT EXISTS ahrefs_page_type text,
+  ADD COLUMN IF NOT EXISTS ahrefs_top_keyword text,
+  ADD COLUMN IF NOT EXISTS ahrefs_last_updated timestamptz;
+
+CREATE INDEX IF NOT EXISTS link_targets_ahrefs_value_idx ON link_targets(brand_id, ahrefs_traffic_value_usd DESC NULLS LAST);
+
+COMMIT;
+```
+
+`ahrefs_page_type` is Ahrefs' hierarchical classification (`/Article/News_Update`, `/Core_Page/Services_Page`). Preserved as-is — do NOT collapse to a simpler taxonomy. Existing `page_type` column on `link_targets` (used by content module) is separate and unchanged.
+
+Update Drizzle schema.
+
+### 1.3 `competitor_insights` additive columns
+
+```sql
+BEGIN;
+
+ALTER TABLE competitor_insights
+  ADD COLUMN IF NOT EXISTS ahrefs_keywords_common integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_keywords_competitor integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_domain_rating numeric(5,2),
+  ADD COLUMN IF NOT EXISTS ahrefs_traffic integer,
+  ADD COLUMN IF NOT EXISTS ahrefs_share numeric(6,3),
+  ADD COLUMN IF NOT EXISTS ahrefs_pages integer,
+  ADD COLUMN IF NOT EXISTS is_relevant_competitor boolean NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS ahrefs_last_updated timestamptz;
+
+CREATE INDEX IF NOT EXISTS competitor_insights_relevant_idx ON competitor_insights(brand_id, is_relevant_competitor);
+
+COMMIT;
+```
+
+`is_relevant_competitor` defaults true. Ahtesham flips false via SEO OS UI for spurious matches (e.g., `credible.com` — surfaced by Ahrefs due to keyword overlap but not a real competitor).
+
+Update Drizzle schema.
+
+### 1.4 New `referring_domains` table
+
+```sql
+BEGIN;
+
+CREATE TABLE referring_domains (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  domain text NOT NULL,
+  dr numeric(5,2),
+  ur numeric(5,2),
+  backlinks_count integer,
+  linked_domains integer,
+  first_seen timestamptz,
+  last_seen timestamptz,
+  is_lost boolean NOT NULL DEFAULT false,
+  source_provider text NOT NULL DEFAULT 'ahrefs_bulk_import',
+  source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ahrefs_last_updated timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (brand_id, domain)
+);
+
+CREATE INDEX referring_domains_brand_dr_idx ON referring_domains(brand_id, dr DESC NULLS LAST);
+CREATE INDEX referring_domains_brand_lost_idx ON referring_domains(brand_id, is_lost);
+
+COMMIT;
+```
+
+Actual columns TBD via Phase 0.5 probe — adjust per real API response. Above is the expected shape.
+
+Add to `BRAND_SCOPED_TABLES`. Update Drizzle schema.
+
+### 1.5 New `ahrefs_rest_usage` table
+
+```sql
+BEGIN;
+
+CREATE TABLE ahrefs_rest_usage (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  called_at timestamptz NOT NULL DEFAULT now(),
+  endpoint text NOT NULL,
+  params_hash text NOT NULL,
+  units_consumed integer NOT NULL DEFAULT 0,
+  response_status text NOT NULL,
+  rows_returned integer,
+  error_message text,
+  dispatch_context text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX ahrefs_rest_usage_brand_called_idx ON ahrefs_rest_usage(brand_id, called_at DESC);
+CREATE INDEX ahrefs_rest_usage_dispatch_idx ON ahrefs_rest_usage(dispatch_context) WHERE dispatch_context IS NOT NULL;
+
+COMMIT;
+```
+
+`dispatch_context` tags every call with the phase that triggered it (`bulk_pull_phase_3_organic_keywords`, etc.) for audit trail. `params_hash` uses SHA-256 of the endpoint + params for deduplication and cache lookup.
+
+Add to `BRAND_SCOPED_TABLES`. Update Drizzle schema.
+
+**Pause after Phase 1.** Dispatcher confirms schemas look right.
+
+---
+
+## Phase 2 — Ahrefs REST client wrapper
+
+File: `lib/integrations/ahrefs/rest-client.ts`
+
+Follows the pattern of the existing DataForSEO client and the MCP client from prior dispatch.
+
+### 2.1 Client class
+
+```typescript
+export interface AhrefsRestConfig {
+  apiKey: string;
+  baseUrl: string; // 'https://api.ahrefs.com/v3'
+  maxUnitsPerDispatch: number; // hard stop, default 10000
+  onUnitsConsumed?: (units: number, total: number) => void;
+}
+
+export interface RestCallResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  unitsConsumed: number;
+  rowsReturned: number;
+  latencyMs: number;
+  rateLimited: boolean;
+}
+
+export class AhrefsRestClient {
+  constructor(config: AhrefsRestConfig);
+  
+  // Paginated fetch — handles multi-page pulls transparently
+  async fetchAllOrganicKeywords(target: string, options: {
+    country?: string;
+    minVolume?: number;
+    maxPosition?: number;
+  }): Promise<RestCallResult<OrganicKeywordRow[]>>;
+  
+  async fetchAllTopPages(target: string, options: {
+    country?: string;
+    limit?: number;
+  }): Promise<RestCallResult<TopPageRow[]>>;
+  
+  async fetchOrganicCompetitors(target: string, options: {
+    country?: string;
+    limit?: number;
+  }): Promise<RestCallResult<CompetitorRow[]>>;
+  
+  async fetchAllReferringDomains(target: string, options: {
+    minDr?: number;
+    limit?: number;
+  }): Promise<RestCallResult<ReferringDomainRow[]>>;
+  
+  // Global units-consumed tracker
+  getTotalUnitsConsumed(): number;
+  
+  // Hard stop check — throws if approaching maxUnitsPerDispatch
+  checkBudget(estimatedUnits: number): void;
+}
+```
+
+### 2.2 Pagination handling
+
+Ahrefs REST returns results in pages (typically 100-1000 rows per call depending on endpoint). Client transparently pages through until all results retrieved:
+
+- Uses `offset` parameter or cursor-based pagination (verify via response inspection in Phase 3)
+- Between pages: 250ms delay to respect rate limits
+- Reports progress via `onUnitsConsumed` callback
+- Aborts if `checkBudget()` fails
+
+### 2.3 Retry logic
+
+- HTTP 429 (rate limit): exponential backoff, max 3 retries
+- HTTP 5xx: retry once after 1s delay
+- HTTP 4xx (except 429): fail immediately, no retry
+- Network errors: retry once after 500ms
+
+### 2.4 Type definitions
+
+Row types match the exact field names from the probe:
+
+```typescript
+export interface OrganicKeywordRow {
+  keyword: string;
+  volume: number;
+  best_position: number;
+  keyword_difficulty: number;
+  cpc: number | null;
+  best_position_url: string;
+  sum_traffic: number;
+  is_informational: boolean;
+  is_transactional: boolean;
+  is_commercial: boolean;
+  is_navigational: boolean;
+  is_branded: boolean;
+}
+
+// Similar for TopPageRow, CompetitorRow, ReferringDomainRow
+// ReferringDomainRow structure TBD via Phase 0.5 probe
+```
+
+### 2.5 Usage logging
+
+Every API call writes to `ahrefs_rest_usage`:
+
+```typescript
+async function logRestUsage(brandId: string, endpoint: string, params: any, result: RestCallResult<any>, dispatchContext: string) {
+  await withBrandScope(brandId, async (db) => {
+    await db.insert(ahrefsRestUsage).values({
+      brandId,
+      endpoint,
+      paramsHash: hashParams(params),
+      unitsConsumed: result.unitsConsumed,
+      responseStatus: result.success ? 'success' : 'error',
+      rowsReturned: result.rowsReturned,
+      errorMessage: result.error,
+      dispatchContext,
+      metadata: { latencyMs: result.latencyMs, rateLimited: result.rateLimited }
+    });
+  });
+}
+```
+
+Commit: `Phase 2: Ahrefs REST client wrapper`
+
+**Pause after Phase 2.** Dispatcher runs a manual test: fetch 10 organic keywords via the client, verify response shape matches type definitions, verify usage row logged.
+
+---
+
+## Phase 3 — Organic keywords bulk pull with classification
+
+The core import phase. All ~2,731 keywords with heuristic-classified priority.
+
+### 3.1 Fetch loop
+
+```typescript
+async function pullOrganicKeywords(brandId: string) {
+  const client = getAhrefsRestClient({ maxUnitsPerDispatch: 10000 });
+  
+  const result = await client.fetchAllOrganicKeywords('tekrevol.com', {
+    country: 'us',
+    // No filter — pull everything Ahrefs sees
+  });
+  
+  if (!result.success) throw new Error(`Fetch failed: ${result.error}`);
+  
+  // Log usage
+  await logRestUsage(brandId, 'organic-keywords', {}, result, 'bulk_pull_phase_3_organic_keywords');
+  
+  return result.data!;
+}
+```
+
+### 3.2 Classification heuristic
+
+```typescript
+function classifyKeyword(row: OrganicKeywordRow): 'P0' | 'P1' | 'P2' | 'P3' {
+  // Hard drop is_branded to P3 regardless of other metrics
+  if (row.is_branded) return 'P3';
+  
+  // P0: commercial + strong position + real volume
+  if (
+    row.is_commercial &&
+    row.best_position <= 10 &&
+    row.volume >= 300
+  ) return 'P0';
+  
+  // P1: commercial/transactional intent + reasonable position + moderate volume
+  if (
+    (row.is_commercial || row.is_transactional) &&
+    row.best_position <= 20 &&
+    row.volume >= 100
+  ) return 'P1';
+  
+  // P2: broader coverage
+  if (
+    row.best_position <= 30 &&
+    row.volume >= 50
+  ) return 'P2';
+  
+  // P3: everything else
+  return 'P3';
+}
+```
+
+### 3.3 High-value target flag
+
+Computed across the corpus after classification:
+
+```typescript
+function markHighValueTargets(rows: OrganicKeywordRow[]): Set<string> {
+  const eligible = rows.filter(r => !r.is_branded && r.cpc != null);
+  
+  const scored = eligible.map(r => ({
+    keyword: r.keyword,
+    trafficValue: r.sum_traffic * (r.cpc || 0)
+  }));
+  
+  scored.sort((a, b) => b.trafficValue - a.trafficValue);
+  
+  const cutoff = Math.floor(scored.length * 0.2); // top 20%
+  return new Set(scored.slice(0, cutoff).map(s => s.keyword));
+}
+```
+
+### 3.4 Import with reconciliation
+
+```typescript
+async function importKeywords(brandId: string, rows: OrganicKeywordRow[]) {
+  const highValueSet = markHighValueTargets(rows);
+  
+  const CHUNK_SIZE = 100;
+  const stats = { inserted: 0, updated: 0, priorityChanged: 0, priorityPreserved: 0 };
+  
+  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + CHUNK_SIZE);
+    
+    await withBrandScope(brandId, async (db) => {
+      for (const row of chunk) {
+        const priority = classifyKeyword(row);
+        const isHighValue = highValueSet.has(row.keyword);
+        
+        // Check existing
+        const existing = await db.select().from(keywords)
+          .where(and(
+            eq(keywords.brandId, brandId),
+            eq(keywords.keywordText, row.keyword)
+          ))
+          .limit(1);
+        
+        const intentFlags = {
+          informational: row.is_informational,
+          transactional: row.is_transactional,
+          commercial: row.is_commercial,
+          navigational: row.is_navigational,
+          branded: row.is_branded
+        };
+        
+        if (existing[0]) {
+          // Merge: preserve existing priority in backup column, overwrite priority + metrics
+          const originalPriority = existing[0].priority;
+          const priorityChanged = originalPriority !== priority;
+          
+          await db.update(keywords).set({
+            priority,
+            priorityPreAhrefsImport: originalPriority,
+            ahrefsBestPosition: row.best_position,
+            ahrefsKeywordDifficulty: row.keyword_difficulty,
+            ahrefsSumTraffic: row.sum_traffic,
+            ahrefsBestPositionUrl: row.best_position_url,
+            ahrefsIntentFlags: intentFlags,
+            ahrefsCpc: row.cpc,
+            ahrefsLastUpdated: new Date(),
+            isBranded: row.is_branded,
+            isHighValueTarget: isHighValue
+          }).where(eq(keywords.id, existing[0].id));
+          
+          stats.updated++;
+          if (priorityChanged) stats.priorityChanged++;
+          else stats.priorityPreserved++;
+        } else {
+          // Insert new
+          await db.insert(keywords).values({
+            brandId,
+            keywordText: row.keyword,
+            priority,
+            searchVolume: row.volume,
+            ahrefsBestPosition: row.best_position,
+            ahrefsKeywordDifficulty: row.keyword_difficulty,
+            ahrefsSumTraffic: row.sum_traffic,
+            ahrefsBestPositionUrl: row.best_position_url,
+            ahrefsIntentFlags: intentFlags,
+            ahrefsCpc: row.cpc,
+            ahrefsLastUpdated: new Date(),
+            isBranded: row.is_branded,
+            isHighValueTarget: isHighValue,
+            isActive: true,
+            trackDaily: false // Ahtesham promotes to daily tracking selectively
+          });
+          
+          stats.inserted++;
+        }
+      }
+    });
+  }
+  
+  return stats;
+}
+```
+
+### 3.5 Classification distribution report
+
+After import, generate report:
+
+```typescript
+async function generateKeywordReport(brandId: string) {
+  const dist = await withBrandScope(brandId, async (db) => {
+    return db.select({
+      priority: keywords.priority,
+      count: sql`count(*)::int`,
+      highValueCount: sql`count(*) filter (where ${keywords.isHighValueTarget}=true)::int`
+    })
+    .from(keywords)
+    .where(eq(keywords.brandId, brandId))
+    .groupBy(keywords.priority);
+  });
+  
+  return dist;
+}
+```
+
+Reports:
+- Total keywords imported
+- Classification distribution (P0/P1/P2/P3 counts)
+- High-value target count per tier
+- Priority changes (existing → new tier via heuristic)
+- Priority preserved (heuristic agreed with existing)
+- New keywords (Ahrefs-only, no existing platform entry)
+- Missing keywords (platform had, Ahrefs didn't return — kept as-is)
+
+Commit: `Phase 3: Organic keywords bulk pull with classification`
+
+**Pause after Phase 3.** Dispatcher reviews classification distribution report. Confirms distribution feels right before Phase 4 proceeds. If distribution feels off (too many P0, or all P3), heuristic parameters get tuned before subsequent phases run.
+
+---
+
+## Phase 4 — Top pages bulk pull
+
+### 4.1 Fetch
+
+```typescript
+async function pullTopPages(brandId: string) {
+  const client = getAhrefsRestClient();
+  const result = await client.fetchAllTopPages('tekrevol.com', {
+    country: 'us',
+    limit: 500
+  });
+  await logRestUsage(brandId, 'top-pages', {}, result, 'bulk_pull_phase_4_top_pages');
+  return result.data!;
+}
+```
+
+### 4.2 Import with reconciliation
+
+Existing `link_targets` rows get Ahrefs metadata columns populated. New URLs inserted with `page_type` from Ahrefs (mapped from Ahrefs' hierarchical `/Article/News_Update` to your existing `page_type` taxonomy, or preserved as-is under `ahrefs_page_type` if no mapping exists).
+
+Mapping table (dispatcher review before Phase 4 executes):
+
+```typescript
+const AHREFS_TO_PLATFORM_PAGE_TYPE: Record<string, string> = {
+  '/Core_Page/Services_Page': 'service',
+  '/Core_Page/Product_Page': 'service',
+  '/Core_Page/About_Page': 'about',
+  '/Core_Page/Contact_Page': 'contact',
+  '/Article/News_Update': 'blog',
+  '/Article/Comparisons': 'blog',
+  '/Article/How_To': 'blog',
+  '/Article/List_Post': 'blog',
+  '/Solution/*': 'solution',
+  // Fallback: use Ahrefs value directly under ahrefs_page_type, leave platform page_type = 'unknown'
+};
+```
+
+If a page_type from Ahrefs isn't in the mapping, `page_type` stays 'unknown' and `ahrefs_page_type` preserves the original. Ahtesham reviews unknowns via admin surface post-import.
+
+### 4.3 Report
+
+- URLs inserted
+- URLs updated
+- Page type mapping coverage
+- Unmapped page types (list for Ahtesham review)
+
+Commit: `Phase 4: Top pages bulk pull`
+
+---
+
+## Phase 5 — Organic competitors bulk pull
+
+### 5.1 Fetch
+
+Top 20 competitors:
+
+```typescript
+const result = await client.fetchOrganicCompetitors('tekrevol.com', {
+  country: 'us',
+  limit: 20
+});
+```
+
+### 5.2 Import
+
+Existing `competitor_insights` rows get Ahrefs metadata. New competitors inserted with `is_relevant_competitor = true` (default).
+
+Suggested relevance flagging heuristic for dispatcher review — automatic flag for competitors that:
+- `keywords_common < 30` (low overlap with tekrevol, likely off-vertical)
+- OR `competitor_domain` matches a domain block-list (finance sites, health sites, etc. — dispatcher curates)
+
+But do NOT auto-flag as false initially — let Ahtesham review. Instead, add a `_suggested_action` field in the report so Ahtesham sees "credible.com has 60 common keywords, 30,924 competitor keywords, DR 73 — likely off-vertical, consider marking irrelevant."
+
+### 5.3 Report
+
+- Competitors inserted
+- Competitors updated
+- Suggested relevance flags for Ahtesham review
+
+Commit: `Phase 5: Organic competitors bulk pull`
+
+---
+
+## Phase 6 — Referring domains bulk pull
+
+Seeds the `referring_domains` table AND the `domain_authority_cache` table (from MCP dispatch) with real DR values.
+
+### 6.1 Fetch
+
+```typescript
+const result = await client.fetchAllReferringDomains('tekrevol.com', {
+  minDr: 0 // Pull everything, filter downstream
+});
+```
+
+Expected: ~7,200 rows. Largest single phase by row count.
+
+### 6.2 Import to referring_domains
+
+Standard insert with `source_provider = 'ahrefs_bulk_import'`.
+
+### 6.3 Simultaneously seed domain_authority_cache
+
+For every referring domain with a valid DR, upsert into `domain_authority_cache`:
+
+```typescript
+async function seedDomainAuthorityCache(brandId: string, domain: string, dr: number, ur: number) {
+  await withBrandScope(brandId, async (db) => {
+    await db.insert(domainAuthorityCache).values({
+      brandId,
+      domain: normalizeDomain(domain),
+      dr,
+      ur,
+      lastMeasured: new Date(),
+      sourceProvider: 'ahrefs_bulk_import',
+      sourceMetadata: { source: 'referring_domains_pull' }
+    }).onConflictDoUpdate({
+      target: [domainAuthorityCache.brandId, domainAuthorityCache.domain],
+      set: { dr, ur, lastMeasured: new Date() }
+    });
+  });
+}
+```
+
+Result: Planner AI's citation validation now has a warm cache with ~7,200 pre-known DR values. Every future citation URL lookup against those domains hits Postgres cache instead of MCP, saving units.
+
+### 6.4 Report
+
+- Referring domains inserted
+- Domain authority cache rows seeded
+- DR distribution (histogram: how many domains at DR 80+, 60-79, 40-59, <40)
+
+Commit: `Phase 6: Referring domains + domain_authority_cache seed`
+
+---
+
+## Phase 7 — Reconciliation report
+
+Consolidated report across all imported data.
+
+### 7.1 Cross-source reconciliation
+
+For keywords with both DataForSEO and Ahrefs data:
+- Position divergence (Ahrefs says N, DataForSEO says M, delta)
+- Volume divergence
+- Highlights top 20 divergent keywords for Ahtesham review
+
+### 7.2 Coverage report
+
+- Total keywords now in platform: pre-dispatch + newly imported
+- Coverage vs. Ahrefs' full organic footprint (should be 100% since we pulled all)
+- Keywords in platform NOT in Ahrefs pull (kept as-is, flagged for Ahtesham audit)
+
+### 7.3 Classification distribution
+
+- Full P0/P1/P2/P3 breakdown
+- Priority-changed count (existing keyword got new priority via heuristic)
+- Priority-preserved count (heuristic agreed with existing)
+
+### 7.4 Unit consumption summary
+
+- Baseline (from Phase 0 manual read)
+- Consumption per phase from `ahrefs_rest_usage`
+- Total consumed
+- Percentage of monthly budget used
+- Percentage of dispatch hard-stop budget used
+
+Commit: `Phase 7: Reconciliation reports`
+
+---
+
+## Phase 8 — Smoke tests and completion
+
+### 8.1 Smoke tests (all must pass)
+
+**Schema:**
+1. All additive columns on keywords, link_targets, competitor_insights present
+2. New tables (referring_domains, ahrefs_rest_usage) created with proper indexes
+3. Drizzle typechecks clean across all packages
+
+**Client:**
+4. AhrefsRestClient instantiates without errors
+5. Direct call to `fetchAllOrganicKeywords` for a small target returns valid data
+6. Pagination works — verify at least one endpoint pages through > 1 page of results
+7. Usage row logged for every REST call
+8. Budget hard stop triggers at max — verify by setting max to 1 and confirming abort
+
+**Import:**
+9. All organic keywords imported (row count matches API response ~2,731)
+10. Classification distribution reasonable (P0 = 30-100 rows; P1 = 200-500; P2 = 800-1500; P3 = remainder)
+11. `is_branded: true` keywords all classified P3 (verify no branded keyword is P0/P1/P2)
+12. Top 20% by traffic value flagged `is_high_value_target = true`
+13. `priority_pre_ahrefs_import` populated for all previously-existing keywords
+14. Existing platform keywords not in Ahrefs pull retain their data (no orphan deletion)
+15. Top pages imported into link_targets with Ahrefs metadata
+16. Competitors imported with Ahrefs metadata + is_relevant_competitor = true
+17. Referring domains imported (~7,200 rows expected)
+18. domain_authority_cache seeded with DR values from referring domains
+
+**Cross-cutting:**
+19. Cross-brand isolation: ClaimShield keywords not affected by TekRevol bulk pull
+20. Regression: existing DataForSEO data on keywords unchanged (Ahrefs columns are additive)
+21. Regression: existing content generation still works with mixed-source keyword data
+
+### 8.2 Architect review
+
+`git show --stat HEAD` before declaring complete. Treat architect feedback as authoritative.
+
+Three areas to scrutinize:
+
+**Classification correctness.** Sample 20 keywords across the distribution. Verify heuristic output matches expected. Specifically check: does `crm development services` (Vol 700, Pos 1, KD 8, commercial, not branded) actually land P0? Does `fortnite net worth` (Vol 2400, Pos 8, branded) actually land P3? Manual spot-checks catch heuristic misconfigurations before real impact.
+
+**Reconciliation completeness.** Verify no data loss. Every keyword that existed pre-dispatch should still exist post-dispatch, either with updated Ahrefs data or preserved as-is if Ahrefs didn't have it. Every existing priority should be in `priority_pre_ahrefs_import` (backup preserved).
+
+**Cache seeding effect on domain_authority_cache.** Verify the ~7,200 DR values in `domain_authority_cache` post-dispatch. Verify that a subsequent MCP-triggered DR lookup for a domain already in the cache hits Postgres (source: 'postgres') rather than MCP. Confirms the seed genuinely reduces future MCP unit consumption.
+
+---
+
+## Operational notes
+
+- **Order strict:** Phase 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. Each phase has pause point for dispatcher review.
+
+- **Pause points:**
+  1. After Phase 0 survey (verify secrets, referring domains schema, baseline consumption)
+  2. After Phase 1 (schema check)
+  3. After Phase 2 (client works, manual test call successful)
+  4. After Phase 3 (classification distribution reviewed — dispatcher confirms heuristic feels right before continuing)
+  5. After Phase 6 (data all imported, before reconciliation report generates)
+  6. After Phase 8 completion, before declaring done
+
+- **Cost hedges:**
+  - Hard stop at 10K units for entire dispatch (env var `AHREFS_BULK_PULL_MAX_UNITS`)
+  - Expected consumption: ~2,500-5,000 units
+  - Every call logged to `ahrefs_rest_usage` with dispatch_context tag
+  - Per-phase consumption summed in Phase 7 report
+
+- **Cache seeding as side benefit:** Phase 6's `domain_authority_cache` seed means Planner AI's future citation validations against those ~7,200 domains hit Postgres cache instead of MCP. Significant reduction in future MCP unit consumption.
+
+- **What this dispatch does NOT do:**
+  - Backlinks pull (51.9K rows, deferred until SEO OS Backlinks page ships)
+  - SEO OS UI surfaces for imported data (Ahtesham views data via existing Keywords/Link Targets/Competitors pages with Ahrefs columns visible, but no new Backlinks or Referring Domains UI surfaces)
+  - Other brands (ClaimShield, Reverto, CensusFlow)
+  - Weekly refresh cadence (this is one-time initialization; refresh is a separate dispatch)
+
+- **Follow-up dispatches queued:**
+  - SEO OS Backlinks page + comprehensive backlinks bulk pull
+  - SEO OS Referring Domains page
+  - Weekly refresh via REST API (scheduled BullMQ job)
+  - Other brands: same dispatch template, different brand_id
+  - Ahtesham's daily dashboard (personalized SEO OS landing)
+
+- **Priority if time-constrained:** Drop Phase 6 (referring domains) if time is short. It's the largest phase by row count and its primary benefit (domain_authority_cache seed) is optimization, not feature enablement. Phases 3-5 deliver the core value. Do NOT drop Phase 3 — organic keywords are the point of the dispatch.
+
+- **Scoped transactional DDL only.** No blanket `drizzle-kit push`.
+
+---
+
+**Begin startup check → Phase 0 survey. Report findings before any code. Six pause points across the dispatch. Phase 8's 21 smoke tests gate completion. Same operational rules as prior dispatches: `git show --stat HEAD` before declaring complete, treat architect feedback as authoritative, no scope creep.**
