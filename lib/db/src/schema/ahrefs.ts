@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -12,6 +13,13 @@ import {
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 import { projectsTable } from "./projects";
+
+/**
+ * Ahrefs REST Bulk Import — referring domains corpus and per-call usage tracking.
+ *
+ * referring_domains  — per-domain backlink profile for a brand target (seeded from bulk pull)
+ * ahrefs_rest_usage  — every REST API call logged with unit consumption and dispatch context
+ */
 
 /**
  * Ahrefs MCP Integration — cache and usage tracking tables.
@@ -94,3 +102,85 @@ export const ahrefsMcpUsageTable = pgTable(
 
 export type AhrefsMcpUsage = typeof ahrefsMcpUsageTable.$inferSelect;
 export type InsertAhrefsMcpUsage = typeof ahrefsMcpUsageTable.$inferInsert;
+
+/* -------------------------------------------------------------------------- */
+/* referring_domains — per-domain backlink profile (seeded by bulk pull)      */
+/* -------------------------------------------------------------------------- */
+export const referringDomainsTable = pgTable(
+  "referring_domains",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brandsTable.id, { onDelete: "restrict" }),
+    domain: text("domain").notNull(),
+    /** Domain Rating (0-100). From Ahrefs domain_rating field. */
+    dr: numeric("dr", { precision: 5, scale: 2 }),
+    /** URL Rating — not available on refdomains endpoint; populated via MCP spot-checks. */
+    ur: numeric("ur", { precision: 5, scale: 2 }),
+    /** Total links pointing to the target (links_to_target). */
+    backlinksCount: integer("backlinks_count"),
+    /** Referring domains count of the referring domain itself (dofollow_refdomains). */
+    linkedDomains: integer("linked_domains"),
+    /** Dofollow links from this domain to the target. */
+    dofollowLinks: integer("dofollow_links"),
+    /** true if Ahrefs' last_seen is not null (domain stopped linking). Derived at import. */
+    isLost: boolean("is_lost").notNull().default(false),
+    /** true if Ahrefs classified this as a spam domain. */
+    isSpam: boolean("is_spam").notNull().default(false),
+    /** true if the referring entity is a root domain (vs. subdomain). */
+    isRootDomain: boolean("is_root_domain").notNull().default(true),
+    /** Organic search traffic to the referring domain (Ahrefs estimate). */
+    trafficDomain: integer("traffic_domain"),
+    firstSeen: timestamp("first_seen", { withTimezone: true }),
+    lastSeen: timestamp("last_seen", { withTimezone: true }),
+    sourceProvider: text("source_provider").notNull().default("ahrefs_bulk_import"),
+    sourceMetadata: jsonb("source_metadata").notNull().default({}),
+    ahrefsLastUpdated: timestamp("ahrefs_last_updated", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("referring_domains_brand_domain_uq").on(t.brandId, t.domain),
+    index("referring_domains_brand_dr_idx").on(t.brandId, t.dr),
+    index("referring_domains_brand_lost_idx").on(t.brandId, t.isLost),
+  ],
+);
+
+export type ReferringDomain = typeof referringDomainsTable.$inferSelect;
+export type InsertReferringDomain = typeof referringDomainsTable.$inferInsert;
+
+/* -------------------------------------------------------------------------- */
+/* ahrefs_rest_usage — REST API call log with unit consumption per dispatch   */
+/* -------------------------------------------------------------------------- */
+export const ahrefsRestUsageTable = pgTable(
+  "ahrefs_rest_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brandsTable.id, { onDelete: "restrict" }),
+    calledAt: timestamp("called_at", { withTimezone: true }).notNull().defaultNow(),
+    endpoint: text("endpoint").notNull(),
+    /** SHA-256 of endpoint + params for deduplication and cache lookup. */
+    paramsHash: text("params_hash").notNull(),
+    unitsConsumed: integer("units_consumed").notNull().default(0),
+    responseStatus: text("response_status").notNull(),
+    rowsReturned: integer("rows_returned"),
+    errorMessage: text("error_message"),
+    /** Tags each call with the phase that triggered it, e.g. bulk_pull_phase_3_organic_keywords. */
+    dispatchContext: text("dispatch_context"),
+    metadata: jsonb("metadata").notNull().default({}),
+  },
+  (t) => [
+    index("ahrefs_rest_usage_brand_called_idx").on(t.brandId, t.calledAt),
+    index("ahrefs_rest_usage_dispatch_idx")
+      .on(t.dispatchContext)
+      .where(sql`${t.dispatchContext} IS NOT NULL`),
+  ],
+);
+
+export type AhrefsRestUsage = typeof ahrefsRestUsageTable.$inferSelect;
+export type InsertAhrefsRestUsage = typeof ahrefsRestUsageTable.$inferInsert;

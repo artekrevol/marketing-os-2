@@ -119,6 +119,21 @@ export const keywordsTable = pgTable(
     trackDaily: boolean("track_daily").notNull().default(true),
     difficulty: numeric("difficulty", { precision: 5, scale: 2 }),
     isActive: boolean("is_active").notNull().default(true),
+    // Ahrefs Bulk Import — additive columns (Phase 1.1)
+    ahrefsBestPosition: integer("ahrefs_best_position"),
+    ahrefsKeywordDifficulty: numeric("ahrefs_keyword_difficulty", { precision: 5, scale: 2 }),
+    ahrefsSumTraffic: integer("ahrefs_sum_traffic"),
+    ahrefsBestPositionUrl: text("ahrefs_best_position_url"),
+    /** Intent flags shape: { informational, transactional, commercial, navigational, branded } */
+    ahrefsIntentFlags: jsonb("ahrefs_intent_flags").default({}),
+    ahrefsCpc: numeric("ahrefs_cpc", { precision: 10, scale: 2 }),
+    ahrefsLastUpdated: timestamp("ahrefs_last_updated", { withTimezone: true }),
+    /** true if Ahrefs classified this keyword as branded (is_branded = true). Hard-drops to P3. */
+    isBranded: boolean("is_branded").notNull().default(false),
+    /** true if this keyword is in the top 20% by sum_traffic × cpc across the non-branded corpus. */
+    isHighValueTarget: boolean("is_high_value_target").notNull().default(false),
+    /** Original priority value before the Ahrefs import overwrote it. Audit trail only. */
+    priorityPreAhrefsImport: text("priority_pre_ahrefs_import"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

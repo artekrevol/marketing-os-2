@@ -68,6 +68,9 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   // Ahrefs MCP Integration — cache and usage tracking
   "domain_authority_cache",
   "ahrefs_mcp_usage",
+  // Ahrefs REST Bulk Import — referring domains corpus and REST usage log
+  "referring_domains",
+  "ahrefs_rest_usage",
 ]);
 
 /** Brand context attached to a scoped transaction. */
