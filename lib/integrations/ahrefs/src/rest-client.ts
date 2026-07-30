@@ -21,7 +21,12 @@
  */
 
 import { createHash } from "node:crypto";
-import { guardedDb as db } from "@workspace/db";
+// Use raw db (not guardedDb) — bulk-import scripts run outside withBrandScope.
+// Brand isolation is enforced by the mandatory brandId constructor param and the
+// FK constraint on ahrefs_rest_usage.brand_id. guardedDb is for worker-tier code
+// that runs inside withBrandScope; it would silently swallow every logRestUsage()
+// call in a script context because the catch in logRestUsage() eats the error.
+import { db } from "@workspace/db";
 import { ahrefsRestUsageTable } from "@workspace/db/schema";
 import { AhrefsRestError } from "./errors.js";
 
