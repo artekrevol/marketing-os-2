@@ -1122,6 +1122,9 @@ importers:
 
   scripts:
     dependencies:
+      '@workspace/ahrefs':
+        specifier: workspace:*
+        version: link:../lib/integrations/ahrefs
       '@workspace/db':
         specifier: workspace:*
         version: link:../lib/db
