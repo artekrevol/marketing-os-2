@@ -1,0 +1,33 @@
+Real Phase 3 output. Two catches worth engaging with before Phase 4 fires.
+
+The 250-keyword count is the flag worth investigating
+
+The Phase 0 probe and the Ahrefs dashboard both showed ~2,213-2,731 organic keywords for tekrevol.com. Phase 3 returned exactly 250 with a clean last page (250 < 1000 page limit). Two possible causes:
+
+Cause 1: Default endpoint limit of 250 that isn't overridden.
+
+The getOrganicKeywords method might be passing an explicit limit=250 or hitting Ahrefs' default limit for this endpoint when no limit is specified. Check the actual request URL logged in ahrefs_rest_usage.metadata — what limit param did the client send?
+
+Cause 2: Endpoint scope mismatch.
+
+The bulk endpoint may be /site-explorer/organic-keywords/all for full pull versus /site-explorer/organic-keywords for a paginated summary. Ahrefs sometimes distinguishes these. Verify against Ahrefs' REST API documentation which endpoint returns the full ~2,731 corpus.
+
+Cause 3: Country filter narrowing.
+
+Phase 3 pulled with country=us. The 2,731 in Site Explorer was "All locations." US-only might genuinely be 250 rows. If Ahrefs' UI shows 2,731 total but only 250 for US specifically, then 250 is correct — but that's a substantial coverage gap for a "comprehensive bulk pull."
+
+The stopping-condition question separately: page returned exactly 250, and the client stopped because 250 < 1000 pagination threshold. What if the endpoint uses a smaller page size natively (say 100 or 250) and we should keep offsetting? Worth checking whether an offset=250 request returns rows 251-500 or returns empty.
+
+Suggested reply — investigation before Phase 4
+
+Phase 3 output landed but the 250-keyword count doesn't match expected ~2,731. Before Phase 4 fires, three investigation steps:
+
+1. Check the actual request URL in ahrefs_rest_usage.metadata. What limit param did the client send? If no explicit limit, Ahrefs might have defaulted to 250. If limit=250 was hardcoded somewhere, adjust to fetch all.
+
+2. Test manual offset request. Run a direct API call: same params as Phase 3, but explicit offset=250 (or equivalent pagination param). Does it return rows 251-500, or does it return empty? If it returns rows, the pagination stopping condition in getAllPages() is wrong — 250 < 1000 shouldn't have been treated as terminal.
+
+3. Check Ahrefs UI for country breakdown. Open Site Explorer → tekrevol.com → Organic keywords → filter by country=US. What row count does the UI show? If it's ~250, then Phase 3 is complete and the 2,731 figure includes non-US markets. If UI shows more than 250 for US alone, something in the client is truncating.
+
+Report back on all three. If a real cap or pagination bug is found, fix and re-run Phase 3 before Phase 4. If US genuinely has only 250 rows and 2,731 requires multi-country pulls, we discuss whether Phase 3 should re-run with country=all or with per-country loops.
+
+Also please report: the current Ahrefs unit consumption from the UI. Was 11,313 before Phase 3 — want to know actual dispatch cost so far.
