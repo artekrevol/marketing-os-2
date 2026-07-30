@@ -34,24 +34,66 @@ Intent flags: `is_informational`, `is_commercial`, `is_transactional`, `is_navig
 — these are boolean fields, NOT a comma-separated string.
 
 ## /site-explorer/top-pages
-Response key: TBD — probe required before Phase 4.
+Response key: `pages`. Field `url` (NOT `url_to`). 250-row plan cap.
 
-## /site-explorer/competing-domains
-Response key: TBD — probe required before Phase 5.
+## /site-explorer/organic-competitors
+**Correct path:** `/site-explorer/organic-competitors` (NOT `competing-domains` — that returns 404).
+Response key: `competitors`. Returns exactly 20 rows (natural ceiling, not a cap).
+Confirmed fields: `competitor_domain`, `keywords_common`, `keywords_competitor`,
+`domain_rating`, `traffic`, `pages`, `share`, `value`, `group_mode`, `keywords_target`, `competitor_url`.
+**NOT valid:** `domain`, `common_keywords`, `competitor_keywords` (old assumed names — all wrong).
 
 ## /site-explorer/refdomains
-Response key: TBD — probe required before Phase 6.
+Response key: `refdomains`. 250-row plan cap, offset ignored.
 Confirmed valid columns (from prior session):
 `domain, domain_rating, dofollow_links, links_to_target, dofollow_refdomains,
 first_seen, last_seen, is_spam, is_root_domain, traffic_domain`
 
 ## /site-explorer/domain-rating
-Response key: TBD — probe required before Phase 7.
+Live probe confirmed: `domain_rating: 73.0, ahrefs_rank: 57401` for tekrevol.com.
+
+## /v3/management/projects
+**No `select` param needed.** Returns all projects in account.
+Response key: `projects`. Fields: `project_id, project_name, url, mode, protocol, access,
+verified, folder, owned_by, keyword_count, web_analytics_data_key`.
+TekRevol: `project_id: "4127143"`, `keyword_count: 432`.
+
+## /v3/management/project-keywords?project_id=<id>
+Returns full keyword registry. **No `select` or pagination needed** — all 432 rows in one response.
+Response key: `keywords`. Fields: `keyword, language_code, language, location_id, location, tags`.
+No rank data here — purely the keyword list with tags and locale.
+
+## /v3/rank-tracker/overview?project_id=<id>&date=<YYYY-MM-DD>&device=<desktop|mobile>&select=<cols>
+**`select` param REQUIRED** (returns 400 "missing argument 'select'" without it).
+Response key: `overviews`.
+**250-row hard cap** — same as Site Explorer; `limit=500` still returns 250; `offset=250` ignored (returns same first 250 rows). 432 keywords tracked but only 250 reachable via REST.
+`limit=N` where N < 250 DOES work (useful for smoke tests).
+Historical dates work (e.g. yesterday).
+No pagination metadata in response root.
+
+Confirmed valid `select` columns (from live 400 error listing):
+```
+is_commercial, keyword, search_type_web, search_type_video, keyword_difficulty,
+serp_features, url, position, is_navigational, created_at, search_type_news,
+country, is_transactional, search_type_image, volume_mobile_pct, location,
+volume_desktop_pct, parent_topic, target_positions_count, cost_per_click, traffic,
+keyword_is_frozen, serp_updated, clicks, volume, best_position_has_video_preview,
+is_local, tags, is_informational, is_branded, best_position_kind, clicks_per_search,
+best_position_has_thumbnail, keyword_has_data, language
+```
+**NOT valid:** `best_position_diff` (Irfan's intel — field does not exist in API).
+
+Lost keyword semantics (confirmed live): `position: null`, `url: null`, `best_position_kind: null`, `serp_features: []`. No zero-position rows — null is the only Lost signal.
+`best_position_kind` values: `"organic"`, `"ai_overview"`, `null` (Lost).
+`serp_features`: array of strings e.g. `["local_pack","question","sitelink","video_th"]`.
+`country`: output-only (cannot filter by it in query), reflects the keyword's configured locale.
+Multi-country in TekRevol project: US (183), GB (28), AE (12), CA (10), SA (8), QA (5), BH (4) of 250.
 
 ## Pagination
-- Offset-based: increment by rows returned until rows < limit.
-- Observed max page size: 250 rows for organic-keywords (plan limit may be lower than requested 1000).
-- Always set limit=1000 and let the pagination loop stop when rows < limit.
+- **250-row hard cap applies to ALL bulk endpoints** (site-explorer/* and rank-tracker/overview).
+- Offset ignored on all capped endpoints — same first 250 rows returned regardless.
+- `limit=N` where N < 250 works correctly (useful for smoke tests).
+- No endpoint returns pagination metadata — total count available only via `/site-explorer/metrics` (aggregate).
 
 ## Units consumption
 - `metadata.units_used` in response body — absent for organic-keywords endpoint.
