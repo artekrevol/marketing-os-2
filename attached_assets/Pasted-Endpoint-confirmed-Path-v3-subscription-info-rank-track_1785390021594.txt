@@ -1,0 +1,35 @@
+Endpoint confirmed. Path: /v3/subscription-info/rank-tracker-overview. Cap 500 keywords per call. Our project uses 454. Cost 25 units per pull. Weekly cadence.
+
+Revised Phase 3 is two-part:
+
+Phase 3A — Rank Tracker pull (foundational data):
+
+Single call to /v3/subscription-info/rank-tracker-overview with project_id, select covering all fields we captured in the probe, limit=500, offset=0
+Reconcile against existing 427 keywords: preserve original priority to priority_pre_ahrefs_import, apply classification heuristic from original dispatch spec, overwrite metrics
+Every row gets source_provider = 'ahrefs_rank_tracker', is_tracked_in_rank_tracker = true
+Position field stays nullable for Lost keywords
+Country field captured but not used for uniqueness (per keyword+brand, not per keyword+country)
+
+Add column to keywords table (Phase 1 amendment):
+
+is_tracked_in_rank_tracker boolean NOT NULL DEFAULT false
+Small additive DDL, scoped transactional
+
+Phase 3B — Site Explorer top 250 pull (discovery layer):
+
+Existing getOrganicKeywords client method (already fixed after finding 4 endpoint name issue)
+Returns 250 rows top-by-traffic
+Reconcile against Phase 3A output: if keyword already exists from Rank Tracker, add ahrefs_site_explorer_top250 as secondary source_provider attribution. If new, insert with is_tracked_in_rank_tracker = false, apply classification heuristic
+Generates delta report: "N discovered keywords not in Rank Tracker — Ahtesham reviews and decides which to promote"
+
+Cadence: weekly refresh at Sunday 03:00 (offset from Irfan's app's daily 02:15 schedule as coordination courtesy).
+
+Total dispatch cost estimate: ~40 units for Phase 3 combined (25 for Rank Tracker + 15 for Site Explorer).
+
+Phase 4 (top pages) and Phase 5 (competitors) proceed as originally spec'd — 250 cap is fine for those data types.
+
+Phase 6 (referring domains) DEFERRED to a future dispatch. Rationale: 250 refdomains cap without a Backlinks page UI to consume them is data hoarding. Ship what enables the immediate use cases; defer backlinks until the surface that consumes them is being designed.
+
+Backfill missing usage rows from Phase 3 investigation calls if possible — the guardedDb bug (e3003af) dropped some. If not backfillable, note the gap in Phase 7 reconciliation.
+
+Proceed with Phase 1 amendment (add is_tracked_in_rank_tracker column), then Phase 3A, then Phase 3B, then Phase 4, then Phase 5. Same operational rules.
