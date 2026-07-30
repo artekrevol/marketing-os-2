@@ -39,29 +39,33 @@ const DEFAULT_PAGE_LIMIT = 1000;
 /* Response item types — match live Ahrefs v3 field names                     */
 /* -------------------------------------------------------------------------- */
 
-/** One row from /site-explorer/organic-keywords */
+/**
+ * One row from /site-explorer/organic-keywords.
+ *
+ * Field names confirmed via live API error response (2026-07-30):
+ *   - `country` is NOT a valid column; use `keyword_country`
+ *   - `traffic` is NOT valid; use `sum_traffic`
+ *   - intent is NOT a single field; Ahrefs exposes per-intent booleans:
+ *     is_commercial, is_navigational, is_transactional, is_informational, is_branded
+ */
 export interface AhrefsOrganicKeyword {
-  /** Keyword text */
   keyword: string;
-  /** ISO-3166 two-letter country code used for the query */
-  country: string;
-  /** Monthly search volume */
+  /** Two-letter country code for this ranking row */
+  keyword_country: string | null;
   volume: number | null;
-  /** Keyword difficulty (0–100) */
   keyword_difficulty: number | null;
   /** CPC in Ahrefs native unit (typically USD cents) */
   cpc: number | null;
-  /** Estimated organic traffic to the best-ranking page */
-  traffic: number | null;
-  /** Best ranking position */
+  /** Estimated monthly organic traffic from this keyword */
+  sum_traffic: number | null;
   best_position: number | null;
-  /** URL that ranks best for this keyword */
   best_position_url: string | null;
-  /**
-   * Comma-separated intent flags from Ahrefs
-   * e.g. "informational,commercial"
-   */
-  intent: string | null;
+  is_commercial: boolean | null;
+  is_navigational: boolean | null;
+  is_transactional: boolean | null;
+  is_informational: boolean | null;
+  /** Ahrefs-classified branded keyword flag — drives is_branded on insert */
+  is_branded: boolean | null;
 }
 
 /** One row from /site-explorer/top-pages */
@@ -194,13 +198,14 @@ export class AhrefsRestClient {
     return this.getAllPages<AhrefsOrganicKeyword>(
       "/site-explorer/organic-keywords",
       {
-        select: "keyword,country,volume,keyword_difficulty,cpc,traffic,best_position,best_position_url,intent",
+        select: "keyword,keyword_country,volume,keyword_difficulty,cpc,sum_traffic,best_position,best_position_url,is_commercial,is_navigational,is_transactional,is_informational,is_branded",
         target,
         country,
         mode: "subdomains",
-        order_by: "traffic:desc",
+        date: todayISO(),
+        order_by: "sum_traffic:desc",
       },
-      "organic_keywords",
+      "keywords",
       { dispatchContext: opts.dispatchContext },
     );
   }
@@ -227,6 +232,7 @@ export class AhrefsRestClient {
         target,
         country,
         mode: "subdomains",
+        date: todayISO(),
         order_by: "traffic:desc",
       },
       "pages",
@@ -258,6 +264,7 @@ export class AhrefsRestClient {
         target,
         country,
         mode: "subdomains",
+        date: todayISO(),
         order_by: "common_keywords:desc",
       },
       "domains",
@@ -287,6 +294,7 @@ export class AhrefsRestClient {
         select: "domain,domain_rating,dofollow_links,links_to_target,dofollow_refdomains,first_seen,last_seen,is_spam,is_root_domain,traffic_domain",
         target,
         mode: "subdomains",
+        date: todayISO(),
         order_by: "domain_rating:desc",
       },
       "refdomains",
