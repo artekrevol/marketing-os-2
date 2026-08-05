@@ -137,7 +137,7 @@ router.post("/", requireAuth, async (req: Request, res: Response, next: NextFunc
         userNotes: user_notes || null,
         keyword: keyword || null,
         targetLocationId: target_location_id || null,
-        contentType: "blog",
+        contentType: null,
         mode: "research",
         status: "proposing_brief",
         currentStage: 0,
