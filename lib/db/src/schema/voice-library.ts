@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { projectsTable } from "./projects";
 import { brandsTable } from "./brands";
 
@@ -13,6 +14,11 @@ export const voiceLibraryTable = pgTable("voice_library", {
   editedHumanText: text("edited_human_text").notNull(),
   editType: text("edit_type"),
   capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  check(
+    "voice_library_edit_type_check",
+    sql`${t.editType} IS NULL OR ${t.editType} IN ('inline', 'revision', 'manual')`,
+  ),
+]);
 
 export type VoiceLibrary = typeof voiceLibraryTable.$inferSelect;

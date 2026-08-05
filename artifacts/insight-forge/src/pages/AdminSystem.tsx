@@ -74,7 +74,10 @@ export default function AdminSystem() {
     if (!isLoaded) return;
     if (!user) { setAuthState("denied"); return; }
     fetch("/api/me", { credentials: "include" })
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`/api/me returned ${r.status}`);
+        return r.json();
+      })
       .then((data: any) => {
         setAuthState(data?.role === "admin" ? "ok" : "denied");
       })

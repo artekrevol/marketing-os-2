@@ -10,7 +10,13 @@ import type { Logger } from "pino";
  */
 const INTEGRATION_SUBJECT: Record<string, string> = {
   "integrations.dataforseo-serp-test": "dataforseo",
+  "integrations.dataforseo-serp": "dataforseo",
   "integrations.originality-ai-scan-test": "originality-ai",
+  "integrations.originality-ai-scan": "originality-ai",
+  "ai.propose-brief": "anthropic",
+  "ai.research-generate": "anthropic",
+  "ai.draft-section": "anthropic",
+  "ai.draft-finalize": "anthropic",
 };
 
 /**

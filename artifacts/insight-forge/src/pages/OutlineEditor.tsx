@@ -18,8 +18,13 @@ export default function OutlineEditor() {
     const load = async () => {
       const resp = await fetch(`/api/projects/${project.id}/outlines`, { credentials: "include" });
       if (!mounted) return;
-      const data = resp.ok ? await resp.json() : null;
-      setOutline(data);
+      if (resp.ok) {
+        setOutline(await resp.json());
+      } else if (!outline) {
+        // First load failed — mark as failed so the error state renders
+        setOutline(null);
+      }
+      // On poll failure with existing data: keep the last good outline
       setLoading(false);
     };
     load();

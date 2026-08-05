@@ -48,7 +48,7 @@ export default function BriefProposalPage() {
   const [pod, setPod] = useState("");
   const [benchmarkUrl, setBenchmarkUrl] = useState("");
   const [competitorUrl, setCompetitorUrl] = useState("");
-  const [contentType, setContentType] = useState<ContentType>("blog");
+  const [contentType, setContentType] = useState<ContentType>("explainer");
   const [mode, setMode] = useState<Mode>("composition");
 
 
@@ -116,7 +116,7 @@ export default function BriefProposalPage() {
     const compTop = (proposal.competitor_candidates || []).slice().sort((a, b) => a.rank - b.rank)[0];
     setBenchmarkUrl(benchTop?.url || "");
     setCompetitorUrl(compTop?.url || "");
-    setContentType(proposal.content_type || "blog");
+    setContentType(proposal.content_type || "explainer");
     setMode(proposal.mode || "composition");
     setLoading(false);
   }, [proposal]);
@@ -483,10 +483,14 @@ export default function BriefProposalPage() {
                 onChange={(e) => setContentType(e.target.value as ContentType)}
                 className="w-full px-3 py-2 bg-background border border-rule rounded-sm text-sm"
               >
-                <option value="blog">Blog post</option>
-                <option value="landing">Landing page</option>
-                <option value="service">Service page</option>
+                <option value="explainer">Explainer</option>
+                <option value="how_to_guide">How-to guide</option>
+                <option value="cost_guide">Cost guide</option>
+                <option value="comparison_guide">Comparison guide</option>
+                <option value="statistics_trends">Statistics &amp; trends</option>
                 <option value="case_study">Case study</option>
+                <option value="vertical_deep_dive">Vertical deep dive</option>
+                <option value="thought_leadership">Thought leadership</option>
               </select>
             </label>
             <label className="block">

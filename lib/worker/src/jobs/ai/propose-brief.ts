@@ -77,7 +77,19 @@ const PROPOSE_TOOL = {
           required: ["url", "why", "rank"],
         },
       },
-      content_type: { type: "string", enum: ["blog", "landing", "service", "case_study"] },
+      content_type: {
+        type: "string",
+        enum: [
+          "cost_guide",
+          "comparison_guide",
+          "how_to_guide",
+          "statistics_trends",
+          "explainer",
+          "case_study",
+          "vertical_deep_dive",
+          "thought_leadership",
+        ],
+      },
       mode: { type: "string", enum: ["composition", "interview"] },
       mode_reasoning: { type: "string" },
       ai_citation_landscape: {
@@ -205,7 +217,7 @@ Use web search to:
 4. Recommend the best pod from the playbook based on topic alignment with pod specialties.
 5. Find 3 high-quality benchmark blogs (editorial standards to emulate — Neil Patel, Backlinko, a16z, First Round Review, or specialist publishers in the topic's vertical) for this topic. Rank them 1-3.
 6. Find the top 3 ranking competitor pages for the proposed primary keyword via live SERP. Include serp_position. Rank them 1-3 by current position.
-7. Default content_type=blog and mode=composition unless the topic clearly suggests interview mode (thought leadership, founder POV).
+7. Choose the most appropriate content_type from: cost_guide, comparison_guide, how_to_guide, statistics_trends, explainer, case_study, vertical_deep_dive, thought_leadership. Default to "explainer" and mode=composition unless a more specific type clearly fits (e.g. "how_to_guide" for instructional topics, "comparison_guide" for head-to-head topics, "cost_guide" for pricing topics, "thought_leadership" for founder/opinion pieces).
 
 Every proposal must include one-line reasoning. Cite playbook sections by name or quote, and cite web sources by URL. Never fabricate search volumes — if exact data isn't available, set volume_is_estimated=true and explain the basis in the reasoning field.
 

@@ -1,4 +1,12 @@
-export type ContentType = "blog" | "landing" | "service" | "case_study";
+export type ContentType =
+  | "cost_guide"
+  | "comparison_guide"
+  | "how_to_guide"
+  | "statistics_trends"
+  | "explainer"
+  | "case_study"
+  | "vertical_deep_dive"
+  | "thought_leadership";
 export type Mode = "composition" | "interview";
 export type Funnel = "TOFU" | "MOFU" | "BOFU";
 

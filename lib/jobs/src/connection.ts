@@ -20,6 +20,12 @@ export function getRedisConnection(): Redis {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
     lazyConnect: false,
+    // Upstash TLS connections time out after idle periods; reconnect
+    // with capped exponential backoff so BullMQ workers recover
+    // automatically without manual restarts.
+    connectTimeout: 10_000,
+    keepAlive: 30_000,
+    retryStrategy: (times: number) => Math.min(times * 200, 10_000),
   };
   _conn = new IORedis(url, opts);
   return _conn;

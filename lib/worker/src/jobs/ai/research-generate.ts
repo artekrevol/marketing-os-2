@@ -129,6 +129,25 @@ export async function handleAiResearchGenerate(
       const r = results[i];
       return r?.status === "rejected" || (r?.status === "fulfilled" && !(r.value as any).ok);
     });
-    log.warn({ failedStages }, "research-generate: some stages failed");
+    const errorSummary = failedStages
+      .map((k) => {
+        const i = STAGE_KEYS.indexOf(k);
+        const r = results[i];
+        if (r?.status === "rejected") {
+          return `${k}: ${(r.reason as Error)?.message ?? "rejected"}`;
+        }
+        return `${k}: failed`;
+      })
+      .join("; ");
+    log.warn({ failedStages, errorSummary }, "research-generate: some stages failed");
+
+    // Surface failure details into the research brief row so the
+    // frontend can show an actionable message instead of empty sections.
+    await db
+      .update(researchBriefsTable)
+      .set({
+        progressError: `Research incomplete — ${failedStages.length} of ${STAGE_KEYS.length} stages failed: ${errorSummary}`,
+      })
+      .where(eq(researchBriefsTable.projectId, project_id));
   }
 }

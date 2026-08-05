@@ -90,20 +90,19 @@ export async function runBriefComplianceCheck(
 }
 
 /**
- * Loads the latest draft for the same project as the content_object,
- * returning the meta fields from `drafts.metadata` plus the project's
- * configured target word count. Read inside `withBrandScope` so the
- * brand-scope guard is enforced; `drafts` is a brand-scoped table.
+ * Loads compliance-check meta fields from the project's outline row.
+ *
+ * `metaDescription` comes from `outlines.meta_description` — the only
+ * schema-backed source of SEO metadata. `metaTitle` and `targetWordCount`
+ * have no current schema source (they were designed for a `draft.metadata`
+ * column that was never added), so those sub-checks are always skipped.
  */
 async function loadDraftMeta(
   brandId: string,
   contentObjectId: string,
 ): Promise<BriefMeta | null> {
-  return withBrandScope(brandId, async ({ scoped, db }) => {
-    // content_objects.project_id — read via raw SELECT FOR-row read.
-    // We can't go through scoped.select(contentObjectsTable) without
-    // pulling another import, so a one-column raw query inside the
-    // brand-scoped tx is the lightest path.
+  return withBrandScope(brandId, async ({ db }) => {
+    // Resolve content_object → project_id.
     const objRows = (await db.execute(
       sql`select project_id from public.content_objects
             where id = ${contentObjectId}::uuid
@@ -114,28 +113,18 @@ async function loadDraftMeta(
     const projectId = objRowsArr[0]?.project_id;
     if (!projectId) return null;
 
-    const drafts = (await scoped.select(draftsTable, {
-      where: eq(draftsTable.projectId, projectId),
-      orderBy: [desc(draftsTable.updatedAt), desc(draftsTable.createdAt)],
-      limit: 1,
-    })) as Draft[];
-    const draft = drafts[0];
-    if (!draft) return null;
+    // Pull metaDescription from the outline (the only backed source).
+    const outlineRows = (await db.execute(
+      sql`select meta_description from public.outlines
+            where project_id = ${projectId}::uuid
+              and brand_id = ${brandId}::uuid
+            limit 1`,
+    )) as unknown as { rows?: Array<{ meta_description: string | null }> } | Array<{ meta_description: string | null }>;
+    const outlineRowsArr = Array.isArray(outlineRows) ? outlineRows : (outlineRows.rows ?? []);
+    const metaDescription = outlineRowsArr[0]?.meta_description ?? null;
 
-    const md: Record<string, unknown> = {};
-    const metaTitle =
-      (md["metaTitle"] as string | undefined) ??
-      (md["meta_title"] as string | undefined) ??
-      null;
-    const metaDescription =
-      (md["metaDescription"] as string | undefined) ??
-      (md["meta_description"] as string | undefined) ??
-      null;
-    const target =
-      (md["targetWordCount"] as number | undefined) ??
-      (md["target_word_count"] as number | undefined) ??
-      null;
-    return { metaTitle, metaDescription, targetWordCount: target ?? null };
+    // metaTitle and targetWordCount have no schema source yet → skipped.
+    return { metaTitle: null, metaDescription, targetWordCount: null };
   });
 }
 
