@@ -5,6 +5,8 @@ import { TokenBucket } from "./rate-limit";
 import { TtlCache } from "./cache";
 import {
   SerpResponseSchema,
+  SerpTaskPostResponseSchema,
+  SerpTasksReadyResponseSchema,
   SearchVolumeResponseSchema,
   KeywordIdeasResponseSchema,
   RankedKeywordsResponseSchema,
@@ -15,6 +17,8 @@ import {
   type SerpResponse,
   type SerpRequest,
   type SerpAdvancedRequest,
+  type SerpBulkTaskRequest,
+  type SerpTaskReadyItem,
   type SearchVolumeResponse,
   type SearchVolumeRequest,
   type KeywordIdeasResponse,
@@ -767,6 +771,209 @@ export class DataForSEOClient {
       dispatchContext: req.dispatchContext,
     });
     return result;
+  }
+
+  // ---- Standard Queue (task_post / tasks_ready / task_get/regular) --------
+
+  /**
+   * Generic GET executor for DataForSEO v3 endpoints (tasks_ready,
+   * task_get). Mirrors the retry/logging behaviour of `execute` but
+   * sends a GET request with no body.
+   *
+   * @param opts.endpoint  Path relative to BASE, e.g.
+   *   "/serp/google/organic/tasks_ready"
+   *   "/serp/google/organic/task_get/regular/{id}"
+   *   (strip the leading "/v3" if the path from tasks_ready includes it)
+   */
+  private async executeGet<T extends { cost: number }>(opts: {
+    endpoint: string;
+    schema: z.ZodType<T, z.ZodTypeDef, unknown>;
+    requestMeta?: Record<string, unknown>;
+  }): Promise<T> {
+    const { endpoint, schema } = opts;
+    const requestMeta = opts.requestMeta ?? {};
+    const start = Date.now();
+    let lastErr: Error | null = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      await this.bucket.take();
+      try {
+        const res = await this.fetchImpl(`${BASE}${endpoint}`, {
+          method: "GET",
+          headers: { Authorization: this.authHeader() },
+        });
+
+        if (res.status === 429 || res.status >= 500) {
+          lastErr = new DataForSEOError(
+            `DataForSEO ${endpoint} returned ${res.status}`,
+            { httpStatus: res.status, endpoint, retriable: true },
+          );
+          await this.logCall({
+            endpoint,
+            status: res.status === 429 ? "rate_limited" : "error",
+            httpStatus: res.status,
+            durationMs: Date.now() - start,
+            requestMeta: { ...requestMeta, attempt },
+            errorMessage: `HTTP ${res.status} (retry ${attempt + 1}/${MAX_RETRIES})`,
+          });
+          await sleep(jitter(RETRY_BASE_MS * 2 ** attempt));
+          continue;
+        }
+
+        const json = (await res.json()) as unknown;
+        if (!res.ok) {
+          const hint402 =
+            res.status === 402
+              ? " — account balance is insufficient; top up at app.dataforseo.com"
+              : "";
+          await this.logCall({
+            endpoint,
+            status: "error",
+            httpStatus: res.status,
+            durationMs: Date.now() - start,
+            requestMeta,
+            errorMessage: `HTTP ${res.status}${hint402}`,
+          });
+          throw new DataForSEOError(
+            `DataForSEO ${endpoint} failed: ${res.status}${hint402}`,
+            { httpStatus: res.status, endpoint, retriable: false, responseBody: json },
+          );
+        }
+
+        const parsed = schema.parse(json);
+        assertTasksOk(endpoint, parsed as DfsTaskCheckable);
+        await this.logCall({
+          endpoint,
+          status: "ok",
+          httpStatus: res.status,
+          durationMs: Date.now() - start,
+          costEstimate: parsed.cost,
+          requestMeta,
+        });
+        return parsed;
+      } catch (e) {
+        lastErr = e as Error;
+        if (e instanceof DataForSEOError && !e.retriable) throw e;
+        const msg = (e as Error).message ?? "";
+        const looksLikeTimeout = /timeout|timed out|aborted|ETIMEDOUT/i.test(msg);
+        await this.logCall({
+          endpoint,
+          status: looksLikeTimeout ? "timeout" : "error",
+          durationMs: Date.now() - start,
+          requestMeta: { ...requestMeta, attempt },
+          errorMessage: `${msg || "fetch failed"} (retry ${attempt + 1}/${MAX_RETRIES})`,
+        });
+        await sleep(jitter(RETRY_BASE_MS * 2 ** attempt));
+      }
+    }
+
+    await this.logCall({
+      endpoint,
+      status: "error",
+      durationMs: Date.now() - start,
+      requestMeta,
+      errorMessage: lastErr?.message ?? "exhausted retries",
+    });
+    throw lastErr ?? new DataForSEOError("DataForSEO retries exhausted", {
+      endpoint,
+      retriable: false,
+    });
+  }
+
+  /**
+   * Standard Queue task post — Google Organic SERP.
+   * POST /serp/google/organic/task_post
+   *
+   * Queues up to 100 keywords for async SERP processing at the Standard
+   * Queue rate (~$0.0006/SERP vs $0.00155 for live/advanced, ~61% saving).
+   * Billed at POST time; task_get retrieval is free.
+   *
+   * @param tasks  Up to 100 keyword task requests; each must have a `tag`
+   *   set to the keyword's DB uuid for correlation with the result.
+   * @returns      Array of {taskId, tag} pairs — one per posted keyword.
+   */
+  async serpGoogleOrganicTaskPost(
+    tasks: SerpBulkTaskRequest[],
+  ): Promise<Array<{ taskId: string; tag: string | null }>> {
+    if (tasks.length === 0) return [];
+    if (tasks.length > 100) {
+      throw new DataForSEOError(
+        "serpGoogleOrganicTaskPost: max 100 tasks per call (DataForSEO limit)",
+        { endpoint: "/serp/google/organic/task_post", retriable: false },
+      );
+    }
+
+    const body = tasks.map((t) => ({
+      keyword: t.keyword,
+      location_code: t.locationCode ?? 2840,
+      language_code: t.languageCode ?? "en",
+      depth: t.depth ?? 60,
+      priority: 1, // 1 = Standard Queue (cheapest); 2 = Priority Queue (2×)
+      ...(t.tag ? { tag: t.tag } : {}),
+    }));
+
+    const parsed = await this.execute({
+      endpoint: "/serp/google/organic/task_post",
+      body,
+      schema: SerpTaskPostResponseSchema,
+      requestMeta: { count: tasks.length },
+    });
+
+    // tasks[i] in the response corresponds to tasks[i] in the request body.
+    // The echoed data.tag provides a secondary correlation check.
+    return parsed.tasks.map((t) => ({
+      taskId: t.id,
+      tag: t.data?.tag ?? null,
+    }));
+  }
+
+  /**
+   * Poll the Standard Queue ready list.
+   * GET /serp/google/organic/tasks_ready
+   *
+   * Returns all completed SERP tasks that haven't been retrieved yet.
+   * This is account-wide — callers must filter results to their own
+   * task IDs. DataForSEO removes a task from this list once task_get
+   * is called for it.
+   *
+   * Note: the queue is updated with a small delay after task completion.
+   * Poll every ~15 s for best results.
+   */
+  async serpGoogleOrganicTasksReady(): Promise<SerpTaskReadyItem[]> {
+    const parsed = await this.executeGet({
+      endpoint: "/serp/google/organic/tasks_ready",
+      schema: SerpTasksReadyResponseSchema,
+      requestMeta: {},
+    });
+    return parsed.tasks[0]?.result ?? [];
+  }
+
+  /**
+   * Retrieve the result of a completed Standard Queue SERP task using
+   * the regular (organic-only) endpoint. Free — billed at task_post.
+   *
+   * Regular returns organic items only (no ads, knowledge panel, local
+   * pack, etc.).  serp-utils.ts already filters to `type === 'organic'`,
+   * so the advanced endpoint's extra SERP features are wasted spend.
+   *
+   * @param endpointRegularPath  The `endpoint_regular` value from a
+   *   SerpTaskReadyItem, e.g.
+   *   "/v3/serp/google/organic/task_get/regular/{id}"
+   */
+  async serpGoogleOrganicTaskGetRegular(
+    endpointRegularPath: string,
+  ): Promise<SerpResponse> {
+    // tasks_ready provides paths with the /v3 prefix already included.
+    // Strip it so we can reuse the BASE (/v3) constant.
+    const endpoint = endpointRegularPath.startsWith("/v3")
+      ? endpointRegularPath.slice(3)
+      : endpointRegularPath;
+
+    return this.executeGet({
+      endpoint,
+      schema: SerpResponseSchema,
+      requestMeta: { path: endpointRegularPath },
+    });
   }
 }
 

@@ -374,3 +374,109 @@ export interface BulkKeywordDifficultyRequest {
   /** Optional dispatch context label for cost attribution (≤120 chars). */
   dispatchContext?: string;
 }
+
+/* ------------------------------------------------------------------ *
+ * SERP — Standard Queue (task_post / tasks_ready / task_get/regular)
+ * Cheaper async alternative to live/advanced for bulk rank tracking.
+ *
+ * Pricing: $0.0006/SERP vs $0.00155/SERP for live/advanced (~61% saving).
+ * Turnaround: ~1 min average (vs ~6s live). Fine for scheduled crawls.
+ *
+ * Flow:
+ *   1. POST keywords → /serp/google/organic/task_post  (billed here)
+ *   2. Poll          → /serp/google/organic/tasks_ready (free)
+ *   3. GET results   → /serp/google/organic/task_get/regular/{id} (free)
+ * ------------------------------------------------------------------ */
+
+/** Input record for a single keyword in a task_post batch (up to 100/call). */
+export interface SerpBulkTaskRequest {
+  keyword: string;
+  locationCode?: number;   // default 2840 (US)
+  languageCode?: string;   // default 'en'
+  /** Number of results to return. Billed per 10-result page. Default 60. */
+  depth?: number;
+  /**
+   * Caller-supplied correlation label (≤255 chars) echoed back in the
+   * task_post response and tasks_ready items.  Use the keyword's DB uuid
+   * so results can be joined back to the originating Keyword row without
+   * relying on response ordering.
+   */
+  tag?: string;
+}
+
+/**
+ * task_post response.  Each tasks[i] contains the task UUID assigned by
+ * DataForSEO and echoes the keyword / tag from the request via data{}.
+ * result is always null here — actual SERP data comes from task_get.
+ */
+export const SerpTaskPostResponseSchema = z.object({
+  status_code: z.number().int(),
+  status_message: z.string(),
+  cost: z.number().nonnegative().default(0),
+  tasks_count: z.number().int().default(0),
+  tasks_error: z.number().int().default(0),
+  tasks: z
+    .array(
+      z.object({
+        id: z.string(),
+        status_code: z.number().int(),
+        status_message: z.string(),
+        cost: z.number().nonnegative().default(0),
+        /** Echo of the request fields — keyword + tag for correlation. */
+        data: z
+          .object({
+            keyword: z.string().nullable().optional(),
+            tag: z.string().nullable().optional(),
+          })
+          .nullable()
+          .optional(),
+        result: z.unknown().nullable().optional(),
+      }),
+    )
+    .default([]),
+});
+export type SerpTaskPostResponse = z.infer<typeof SerpTaskPostResponseSchema>;
+
+/**
+ * A single item returned by tasks_ready: a completed task ID plus the
+ * endpoint paths needed to retrieve results (we use endpoint_regular).
+ */
+export const SerpTaskReadyItemSchema = z.object({
+  id: z.string(),
+  se: z.string().nullable().optional(),
+  se_type: z.string().nullable().optional(),
+  date_posted: z.string().nullable().optional(),
+  /** Echoed correlation tag from the original task_post request. */
+  tag: z.string().nullable().optional(),
+  /** Path for task_get/regular (includes /v3 prefix). */
+  endpoint_regular: z.string().nullable().optional(),
+  endpoint_advanced: z.string().nullable().optional(),
+  endpoint_html: z.string().nullable().optional(),
+});
+export type SerpTaskReadyItem = z.infer<typeof SerpTaskReadyItemSchema>;
+
+/**
+ * tasks_ready response.  tasks[0].result is the list of completed tasks
+ * that haven't been retrieved yet.  DataForSEO removes a task from this
+ * list once task_get is called for it.
+ */
+export const SerpTasksReadyResponseSchema = z.object({
+  status_code: z.number().int(),
+  status_message: z.string(),
+  cost: z.number().nonnegative().default(0),
+  tasks_count: z.number().int().default(0),
+  tasks_error: z.number().int().default(0),
+  tasks: z
+    .array(
+      z.object({
+        id: z.string(),
+        status_code: z.number().int(),
+        status_message: z.string(),
+        cost: z.number().nonnegative().default(0),
+        result_count: z.number().int().nullable().optional(),
+        result: z.array(SerpTaskReadyItemSchema).nullable().default([]),
+      }),
+    )
+    .default([]),
+});
+export type SerpTasksReadyResponse = z.infer<typeof SerpTasksReadyResponseSchema>;
