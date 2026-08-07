@@ -1,23 +1,38 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { db } from "@workspace/db";
+import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import path from "path";
+import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Apply pending Drizzle migrations from `lib/db/drizzle/`.
+ * Uses IF NOT EXISTS DDL so re-running against an already-migrated DB
+ * (e.g. the dev DB where Ahrefs tables were created via raw SQL) is safe.
+ * The migrator tracks applied migrations in `__drizzle_migrations`.
+ */
+async function runMigrations(): Promise<void> {
+  // Resolve path from the compiled dist/ directory up to lib/db/drizzle/
+  const migrationsFolder = path.join(__dirname, "../../../lib/db/drizzle");
+  try {
+    await migrate(db, { migrationsFolder });
+    logger.info("boot-migrations: all pending migrations applied");
+  } catch (err: unknown) {
+    logger.error({ err }, "boot-migrations: failed to apply migrations");
+    throw err;
+  }
+}
 
 /**
  * Boot-time schema bootstrap — narrow, idempotent safety net.
  *
- * Drizzle owns schema definition (`lib/db/src/schema/*.ts`), but this
- * project does not yet wire `drizzle-kit generate` + a migration runner
- * into the deploy pipeline. Until that lands, this helper guarantees the
- * two objects the API server *requires* to accept its first request
- * exist on a fresh database:
- *   - the `session` table (express-session storage)
- *   - the `user_profiles.password_hash` column (local-admin login)
- *
- * Do NOT extend this list. New schema additions belong in proper
- * Drizzle migrations, not here. Tracked: follow-up "Run database schema
- * updates automatically on every deploy".
+ * Handles the two objects that must exist BEFORE Drizzle migrations can run
+ * (the session table is used by express-session; password_hash is needed for
+ * the very first admin login which the migration runner itself may trigger).
  */
 async function bootstrapSchema(): Promise<void> {
   try {
@@ -196,6 +211,7 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 await bootstrapSchema();
+await runMigrations();
 await runBootSeeds();
 
 const server = app.listen(port, (err) => {

@@ -495,6 +495,10 @@ export type SeoKeyword = {
   lastCheckedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  // Ahrefs-enriched fields (populated when organic_keywords XLSX is ingested)
+  ahrefsKeywordDifficulty: string | null;
+  ahrefsSumTraffic: number | null;
+  ahrefsIntentFlags: Record<string, boolean> | null;
 };
 
 export type SeoBlacklistedDomain = {
@@ -851,6 +855,118 @@ export const seo = {
         body: JSON.stringify({ brandId }),
       }),
     ),
+
+  // ----- Ahrefs Intelligence -----
+  ahrefsUpload: async (
+    brandId: string,
+    files: File[],
+  ): Promise<{
+    batchId: string;
+    imported: Record<string, number>;
+    delta: { newLinks: number; lostLinks: number; newGapKeywords: number; pagesRecovered: number; pagesCrashed: number };
+  }> => {
+    const form = new FormData();
+    form.append("brandId", brandId);
+    for (const f of files) form.append("files", f);
+    const res = await authedFetch("/api/seo/ahrefs/upload", { method: "POST", body: form });
+    return jsonOrThrow(res);
+  },
+
+  ahrefsSummary: async (brandId: string) =>
+    jsonOrThrow<{
+      latestBatch: { id: string; imported_at: string; backlink_count: number; page_count: number; content_gap_count: number; delta_new_links: number; delta_lost_links: number; delta_pages_crashed: number } | null;
+      crashedPages: Array<{ url: string; prev_traffic: number | null; curr_traffic: number | null; traffic_change: number | null; status: string | null }>;
+      brokenHighDrLinks: Array<{ referring_page_url: string; target_url: string | null; dr: string | null; anchor: string | null; domain: string }>;
+      topGapOpportunities: Array<{ keyword: string; volume: number | null; kd: number | null; priority_score: number | null; competitor_domain: string; competitor_position: number | null }>;
+      linkVelocity: { new_links: number; lost_links: number };
+    }>(await authedFetch(`/api/seo/ahrefs/summary?${qs(brandId)}`)),
+
+  listBacklinks: async (
+    brandId: string,
+    params: { isLost?: string; isSpam?: string; minDr?: number; search?: string; limit?: number; offset?: number },
+  ) =>
+    jsonOrThrow<{ stats: Record<string, number>; backlinks: unknown[]; limit: number; offset: number }>(
+      await authedFetch(
+        `/api/seo/backlinks?${qs(brandId, {
+          ...(params.isLost !== undefined && { isLost: params.isLost }),
+          ...(params.isSpam !== undefined && { isSpam: params.isSpam }),
+          ...(params.minDr !== undefined && { minDr: String(params.minDr) }),
+          ...(params.search && { search: params.search }),
+          limit: String(params.limit ?? 50),
+          offset: String(params.offset ?? 0),
+        })}`,
+      ),
+    ),
+
+  brokenBacklinks: async (brandId: string) =>
+    jsonOrThrow<{ brokenLinks: unknown[] }>(
+      await authedFetch(`/api/seo/backlinks/broken?${qs(brandId)}`),
+    ),
+
+  exportRedirectList: async (brandId: string): Promise<string> => {
+    const res = await authedFetch(`/api/seo/backlinks/broken/export?${qs(brandId)}`);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.text();
+  },
+
+  drDistribution: async (brandId: string) =>
+    jsonOrThrow<{ distribution: Record<string, number> }>(
+      await authedFetch(`/api/seo/backlinks/dr-distribution?${qs(brandId)}`),
+    ),
+
+  listAnchors: async (brandId: string, params?: { limit?: number }) =>
+    jsonOrThrow<{ anchors: unknown[] }>(
+      await authedFetch(
+        `/api/seo/anchors?${qs(brandId, { limit: String(params?.limit ?? 50) })}`,
+      ),
+    ),
+
+  pagePerformance: async (
+    brandId: string,
+    params?: { status?: string; minDrop?: number; limit?: number; offset?: number },
+  ) =>
+    jsonOrThrow<{ pages: unknown[] }>(
+      await authedFetch(
+        `/api/seo/page-performance?${qs(brandId, {
+          ...(params?.status && { status: params.status }),
+          ...(params?.minDrop !== undefined && { minDrop: String(params.minDrop) }),
+          limit: String(params?.limit ?? 100),
+          offset: String(params?.offset ?? 0),
+        })}`,
+      ),
+    ),
+
+  listContentGap: async (
+    brandId: string,
+    params: { intent?: string; minVolume?: number; maxKd?: number; search?: string; limit?: number; offset?: number },
+  ) =>
+    jsonOrThrow<{ summary: Record<string, number>; gaps: unknown[]; limit: number; offset: number }>(
+      await authedFetch(
+        `/api/seo/content-gap?${qs(brandId, {
+          ...(params.intent && { intent: params.intent }),
+          ...(params.minVolume !== undefined && { minVolume: String(params.minVolume) }),
+          ...(params.maxKd !== undefined && { maxKd: String(params.maxKd) }),
+          ...(params.search && { search: params.search }),
+          limit: String(params.limit ?? 50),
+          offset: String(params.offset ?? 0),
+        })}`,
+      ),
+    ),
+
+  exportContentGap: async (
+    brandId: string,
+    params: { intent?: string; minVolume?: number; maxKd?: number },
+  ): Promise<string> => {
+    const res = await authedFetch(
+      `/api/seo/content-gap/export?${qs(brandId, {
+        ...(params.intent && { intent: params.intent }),
+        ...(params.minVolume !== undefined && { minVolume: String(params.minVolume) }),
+        ...(params.maxKd !== undefined && { maxKd: String(params.maxKd) }),
+      })}`,
+    );
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.text();
+  },
 
   // ----- Schedules -----
   listSchedules: async (brandId: string): Promise<SeoCrawlSchedule[]> =>

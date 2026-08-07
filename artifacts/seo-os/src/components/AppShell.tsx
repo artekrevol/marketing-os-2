@@ -132,13 +132,28 @@ export default function AppShell({ children }: { children: ReactNode }) {
               SEO Intelligence
             </div>
             <NavItem href="/seo" label="Dashboard" exact />
+
+            <div className="pt-3 pb-1 px-3 text-[10px] uppercase tracking-widest text-ink-muted">
+              Intelligence
+            </div>
+            <NavItem href="/seo/site-health" label="Site Health" />
+            <NavItem href="/seo/backlinks" label="Backlinks" />
+            <NavItem href="/seo/content-gap" label="Content Gap" />
+
+            <div className="pt-3 pb-1 px-3 text-[10px] uppercase tracking-widest text-ink-muted">
+              Tracking
+            </div>
             <NavItem href="/seo/keywords" label="Keywords" />
             <NavItem href="/seo/keyword-lists" label="Lists" />
             <NavItem href="/seo/locations" label="Locations" />
             <NavItem href="/seo/rankings" label="Rankings" />
-            <NavItem href="/seo/competitors" label="Competitors" />
-            <NavItem href="/seo/insights" label="Insights" />
             <NavItem href="/seo/schedules" label="Schedules" />
+
+            <div className="pt-3 pb-1 px-3 text-[10px] uppercase tracking-widest text-ink-muted">
+              Competitors
+            </div>
+            <NavItem href="/seo/competitors" label="SERP Competitors" />
+            <NavItem href="/seo/insights" label="Insights" />
           </nav>
 
           <div className="px-3 py-3 border-t border-rule">

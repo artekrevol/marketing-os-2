@@ -156,16 +156,45 @@ function KeywordsInner({ brandId }: { brandId: string }) {
                 <th className="text-left font-medium px-4 py-2">Keyword</th>
                 <th className="text-left font-medium px-4 py-2">Location</th>
                 <th className="text-left font-medium px-4 py-2">Volume</th>
+                <th className="text-left font-medium px-4 py-2 hidden md:table-cell">Intent</th>
+                <th className="text-right font-medium px-4 py-2 hidden md:table-cell">Ahrefs traffic</th>
+                <th className="text-right font-medium px-4 py-2 hidden lg:table-cell">KD</th>
                 <th className="text-left font-medium px-4 py-2">Linked content</th>
                 <th className="px-4 py-2"> </th>
               </tr>
             </thead>
             <tbody>
-              {keywords.map((k) => (
+              {keywords.map((k) => {
+                const flags = (k.ahrefsIntentFlags ?? {}) as Record<string, boolean>;
+                const intentBadges: Array<{ label: string; color: string }> = [];
+                if (flags["informational"]) intentBadges.push({ label: "I", color: "bg-blue-100 text-blue-700" });
+                if (flags["commercial"]) intentBadges.push({ label: "C", color: "bg-purple-100 text-purple-700" });
+                if (flags["transactional"]) intentBadges.push({ label: "T", color: "bg-green-100 text-green-700" });
+                if (flags["branded"]) intentBadges.push({ label: "B", color: "bg-gray-100 text-gray-700" });
+                return (
                 <tr key={k.id} className="border-t border-rule">
                   <td className="px-4 py-2 font-medium">{k.keywordText}</td>
                   <td className="px-4 py-2">{locName(k.locationId)}</td>
                   <td className="px-4 py-2">{k.searchVolume ?? "—"}</td>
+                  <td className="px-4 py-2 hidden md:table-cell">
+                    {intentBadges.length > 0 ? (
+                      <div className="flex gap-0.5">
+                        {intentBadges.map((b) => (
+                          <span key={b.label} className={`inline-block px-1.5 py-0.5 rounded-sm text-[10px] font-medium ${b.color}`}>
+                            {b.label}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-ink-muted">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs hidden md:table-cell">
+                    {k.ahrefsSumTraffic != null ? k.ahrefsSumTraffic.toLocaleString() : "—"}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs hidden lg:table-cell">
+                    {k.ahrefsKeywordDifficulty != null ? Number(k.ahrefsKeywordDifficulty).toFixed(0) : "—"}
+                  </td>
                   <td className="px-4 py-2">
                     <LinkedContentCell
                       brandId={brandId}
@@ -183,7 +212,8 @@ function KeywordsInner({ brandId }: { brandId: string }) {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

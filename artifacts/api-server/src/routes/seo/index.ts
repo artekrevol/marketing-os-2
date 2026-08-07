@@ -11,6 +11,8 @@ import dashboardRouter from "./dashboard.js";
 import schedulesRouter from "./schedules.js";
 import discoveryInboxRouter from "./discovery-inbox.js";
 import competitorCurationRouter from "./competitor-curation.js";
+import ahrefsUploadRouter from "./ahrefs-upload.js";
+import ahrefsIntelligenceRouter from "./ahrefs-intelligence.js";
 
 /**
  * SEO Intelligence API — mounted at `/api/seo` behind `requireSeoRole`
@@ -36,5 +38,9 @@ router.use("/dashboard", dashboardRouter);
 router.use("/schedules", schedulesRouter);
 router.use("/discovery-inbox", discoveryInboxRouter);
 router.use("/competitor-curation", competitorCurationRouter);
+
+// Ahrefs Intelligence — bulk export ingest + intelligence query routes
+router.use("/ahrefs", ahrefsUploadRouter);
+router.use("/", ahrefsIntelligenceRouter);
 
 export default router;
