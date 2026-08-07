@@ -14,6 +14,7 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
+import { userProfilesTable } from "./user-profiles";
 
 /**
  * SEO Intelligence module — keyword research, rank tracking, crawl
@@ -134,6 +135,21 @@ export const keywordsTable = pgTable(
     isHighValueTarget: boolean("is_high_value_target").notNull().default(false),
     /** Original priority value before the Ahrefs import overwrote it. Audit trail only. */
     priorityPreAhrefsImport: text("priority_pre_ahrefs_import"),
+    // DataForSEO Labs Discovery — candidate tracking (Dispatch 1)
+    /** true while this keyword is an unreviewed discovery candidate. */
+    isDiscoveryCandidate: boolean("is_discovery_candidate").notNull().default(false),
+    /** When this keyword was first discovered by the weekly discovery job. */
+    discoveredAt: timestamp("discovered_at", { withTimezone: true }),
+    /** The seed keyword (or "competitor:<domain>") that surfaced this keyword. */
+    discoverySeedKeyword: text("discovery_seed_keyword"),
+    /** Review state: pending → promoted|rejected|archived (auto after 30 days). */
+    candidateReviewStatus: text("candidate_review_status"),
+    candidateReviewedAt: timestamp("candidate_reviewed_at", { withTimezone: true }),
+    /** user_profiles.user_id of the reviewer (Clerk text ID). */
+    candidateReviewedBy: text("candidate_reviewed_by").references(
+      () => userProfilesTable.userId,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -150,6 +166,13 @@ export const keywordsTable = pgTable(
       "keywords_priority_check",
       sql`${t.priority} IS NULL OR ${t.priority} IN ('P0', 'P1', 'P2', 'P3')`,
     ),
+    check(
+      "keywords_candidate_review_status_check",
+      sql`${t.candidateReviewStatus} IS NULL OR ${t.candidateReviewStatus} IN ('pending', 'promoted', 'rejected', 'archived')`,
+    ),
+    // Partial indexes applied via DDL only (Drizzle doesn't emit WHERE clauses on index()).
+    index("keywords_discovery_candidate_idx").on(t.brandId, t.isDiscoveryCandidate),
+    index("keywords_pending_review_idx").on(t.brandId, t.candidateReviewStatus),
   ],
 );
 

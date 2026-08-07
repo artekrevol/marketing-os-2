@@ -1,0 +1,41 @@
+Phase 0 approved with three refinements before Phase 1 executes:
+
+1. Schema types accepted as proposed:
+
+dataforseo_labs_usage.dispatch_context varchar(120) — accept
+candidate_reviewed_by text referencing user_profiles.user_id (following Task #35 pattern) — accept
+
+2. Adjust auto-promotion to auto-archive:
+Add 'archived' as a valid value on candidate_review_status check constraint. Auto-sweep at 30 days moves stale candidates to archived rather than auto_promoted. Semantically cleaner — unreviewed candidates go quiet by default rather than silently entering the tracked keyword set. Prevents accumulation of unexamined discovery decisions.
+
+Update Step E in Phase 3 accordingly:
+
+sql
+UPDATE keywords
+SET candidate_review_status = 'archived',
+    candidate_reviewed_at = now()
+WHERE brand_id = <brand_id>
+  AND candidate_review_status = 'pending'
+  AND discovered_at < now() - INTERVAL '30 days';
+
+Note is_discovery_candidate stays true for archived candidates (they're still candidates, just aged out of active review). Discovery Inbox filters by review status to hide archived from default view but keep them accessible.
+
+3. Refine seed set query to exclude branded and require commercial/transactional intent:
+
+sql
+SELECT keyword_text, priority, ahrefs_best_position, ahrefs_intent_flags
+FROM keywords
+WHERE brand_id = '<TEKREVOL_BRAND_ID>'
+  AND priority IN ('P0', 'P1')
+  AND is_active = true
+  AND is_branded = false
+  AND (ahrefs_intent_flags->>'commercial' = 'true' 
+       OR ahrefs_intent_flags->>'transactional' = 'true')
+ORDER BY ahrefs_sum_traffic DESC NULLS LAST
+LIMIT 20;
+
+Report the new seed list before Phase 3 executes — I want to eyeball the 20 seeds before they generate ~10,000 related-keyword candidates.
+
+Also please sample the 5 competitors selected — confirm none look like false positives (credible.com-style off-vertical matches). If any are clearly irrelevant, exclude before Phase 3.
+
+Proceed with Phase 1 (schema additions) now with the auto-archive semantic. Same operational rules — scoped transactional DDL only, git show --stat HEAD before Phase 1 completion.

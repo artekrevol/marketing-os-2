@@ -71,6 +71,9 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   // Ahrefs REST Bulk Import — referring domains corpus and REST usage log
   "referring_domains",
   "ahrefs_rest_usage",
+  // DataForSEO Labs Discovery — competitor movements + Labs API cost tracking
+  "competitor_movements",
+  "dataforseo_labs_usage",
 ]);
 
 /** Brand context attached to a scoped transaction. */

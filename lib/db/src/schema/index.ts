@@ -39,3 +39,6 @@ export * from "./content-plans";
 export * from "./named-projects";
 // Ahrefs MCP Integration — DR/UR cache and per-call usage tracking
 export * from "./ahrefs";
+// DataForSEO Labs Discovery — competitor movements + Labs API usage tracking
+export * from "./competitor-movements";
+export * from "./dataforseo-labs-usage";
