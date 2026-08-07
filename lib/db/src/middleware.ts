@@ -134,15 +134,19 @@ export class ScopedDb {
   async insert<T extends PgTable>(
     table: T,
     values: Record<string, unknown> | Record<string, unknown>[],
-    opts: { returning?: true } = {},
+    opts: { returning?: true; onConflict?: "doNothing" } = {},
   ): Promise<unknown> {
     this.requireScoped(table);
     const arr = Array.isArray(values) ? values : [values];
     const stamped = arr.map((row) => stampBrandId(this.brandId, row, getTableName(table)));
 
-    const builder = this.tx.insert(table as PgTable).values(stamped as never);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let builder: any = this.tx.insert(table as PgTable).values(stamped as never);
+    if (opts.onConflict === "doNothing") {
+      builder = builder.onConflictDoNothing();
+    }
     if (opts.returning) {
-      return await (builder as unknown as { returning: () => Promise<unknown> }).returning();
+      return await builder.returning();
     }
     return await builder;
   }

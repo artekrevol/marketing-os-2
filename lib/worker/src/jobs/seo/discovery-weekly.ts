@@ -626,10 +626,7 @@ export async function handleSeoDiscoveryWeekly(
     });
 
     if (movementRows.length > 0) {
-      await db
-        .insert(competitorMovementsTable)
-        .values(movementRows)
-        .onConflictDoNothing(); // unique (brand_id, competitor_domain, snapshot_week)
+      await scoped.insert(competitorMovementsTable, movementRows, { onConflict: "doNothing" });
       competitorMovementsWritten = movementRows.length;
     }
 
