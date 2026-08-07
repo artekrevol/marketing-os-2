@@ -221,3 +221,156 @@ export interface OnPageInstantRequest {
   url: string;
   enableJavascript?: boolean;
 }
+
+/* ------------------------------------------------------------------ *
+ * DataForSEO Labs — Related Keywords
+ * /dataforseo_labs/google/related_keywords/live
+ * Returns semantically related keywords for a seed term, with full
+ * keyword metrics. The `depth` field reflects how many hops away from
+ * the seed the keyword was found (1 = direct, 2 = related-of-related).
+ * ------------------------------------------------------------------ */
+export const RelatedKeywordItemSchema = z.object({
+  keyword_data: z
+    .object({
+      keyword: z.string().nullable().optional(),
+      keyword_info: z
+        .object({
+          search_volume: z.number().int().nullable().optional(),
+          cpc: z.number().nullable().optional(),
+          competition: z.number().nullable().optional(),
+          keyword_difficulty: z.number().int().nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+      impressions_info: z
+        .object({
+          ad_position_min: z.number().nullable().optional(),
+          cpc_min: z.number().nullable().optional(),
+          daily_impressions_max: z.number().nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+    })
+    .nullable()
+    .optional(),
+  depth: z.number().int().nullable().optional(),
+  related_keywords: z.array(z.string()).nullable().optional(),
+});
+export type RelatedKeywordItem = z.infer<typeof RelatedKeywordItemSchema>;
+
+export const RelatedKeywordsResultSchema = z.object({
+  seed_keyword: z.string().nullable().optional(),
+  location_code: z.number().int().nullable().optional(),
+  language_code: z.string().nullable().optional(),
+  total_count: z.number().int().nullable().optional(),
+  items_count: z.number().int().nullable().optional(),
+  items: z.array(RelatedKeywordItemSchema).nullable().default([]),
+});
+
+export const RelatedKeywordsResponseSchema = dfsEnvelope(RelatedKeywordsResultSchema);
+export type RelatedKeywordsResponse = z.infer<typeof RelatedKeywordsResponseSchema>;
+
+export interface RelatedKeywordsRequest {
+  keyword: string;
+  locationCode?: number;   // default 2840 (US)
+  languageCode?: string;   // default 'en'
+  /** Max keywords returned per seed. DataForSEO cap is 1000. Default 500. */
+  limit?: number;
+  /** How many levels of "related-of-related" to expand. Default 1. */
+  depth?: number;
+  /** Optional dispatch context label for cost attribution (≤120 chars). */
+  dispatchContext?: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * DataForSEO Labs — Competitors for Domain
+ * /dataforseo_labs/google/competitors_for_domain/live
+ * Returns domains that rank for many of the same keywords as the
+ * target domain. Used for weekly competitor discovery (Phase 3 Step D).
+ * ------------------------------------------------------------------ */
+export const CompetitorDomainItemSchema = z.object({
+  domain: z.string().nullable().optional(),
+  avg_position: z.number().nullable().optional(),
+  /** Number of keywords this competitor shares with the target domain. */
+  intersections: z.number().int().nullable().optional(),
+  full_domain_metrics: z
+    .object({
+      organic: z
+        .object({
+          etv: z.number().nullable().optional(),
+          count: z.number().int().nullable().optional(),
+          is_new: z.number().int().nullable().optional(),
+          is_up: z.number().int().nullable().optional(),
+          is_down: z.number().int().nullable().optional(),
+          is_lost: z.number().int().nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+    })
+    .nullable()
+    .optional(),
+});
+export type CompetitorDomainItem = z.infer<typeof CompetitorDomainItemSchema>;
+
+export const CompetitorsForDomainResultSchema = z.object({
+  target: z.string().nullable().optional(),
+  location_code: z.number().int().nullable().optional(),
+  language_code: z.string().nullable().optional(),
+  total_count: z.number().int().nullable().optional(),
+  items_count: z.number().int().nullable().optional(),
+  items: z.array(CompetitorDomainItemSchema).nullable().default([]),
+});
+
+export const CompetitorsForDomainResponseSchema = dfsEnvelope(
+  CompetitorsForDomainResultSchema,
+);
+export type CompetitorsForDomainResponse = z.infer<
+  typeof CompetitorsForDomainResponseSchema
+>;
+
+export interface CompetitorsForDomainRequest {
+  target: string;          // domain or subdomain
+  locationCode?: number;
+  languageCode?: string;
+  /** Max competitors returned. DataForSEO cap is 1000. Default 100. */
+  limit?: number;
+  /** Optional dispatch context label for cost attribution (≤120 chars). */
+  dispatchContext?: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * DataForSEO Labs — Bulk Keyword Difficulty
+ * /dataforseo_labs/google/bulk_keyword_difficulty/live
+ * Batch keyword difficulty scores. Accepts up to 1000 keywords per
+ * request. Used after related-keyword expansion to filter high-KD
+ * candidates before DB insert.
+ * ------------------------------------------------------------------ */
+export const BulkKeywordDifficultyItemSchema = z.object({
+  keyword: z.string(),
+  keyword_difficulty: z.number().int().nullable().optional(),
+});
+export type BulkKeywordDifficultyItem = z.infer<
+  typeof BulkKeywordDifficultyItemSchema
+>;
+
+export const BulkKeywordDifficultyResultSchema = z.object({
+  location_code: z.number().int().nullable().optional(),
+  language_code: z.string().nullable().optional(),
+  items_count: z.number().int().nullable().optional(),
+  items: z.array(BulkKeywordDifficultyItemSchema).nullable().default([]),
+});
+
+export const BulkKeywordDifficultyResponseSchema = dfsEnvelope(
+  BulkKeywordDifficultyResultSchema,
+);
+export type BulkKeywordDifficultyResponse = z.infer<
+  typeof BulkKeywordDifficultyResponseSchema
+>;
+
+export interface BulkKeywordDifficultyRequest {
+  keywords: string[];
+  locationCode?: number;
+  languageCode?: string;
+  /** Optional dispatch context label for cost attribution (≤120 chars). */
+  dispatchContext?: string;
+}

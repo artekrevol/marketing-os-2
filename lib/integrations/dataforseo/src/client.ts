@@ -1,4 +1,5 @@
-import { guardedDb as db, integrationCallLogTable } from "@workspace/db";
+import { createHash } from "node:crypto";
+import { guardedDb as db, integrationCallLogTable, dataforSEOLabsUsageTable } from "@workspace/db";
 import { DataForSEOError } from "./errors";
 import { TokenBucket } from "./rate-limit";
 import { TtlCache } from "./cache";
@@ -8,6 +9,9 @@ import {
   KeywordIdeasResponseSchema,
   RankedKeywordsResponseSchema,
   OnPageResponseSchema,
+  RelatedKeywordsResponseSchema,
+  CompetitorsForDomainResponseSchema,
+  BulkKeywordDifficultyResponseSchema,
   type SerpResponse,
   type SerpRequest,
   type SerpAdvancedRequest,
@@ -19,6 +23,12 @@ import {
   type RankedKeywordsRequest,
   type OnPageResponse,
   type OnPageInstantRequest,
+  type RelatedKeywordsResponse,
+  type RelatedKeywordsRequest,
+  type CompetitorsForDomainResponse,
+  type CompetitorsForDomainRequest,
+  type BulkKeywordDifficultyResponse,
+  type BulkKeywordDifficultyRequest,
 } from "./types";
 import type { z } from "zod";
 
@@ -444,6 +454,268 @@ export class DataForSEOClient {
       schema: OnPageResponseSchema,
       requestMeta: { url: req.url },
     });
+  }
+
+  // ---- DataForSEO Labs — Discovery Engine endpoints ------------------
+
+  /**
+   * Write one row to dataforseo_labs_usage for cost attribution and
+   * weekly dispatch tracking. Never throws — logging failures must not
+   * cascade into the caller.
+   */
+  private async logLabsUsage(args: {
+    endpoint: string;
+    paramsHash: string;
+    responseStatus: string;
+    costUsd: number;
+    itemsReturned?: number;
+    dispatchContext?: string;
+    errorMessage?: string;
+  }): Promise<void> {
+    if (!this.brandId) return; // brand-scoped table; skip if no brand context
+    try {
+      await db.insert(dataforSEOLabsUsageTable).values({
+        brandId: this.brandId,
+        endpoint: args.endpoint,
+        paramsHash: args.paramsHash,
+        responseStatus: args.responseStatus,
+        costUsd: args.costUsd.toString(),
+        itemsReturned: args.itemsReturned,
+        dispatchContext: args.dispatchContext
+          ? args.dispatchContext.slice(0, 120)
+          : null,
+        errorMessage: args.errorMessage ?? null,
+        metadata: {},
+      });
+    } catch {
+      // never let logging failures cascade
+    }
+  }
+
+  /**
+   * Stable sha256-based params hash for dataforseo_labs_usage.params_hash.
+   * Deterministic for identical queries; used for dedup and cost auditing.
+   */
+  private static paramsHash(endpoint: string, params: unknown): string {
+    const raw = TtlCache.fingerprint(endpoint, params);
+    return createHash("sha256").update(raw).digest("hex");
+  }
+
+  /**
+   * Related Keywords — DataForSEO Labs.
+   * /dataforseo_labs/google/related_keywords/live
+   *
+   * Returns semantically related keywords for a seed term. The core
+   * expansion step in Discovery Engine Phase 3 Step A. Cached (7-day
+   * TTL) — related-keyword sets are slow-moving relative to live SERP.
+   * Writes one row to dataforseo_labs_usage per call for cost tracking.
+   */
+  async relatedKeywords(
+    req: RelatedKeywordsRequest,
+  ): Promise<RelatedKeywordsResponse> {
+    const endpoint = "/dataforseo_labs/google/related_keywords/live";
+    const locationCode = req.locationCode ?? 2840;
+    const languageCode = req.languageCode ?? "en";
+    const limit = req.limit ?? 500;
+    const depth = req.depth ?? 1;
+
+    const body = [
+      {
+        keyword: req.keyword,
+        location_code: locationCode,
+        language_code: languageCode,
+        limit,
+        depth,
+      },
+    ];
+
+    const cacheKey = TtlCache.fingerprint(endpoint, {
+      keyword: req.keyword,
+      locationCode,
+      languageCode,
+      limit,
+      depth,
+    });
+    const pHash = DataForSEOClient.paramsHash(endpoint, {
+      keyword: req.keyword,
+      locationCode,
+      languageCode,
+      limit,
+      depth,
+    });
+
+    let result: RelatedKeywordsResponse;
+    try {
+      result = await this.execute({
+        endpoint,
+        body,
+        schema: RelatedKeywordsResponseSchema,
+        requestMeta: { keyword: req.keyword, limit, depth },
+        cacheKey,
+      });
+    } catch (e) {
+      await this.logLabsUsage({
+        endpoint,
+        paramsHash: pHash,
+        responseStatus: "error",
+        costUsd: 0,
+        dispatchContext: req.dispatchContext,
+        errorMessage: (e as Error).message,
+      });
+      throw e;
+    }
+
+    const items = result.tasks[0]?.result?.[0]?.items?.length ?? 0;
+    await this.logLabsUsage({
+      endpoint,
+      paramsHash: pHash,
+      responseStatus: "ok",
+      costUsd: result.cost,
+      itemsReturned: items,
+      dispatchContext: req.dispatchContext,
+    });
+    return result;
+  }
+
+  /**
+   * Competitors for Domain — DataForSEO Labs.
+   * /dataforseo_labs/google/competitors_for_domain/live
+   *
+   * Returns the top competing domains by shared keyword count. Used in
+   * Discovery Engine Phase 3 Step D to seed competitor-keyword mining.
+   * Cached (7-day TTL). Writes to dataforseo_labs_usage per call.
+   */
+  async competitorsForDomain(
+    req: CompetitorsForDomainRequest,
+  ): Promise<CompetitorsForDomainResponse> {
+    const endpoint = "/dataforseo_labs/google/competitors_for_domain/live";
+    const locationCode = req.locationCode ?? 2840;
+    const languageCode = req.languageCode ?? "en";
+    const limit = req.limit ?? 100;
+
+    const body = [
+      {
+        target: req.target,
+        location_code: locationCode,
+        language_code: languageCode,
+        limit,
+        exclude_top_domains: false,
+      },
+    ];
+
+    const cacheKey = TtlCache.fingerprint(endpoint, {
+      target: req.target,
+      locationCode,
+      languageCode,
+      limit,
+    });
+    const pHash = DataForSEOClient.paramsHash(endpoint, {
+      target: req.target,
+      locationCode,
+      languageCode,
+      limit,
+    });
+
+    let result: CompetitorsForDomainResponse;
+    try {
+      result = await this.execute({
+        endpoint,
+        body,
+        schema: CompetitorsForDomainResponseSchema,
+        requestMeta: { target: req.target, limit },
+        cacheKey,
+      });
+    } catch (e) {
+      await this.logLabsUsage({
+        endpoint,
+        paramsHash: pHash,
+        responseStatus: "error",
+        costUsd: 0,
+        dispatchContext: req.dispatchContext,
+        errorMessage: (e as Error).message,
+      });
+      throw e;
+    }
+
+    const items = result.tasks[0]?.result?.[0]?.items?.length ?? 0;
+    await this.logLabsUsage({
+      endpoint,
+      paramsHash: pHash,
+      responseStatus: "ok",
+      costUsd: result.cost,
+      itemsReturned: items,
+      dispatchContext: req.dispatchContext,
+    });
+    return result;
+  }
+
+  /**
+   * Bulk Keyword Difficulty — DataForSEO Labs.
+   * /dataforseo_labs/google/bulk_keyword_difficulty/live
+   *
+   * Batch KD scores for up to 1000 keywords per call. Used in
+   * Discovery Engine Phase 3 Step B to filter high-difficulty
+   * candidates before DB insert. Cached (7-day TTL). Writes to
+   * dataforseo_labs_usage per call.
+   */
+  async bulkKeywordDifficulty(
+    req: BulkKeywordDifficultyRequest,
+  ): Promise<BulkKeywordDifficultyResponse> {
+    const endpoint = "/dataforseo_labs/google/bulk_keyword_difficulty/live";
+    const locationCode = req.locationCode ?? 2840;
+    const languageCode = req.languageCode ?? "en";
+    const sortedKeywords = [...req.keywords].sort();
+
+    const body = [
+      {
+        keywords: sortedKeywords,
+        location_code: locationCode,
+        language_code: languageCode,
+      },
+    ];
+
+    const cacheKey = TtlCache.fingerprint(endpoint, {
+      keywords: sortedKeywords,
+      locationCode,
+      languageCode,
+    });
+    const pHash = DataForSEOClient.paramsHash(endpoint, {
+      keywords: sortedKeywords,
+      locationCode,
+      languageCode,
+    });
+
+    let result: BulkKeywordDifficultyResponse;
+    try {
+      result = await this.execute({
+        endpoint,
+        body,
+        schema: BulkKeywordDifficultyResponseSchema,
+        requestMeta: { count: req.keywords.length },
+        cacheKey,
+      });
+    } catch (e) {
+      await this.logLabsUsage({
+        endpoint,
+        paramsHash: pHash,
+        responseStatus: "error",
+        costUsd: 0,
+        dispatchContext: req.dispatchContext,
+        errorMessage: (e as Error).message,
+      });
+      throw e;
+    }
+
+    const items = result.tasks[0]?.result?.[0]?.items?.length ?? 0;
+    await this.logLabsUsage({
+      endpoint,
+      paramsHash: pHash,
+      responseStatus: "ok",
+      costUsd: result.cost,
+      itemsReturned: items,
+      dispatchContext: req.dispatchContext,
+    });
+    return result;
   }
 }
 

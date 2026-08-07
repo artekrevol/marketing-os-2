@@ -338,6 +338,25 @@ export const competitorInsightsTable = pgTable(
     aboveUsKeywordCount: integer("above_us_keyword_count").default(0),
     authorityScore: numeric("authority_score", { precision: 5, scale: 2 }),
     pressureIndex: numeric("pressure_index", { precision: 6, scale: 2 }),
+    // Ahrefs competitor enrichment columns
+    ahrefsKeywordsCommon: integer("ahrefs_keywords_common"),
+    ahrefsKeywordsCompetitor: integer("ahrefs_keywords_competitor"),
+    ahrefsDomainRating: numeric("ahrefs_domain_rating", { precision: 5, scale: 2 }),
+    ahrefsTraffic: integer("ahrefs_traffic"),
+    ahrefsShare: numeric("ahrefs_share", { precision: 8, scale: 4 }),
+    ahrefsPages: integer("ahrefs_pages"),
+    /** false = excluded from competitor mining and keyword discovery. Curated via /admin/seo/competitor-curation. */
+    isRelevantCompetitor: boolean("is_relevant_competitor").notNull().default(true),
+    ahrefsLastUpdated: timestamp("ahrefs_last_updated", { withTimezone: true }),
+    // Competitor Curation — manual relevance review (Phase 4.2)
+    /** Populated when is_relevant_competitor is set false via curation UI. */
+    exclusionReason: text("exclusion_reason"),
+    lastReviewedAt: timestamp("last_reviewed_at", { withTimezone: true }),
+    /** user_profiles.user_id (Clerk text ID) of the reviewer. */
+    lastReviewedBy: text("last_reviewed_by").references(
+      () => userProfilesTable.userId,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
