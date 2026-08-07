@@ -1,0 +1,546 @@
+# Dispatch 1 — Discovery Engine (DataForSEO Labs)
+
+**Repo:** TekRevol Content Platform (Marketing OS) — Replit
+**Objective:** Add ongoing keyword and competitor discovery via DataForSEO Labs API. Weekly BullMQ job pulls related keywords, ranked keywords for competitors, domain intersections, and competitor emergence signals. Discovered candidates land in `keywords` table with `is_discovery_candidate = true` flag for Ahtesham review. 30-day auto-promote policy for unreviewed candidates.
+**Dispatch type:** Focused integration extending existing DataForSEO infrastructure. Introduces first Labs API endpoints alongside existing SERP tracking. Comparable in scope to the MCP integration dispatch — 4-6 hours agent work.
+
+---
+
+## Startup check (before any code)
+
+Before beginning: `ls -la .local/tasks/*.md 2>/dev/null`. Report results. Archive anything from cancelled or completed tasks to `.local/tasks/archive/` before proceeding.
+
+---
+
+## Context
+
+Marketing OS already has DataForSEO integration for SERP tracking (existing pattern in `lib/integrations/dataforseo/`). This dispatch extends that integration to the DataForSEO Labs API for keyword and competitor discovery.
+
+**Locked decisions:**
+- Weekly cadence: Monday 04:00 (offset from Irfan's app 02:15 and any future Marketing OS 03:00 jobs)
+- Seed set: top 20 P0/P1 keywords from TekRevol's tracked set
+- Candidate promotion: 30-day auto-promote from candidate to tracked if Ahtesham hasn't reviewed
+- Discovery attribution: `source_provider = 'dataforseo_discovery_YYYYWW'` (e.g. `dataforseo_discovery_202630`)
+- Competitor set: top 5 by keyword overlap from existing `competitor_insights` (not top 20 — expanded coverage happens in Dispatch 2)
+
+**Explicitly out of scope for this dispatch:**
+- AI Visibility engine (Dispatch 2)
+- Content Intelligence integration into planner (Dispatch 3)
+- SpyFu integration (not doing)
+- New UI beyond the Discovery Inbox admin page (SEO OS surfaces for viewing discoveries by cluster, filtering, etc. deferred to follow-up)
+- Backlinks or referring domains from DataForSEO (separate future dispatch)
+- Multi-language / multi-country expansion (US only for this dispatch)
+
+**Cost estimate for weekly job:** ~$3-5 per week (~$15/month) at DataForSEO Labs' $0.025 per 1,000 queries rate.
+
+**Cost hedge:** hard stop at 50,000 items per weekly run (worst case ~$1.25 per run). Env var `DFS_LABS_MAX_ITEMS_PER_RUN = 50000`.
+
+---
+
+## Phase 0 — Pre-flight survey (read-only, report before continuing)
+
+Standard survey. No code, no schema changes.
+
+1. **Verify DataForSEO credentials.** Confirm `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` are set in Replit Secrets (already present from existing SERP integration). Report present/missing without echoing values.
+
+2. **Read existing DataForSEO client pattern.** Show the current `lib/integrations/dataforseo/src/` structure. Locate the existing SERP tracking client — this dispatch extends the same pattern for Labs endpoints. Report the client's request signature (POST body shape, auth header pattern, response handling).
+
+3. **Verify BullMQ worker infrastructure.** Confirm the existing worker registration pattern in `lib/worker/src/`. Show one existing scheduled job as reference (probably the DataForSEO rank refresh). New discovery job follows the same pattern.
+
+4. **Verify current `keywords` table schema for discovery-related columns.** Some may already exist from prior dispatches — the earlier Ahrefs bulk pull dispatch added `is_high_value_target` and `is_branded`. Report whether `is_discovery_candidate`, `discovered_at`, `discovery_seed_keyword` already exist or need to be added.
+
+5. **Verify current `competitor_insights` schema.** Report current columns. This dispatch needs to add movement-tracking columns.
+
+6. **Identify seed keyword source.** Query the TekRevol brand's `keywords` table:
+   ```sql
+   SELECT keyword_text, priority, ahrefs_best_position, ahrefs_intent_flags
+   FROM keywords
+   WHERE brand_id = '<TEKREVOL_BRAND_ID>'
+     AND priority IN ('P0', 'P1')
+     AND is_active = true
+   ORDER BY ahrefs_sum_traffic DESC NULLS LAST
+   LIMIT 20;
+   ```
+   Report the 20 seeds this returns. These become the seed set for the first weekly run.
+
+7. **Identify competitor set.** Query:
+   ```sql
+   SELECT competitor_domain, ahrefs_keywords_common, ahrefs_domain_rating
+   FROM competitor_insights
+   WHERE brand_id = '<TEKREVOL_BRAND_ID>'
+     AND is_relevant_competitor = true
+   ORDER BY ahrefs_keywords_common DESC NULLS LAST
+   LIMIT 5;
+   ```
+   Report the 5 competitors this returns. These become the ranked-keywords mining targets.
+
+8. **Confirm DataForSEO Labs endpoints work with your credentials.** Small test call:
+   ```
+   POST https://api.dataforseo.com/v3/dataforseo_labs/google/related_keywords/live
+   Body: [{ "keyword": "mobile app development", "location_code": 2840, "language_code": "en", "depth": 1, "limit": 5 }]
+   ```
+   Report response structure and cost per call from the response metadata.
+
+Report findings. Pause for dispatcher review before Phase 1.
+
+---
+
+## Phase 1 — Schema foundation
+
+Scoped transactional DDL only. No blanket `drizzle-kit push`.
+
+### 1.1 `keywords` table additions
+
+Only add columns not already present from prior dispatches.
+
+```sql
+BEGIN;
+
+ALTER TABLE keywords
+  ADD COLUMN IF NOT EXISTS is_discovery_candidate boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS discovered_at timestamptz,
+  ADD COLUMN IF NOT EXISTS discovery_seed_keyword text,
+  ADD COLUMN IF NOT EXISTS candidate_review_status text,
+  ADD COLUMN IF NOT EXISTS candidate_reviewed_at timestamptz,
+  ADD COLUMN IF NOT EXISTS candidate_reviewed_by uuid REFERENCES users(id);
+
+ALTER TABLE keywords
+  ADD CONSTRAINT keywords_candidate_review_status_check
+    CHECK (candidate_review_status IS NULL OR candidate_review_status IN ('pending', 'promoted', 'rejected', 'auto_promoted'));
+
+CREATE INDEX IF NOT EXISTS keywords_discovery_candidate_idx
+  ON keywords(brand_id, is_discovery_candidate)
+  WHERE is_discovery_candidate = true;
+
+CREATE INDEX IF NOT EXISTS keywords_pending_review_idx
+  ON keywords(brand_id, candidate_review_status)
+  WHERE candidate_review_status = 'pending';
+
+COMMIT;
+```
+
+Update Drizzle schema in `lib/db/src/schema/keywords.ts` (or wherever the keywords table is defined per prior dispatches).
+
+### 1.2 New `competitor_movements` table
+
+Weekly snapshots of competitor state for movement detection.
+
+```sql
+BEGIN;
+
+CREATE TABLE competitor_movements (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  competitor_domain text NOT NULL,
+  snapshot_week text NOT NULL,
+  keywords_common integer,
+  keywords_common_delta integer,
+  domain_rating numeric(5,2),
+  is_new_this_week boolean NOT NULL DEFAULT false,
+  is_lost_this_week boolean NOT NULL DEFAULT false,
+  source_provider text NOT NULL DEFAULT 'dataforseo_labs',
+  source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  captured_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (brand_id, competitor_domain, snapshot_week)
+);
+
+CREATE INDEX competitor_movements_brand_week_idx
+  ON competitor_movements(brand_id, snapshot_week);
+CREATE INDEX competitor_movements_new_idx
+  ON competitor_movements(brand_id, is_new_this_week)
+  WHERE is_new_this_week = true;
+
+COMMIT;
+```
+
+`snapshot_week` uses ISO week format `YYYY-WW` (e.g. `2026-30`). Add to `BRAND_SCOPED_TABLES`. Update Drizzle schema.
+
+### 1.3 New `dataforseo_labs_usage` table
+
+Cost tracking for Labs API calls, parallel to `ahrefs_rest_usage` pattern.
+
+```sql
+BEGIN;
+
+CREATE TABLE dataforseo_labs_usage (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id uuid NOT NULL REFERENCES brands(id) ON DELETE restrict,
+  called_at timestamptz NOT NULL DEFAULT now(),
+  endpoint text NOT NULL,
+  params_hash text NOT NULL,
+  cost_usd numeric(10,6) NOT NULL DEFAULT 0,
+  items_returned integer,
+  response_status text NOT NULL,
+  error_message text,
+  dispatch_context text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX dataforseo_labs_usage_brand_called_idx
+  ON dataforseo_labs_usage(brand_id, called_at DESC);
+CREATE INDEX dataforseo_labs_usage_dispatch_idx
+  ON dataforseo_labs_usage(dispatch_context)
+  WHERE dispatch_context IS NOT NULL;
+
+COMMIT;
+```
+
+Add to `BRAND_SCOPED_TABLES`. Update Drizzle schema.
+
+**Pause after Phase 1.** Dispatcher confirms schemas look right.
+
+---
+
+## Phase 2 — DataForSEO Labs client extension
+
+Extends `lib/integrations/dataforseo/` with Labs endpoints.
+
+### 2.1 Client class
+
+Follows the existing DataForSEO client pattern from the SERP tracking work already shipped.
+
+File: `lib/integrations/dataforseo/src/labs-client.ts`
+
+```typescript
+export interface LabsCallResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  costUsd: number;
+  itemsReturned: number;
+  latencyMs: number;
+}
+
+export class DataForSEOLabsClient {
+  constructor(config: {
+    login: string;
+    password: string;
+    baseUrl: string;
+    maxItemsPerRun: number;
+  });
+
+  // Related Keywords endpoint — up to 4,680 per seed
+  async relatedKeywords(seed: string, options: {
+    locationCode: number;  // 2840 = US
+    languageCode: string;  // 'en'
+    depth: number;  // 1-4 recommended, 2 default
+    limit: number;
+  }): Promise<LabsCallResult<RelatedKeywordRow[]>>;
+
+  // Ranked Keywords — all keywords a competitor domain ranks for
+  async rankedKeywords(target: string, options: {
+    locationCode: number;
+    languageCode: string;
+    limit: number;
+    filters?: KeywordFilter[];
+  }): Promise<LabsCallResult<RankedKeywordRow[]>>;
+
+  // Competitors Domain — discover competitors for TekRevol
+  async competitorsDomain(target: string, options: {
+    locationCode: number;
+    languageCode: string;
+    limit: number;
+  }): Promise<LabsCallResult<CompetitorDomainRow[]>>;
+
+  // Domain Intersection — shared SERPs between TekRevol and competitor
+  async domainIntersection(target1: string, target2: string, options: {
+    locationCode: number;
+    languageCode: string;
+    limit: number;
+  }): Promise<LabsCallResult<DomainIntersectionRow[]>>;
+
+  // Keyword Ideas — category-based expansion (up to 200 seeds per call)
+  async keywordIdeas(seeds: string[], options: {
+    locationCode: number;
+    languageCode: string;
+    limit: number;
+    closelyVariants?: boolean;
+  }): Promise<LabsCallResult<KeywordIdeaRow[]>>;
+
+  // Track cumulative cost per run
+  getTotalCost(): number;
+
+  // Hard stop check
+  checkBudget(estimatedItems: number): void;
+}
+```
+
+### 2.2 Rate limits and retries
+
+DataForSEO Labs: 2,000 calls/minute cap (documented). Client throttles to 100 calls/minute default to leave headroom for other DataForSEO usage (SERP tracking).
+
+Retry logic same as existing DataForSEO client. Log every call to `dataforseo_labs_usage` with `dispatch_context` string.
+
+### 2.3 Type definitions
+
+Field names match DataForSEO Labs API response schema. Verify against actual response structure from Phase 0's test call.
+
+```typescript
+export interface RelatedKeywordRow {
+  keyword: string;
+  search_volume: number;
+  competition: number;
+  cpc: number | null;
+  monthly_searches: Array<{ year: number; month: number; search_volume: number }>;
+  keyword_difficulty: number | null;
+  parent_topic: string | null;
+  depth: number;
+  related_keywords: string[];
+}
+
+// Similar structured types for RankedKeywordRow, CompetitorDomainRow,
+// DomainIntersectionRow, KeywordIdeaRow — build from actual response schemas
+```
+
+Commit: `Phase 2: DataForSEO Labs client extension`
+
+**Pause after Phase 2.** Dispatcher runs manual test call for each of the 5 endpoints, confirms response shapes.
+
+---
+
+## Phase 3 — Weekly discovery job
+
+New BullMQ scheduled job that runs the discovery workflow every Monday 04:00.
+
+### 3.1 Job registration
+
+File: `lib/worker/src/jobs/dataforseo-discovery.ts`
+
+Register with BullMQ scheduler:
+- Job name: `dataforseo-labs-discovery-weekly`
+- Schedule: `0 4 * * 1` (Monday 04:00)
+- Brand scope: iterates through all active brands (TekRevol first, others follow when brand-onboarded)
+
+### 3.2 Discovery workflow — five steps
+
+**Step A: Competitor discovery.**
+Call `competitorsDomain('tekrevol.com', { limit: 50 })`. Compare against current `competitor_insights.competitor_domain` values.
+
+For each competitor in the response:
+- If domain exists in table: create `competitor_movements` snapshot row with current metrics + delta from prior week
+- If domain is new: create `competitor_movements` row with `is_new_this_week = true`
+
+For competitors in `competitor_insights` but NOT in response:
+- Create `competitor_movements` row with `is_lost_this_week = true`
+
+`dispatch_context = 'discovery_week_YYYY-WW_competitor_discovery'`.
+
+**Step B: Seed set selection.**
+Query top 20 P0/P1 keywords by `ahrefs_sum_traffic` (or `search_volume` for keywords without Ahrefs data yet). This is the seed set for this week.
+
+**Step C: Related keywords per seed.**
+For each of the 20 seeds:
+```
+relatedKeywords(seed, { 
+  locationCode: 2840, 
+  languageCode: 'en', 
+  depth: 2, 
+  limit: 500 
+})
+```
+
+Deduplicate results across all 20 seeds. Cross-reference against existing `keywords.keyword_text` for the brand.
+
+For each new keyword:
+- Insert into `keywords` with `is_discovery_candidate = true`, `candidate_review_status = 'pending'`, `discovered_at = now()`, `discovery_seed_keyword = <the seed>`, `source_provider = 'dataforseo_discovery_YYYY-WW'`
+- Apply the classification heuristic (from Ahrefs bulk dispatch) using intent signals from DataForSEO response where available, position defaulted to null
+
+Estimated per-week volume: ~200-500 new candidates after dedup.
+
+`dispatch_context = 'discovery_week_YYYY-WW_related_keywords'`.
+
+**Step D: Ranked keywords for top 5 competitors.**
+For each of the 5 competitor domains from `competitor_insights`:
+```
+rankedKeywords(competitor.domain, { 
+  locationCode: 2840, 
+  languageCode: 'en', 
+  limit: 1000,
+  filters: [['keyword_data.keyword_info.search_volume', '>=', 50]]  
+})
+```
+
+For each keyword the competitor ranks for:
+- Check if it exists in TekRevol's `keywords` table
+- If NOT: insert as discovery candidate with `discovery_seed_keyword = 'competitor:' + competitor.domain`, same classification pattern
+
+Estimated per-week volume: ~500-2,000 new candidates.
+
+`dispatch_context = 'discovery_week_YYYY-WW_competitor_mining'`.
+
+**Step E: Auto-promotion of stale candidates.**
+Sweep query at end of run:
+```sql
+UPDATE keywords
+SET candidate_review_status = 'auto_promoted',
+    is_discovery_candidate = false,
+    candidate_reviewed_at = now()
+WHERE brand_id = <brand_id>
+  AND candidate_review_status = 'pending'
+  AND discovered_at < now() - INTERVAL '30 days';
+```
+
+Log count of auto-promoted rows for weekly digest.
+
+### 3.3 Weekly run summary
+
+Job completion writes a summary row to `dataforseo_labs_usage.metadata`:
+```json
+{
+  "week": "2026-30",
+  "competitors_new": 3,
+  "competitors_lost": 1,
+  "candidates_added_related_keywords": 342,
+  "candidates_added_competitor_mining": 891,
+  "candidates_auto_promoted": 47,
+  "total_cost_usd": 3.24,
+  "duration_seconds": 218
+}
+```
+
+Commit: `Phase 3: Weekly discovery job workflow`
+
+**Pause after Phase 3.** Dispatcher runs the job manually once (out-of-schedule), reviews weekly summary output.
+
+---
+
+## Phase 4 — Discovery Inbox admin surface
+
+Ahtesham's review UI for discovery candidates.
+
+### 4.1 Page
+
+New page: `/admin/seo/discovery-inbox`
+
+Table view:
+- Filter: brand (default: TekRevol), status (pending/promoted/rejected/auto_promoted), source seed, discovered date range
+- Columns: keyword, discovered date, seed source (which keyword generated it), estimated volume, KD, intent flags (from DataForSEO response), current status, action buttons
+
+Row actions:
+- **Promote** → sets `is_discovery_candidate = false`, `candidate_review_status = 'promoted'`, `candidate_reviewed_at = now()`, `candidate_reviewed_by = <ahtesham user id>`
+- **Reject** → sets `candidate_review_status = 'rejected'`. Keyword row stays but marked as intentionally not tracked
+- **View seed context** → modal showing the seed keyword and other candidates from same seed
+
+Bulk actions:
+- **Promote all filtered** → bulk promote selection
+- **Reject all filtered** → bulk reject selection
+- **Export CSV** → download filtered set for external review
+
+### 4.2 Weekly digest count on dashboard
+
+Overview dashboard card:
+- "N candidates pending review from last discovery run"
+- "M candidates auto-promoted last week (past 30-day window)"
+- Link to Discovery Inbox
+
+Placement follows existing admin dashboard pattern from Rules Dashboard and Reviews Bank surfaces.
+
+### 4.3 Access control
+
+Admin and Lead roles: full read/write access
+Member roles: no access (this is SEO team surface)
+
+Follow the same access pattern from other admin surfaces.
+
+Commit: `Phase 4: Discovery Inbox admin UI`
+
+**Pause after Phase 4.** Dispatcher reviews the UI, confirms row actions work, tests one full promote/reject cycle.
+
+---
+
+## Phase 5 — Smoke tests and completion
+
+### 5.1 Smoke tests (all must pass)
+
+**Schema:**
+1. `keywords` new columns present (`is_discovery_candidate`, `discovered_at`, `discovery_seed_keyword`, `candidate_review_status`, `candidate_reviewed_at`, `candidate_reviewed_by`)
+2. Check constraint on `candidate_review_status` enforces valid values
+3. `competitor_movements` table created with correct schema and indexes
+4. `dataforseo_labs_usage` table created with correct schema and indexes
+5. Drizzle typechecks clean across all packages
+
+**Client:**
+6. `DataForSEOLabsClient` instantiates without errors
+7. Direct call to `relatedKeywords('mobile app development')` returns valid data
+8. Direct call to `competitorsDomain('tekrevol.com')` returns valid data
+9. Direct call to `rankedKeywords('appinventiv.com')` returns valid data (test one of the actual competitors)
+10. Each call logs to `dataforseo_labs_usage` with cost captured
+11. Budget hard stop triggers at max items — verify by setting `maxItemsPerRun` to 100 and confirming abort
+
+**Discovery job:**
+12. Job runs end-to-end for TekRevol brand
+13. Competitor movements captured with proper deltas
+14. Related keywords deduplicated across seeds
+15. Ranked keywords mined and inserted as candidates
+16. Auto-promotion sweep works (test by manually setting `discovered_at` to 31+ days ago on a candidate and running sweep)
+17. Weekly summary metadata populated correctly
+
+**Discovery Inbox:**
+18. Page renders with pending candidates visible
+19. Promote action correctly transitions candidate to tracked keyword
+20. Reject action correctly marks candidate as rejected
+21. Bulk promote works on filtered set
+22. CSV export works
+23. Access control: member role cannot access page
+
+**Cross-cutting:**
+24. `pnpm typecheck` passes across all packages
+25. Cross-brand isolation: ClaimShield candidates not visible in TekRevol brand context
+26. Regression: existing DataForSEO SERP tracking unaffected
+27. Regression: existing planner + generation flow unaffected
+
+### 5.2 Architect review
+
+`git show --stat HEAD` before declaring complete. Treat architect feedback as authoritative.
+
+Three areas to scrutinize:
+
+**Duplicate detection correctness.** Related keywords across 20 seeds will overlap significantly. Verify the dedup logic doesn't lose data (same keyword from multiple seeds captured with all seed attributions, not just the first).
+
+**Auto-promotion policy edge cases.** What happens if a keyword was promoted, then somehow re-appears as a discovery candidate later (competitor mining picks it up again)? Should it stay promoted, or should the new discovery override? Verify current logic handles this correctly — my expectation is it stays promoted (no downgrade of tracked → candidate ever).
+
+**Cost tracking accuracy.** DataForSEO returns cost per response in a `cost` field. Verify `labs-client.ts` correctly extracts and sums these. Divergence between logged cost and actual DataForSEO account debit indicates tracking bug.
+
+---
+
+## Operational notes
+
+- **Order strict:** Phase 1 → 2 → 3 → 4 → 5. Each phase has pause point for dispatcher review.
+
+- **Pause points:**
+  1. After Phase 0 survey (schemas, secrets, seed set, competitor set confirmed)
+  2. After Phase 1 (schema check)
+  3. After Phase 2 (client works, manual test calls successful)
+  4. After Phase 3 (full manual job run completes, weekly summary reviewed)
+  5. After Phase 4 (Discovery Inbox UI verified working)
+  6. After Phase 5 completion, before declaring done
+
+- **Cost hedges:**
+  - Hard stop at 50,000 items per weekly run (env var `DFS_LABS_MAX_ITEMS_PER_RUN`)
+  - Expected weekly cost: $3-5
+  - Monthly ceiling: $50 (well under any material budget concern)
+  - Every call logged to `dataforseo_labs_usage` with dispatch_context
+
+- **Why 30-day auto-promotion:** Ahtesham won't review every candidate manually. Auto-promotion means candidates surface for a limited time in the Discovery Inbox, then quietly join the tracked set with `candidate_review_status = 'auto_promoted'` attribution. He can filter for auto-promoted rows if he wants to periodically audit what got through without his review.
+
+- **What this dispatch does NOT do:**
+  - AI mentions tracking (Dispatch 2)
+  - Content Intelligence integration into planner (Dispatch 3)
+  - Non-TekRevol brands (schema supports it, but only TekRevol runs the job for now)
+  - Backlink discovery (separate future dispatch)
+  - SEO OS Discovery visualization surfaces (Discovery Inbox is admin-only; richer SEO team dashboards ship later)
+
+- **Follow-up dispatches queued:**
+  - Dispatch 2: AI Visibility Engine (DataForSEO LLM Mentions + Ahrefs Brand Radar)
+  - Dispatch 3: Content Intelligence integration (planner reads from discovery + AI visibility layers)
+  - SEO OS Discovery Dashboard (non-admin UI for browsing discovered keywords)
+  - Multi-brand rollout (ClaimShield, Reverto, CensusFlow)
+
+- **Scoped transactional DDL only.** No blanket `drizzle-kit push`. Existing schema drift untouched.
+
+- **Priority if time-constrained:** Drop Phase 4 (Discovery Inbox UI) if the dispatch runs long. The core value is Phases 1-3 (discovery data flowing into the database). Candidates can be reviewed via direct SQL until Phase 4 ships in a follow-up. Do NOT drop Phase 3 (the job itself) — that's the point.
+
+---
+
+**Begin startup check → Phase 0 survey. Report findings before any code. Six pause points across the dispatch. Phase 5's 27 smoke tests gate completion. Same operational rules as prior dispatches: `git show --stat HEAD` before declaring complete, treat architect feedback as authoritative, no scope creep.**
