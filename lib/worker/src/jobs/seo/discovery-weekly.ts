@@ -1,0 +1,495 @@
+import { sql } from "drizzle-orm";
+import {
+  withBrandScope,
+  keywordsTable,
+  locationsTable,
+  competitorInsightsTable,
+  competitorMovementsTable,
+  eventsTable,
+  type Location,
+} from "@workspace/db";
+import type { JobData } from "@workspace/jobs";
+import {
+  DataForSEOClient,
+  type RelatedKeywordItem,
+  type RankedKeywordItem,
+} from "@workspace/integrations-dataforseo";
+import type { Logger } from "pino";
+import { assertNotDuplicate } from "../idempotency";
+
+const SUCCESS_EVENT = "seo.discovery.weekly.completed";
+
+/**
+ * Returns the ISO week label (YYYY-WW) for a given Date (UTC).
+ * Week 1 is the week containing the first Thursday of the year (ISO 8601).
+ */
+function isoWeekLabel(date: Date): string {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  // ISO week: Thursday is the anchor day (day 4). Adjust so Thursday = day 0.
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${d.getUTCFullYear()}-${String(week).padStart(2, "0")}`;
+}
+
+/** Chunk an array into slices of `size`. */
+function chunks<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/** Curated competitor set for TekRevol (Phase 0 approval). Excludes clutch.co and koderspedia.com. */
+const CURATED_COMPETITORS = [
+  "appinventiv.com",
+  "trangotech.com",
+  "buildfire.com",
+  "appwrk.com",
+];
+
+export interface DiscoveryWeeklyResult {
+  weekLabel: string;
+  seedsExpanded: number;
+  rawCandidates: number;
+  afterDedup: number;
+  afterKdFilter: number;
+  afterExistingFilter: number;
+  insertedCandidates: number;
+  competitorCandidatesInserted: number;
+  competitorMovementsWritten: number;
+  archivedStale: number;
+  duplicate?: true;
+}
+
+/**
+ * Weekly Discovery Engine — Phase 3.
+ *
+ * Step A  Seed keyword expansion via relatedKeywords()
+ * Step B  Dedup + bulk KD filter via bulkKeywordDifficulty()
+ * Step C  Existing keyword exclusion + DB insert as pending candidates
+ * Step D  Competitor keyword mining via rankedKeywords() + insert
+ * Step E  competitor_movements snapshot write
+ * Step F  30-day auto-archive sweep for stale pending candidates
+ * Step G  Success event
+ */
+export async function handleSeoDiscoveryWeekly(
+  payload: JobData<"seo.discovery.weekly">,
+  log: Logger,
+): Promise<DiscoveryWeeklyResult> {
+  const dup = await assertNotDuplicate(SUCCESS_EVENT, payload.idempotencyKey, log);
+  if (dup.duplicate) {
+    return {
+      weekLabel: payload.weekLabel ?? isoWeekLabel(new Date()),
+      seedsExpanded: 0,
+      rawCandidates: 0,
+      afterDedup: 0,
+      afterKdFilter: 0,
+      afterExistingFilter: 0,
+      insertedCandidates: 0,
+      competitorCandidatesInserted: 0,
+      competitorMovementsWritten: 0,
+      archivedStale: 0,
+      duplicate: true,
+    };
+  }
+
+  const weekLabel = payload.weekLabel ?? isoWeekLabel(new Date());
+  const dispatchCtx = `discovery_week_${weekLabel}`;
+  const maxKd = payload.maxKd;
+  const seedLimit = payload.seedLimit;
+  const relatedLimit = payload.relatedLimit;
+  const competitorRankedLimit = payload.competitorRankedLimit;
+
+  log.info({ weekLabel, dispatchCtx, maxKd, seedLimit }, "seo.discovery.weekly: starting");
+
+  return withBrandScope(payload.brandId, async ({ db, scoped }) => {
+    const client = new DataForSEOClient({ brandId: payload.brandId });
+
+    // ------------------------------------------------------------------
+    // Locate the brand's US location (dataforseo_location_code = 2840).
+    // Fall back to first location if no US location is registered.
+    // ------------------------------------------------------------------
+    const locations = (await scoped.select(locationsTable)) as Location[];
+    const usLocation =
+      locations.find((l) => l.dataforseoLocationCode === 2840) ?? locations[0];
+    if (!usLocation) {
+      throw new Error(
+        `seo.discovery.weekly: brand ${payload.brandId} has no locations — cannot determine location_id`,
+      );
+    }
+    const locationCode = usLocation.dataforseoLocationCode;
+    const locationId = usLocation.id;
+    const languageCode = usLocation.languageCode ?? "en";
+
+    // ------------------------------------------------------------------
+    // Step A — Seed keyword expansion
+    // Pull top `seedLimit` non-branded commercial/transactional P0/P1
+    // keywords sorted by ahrefs_sum_traffic DESC (dispatcher-approved query).
+    // ------------------------------------------------------------------
+    const seedRows = (await db.execute(sql`
+      SELECT keyword_text, id
+      FROM keywords
+      WHERE brand_id = ${payload.brandId}::uuid
+        AND priority IN ('P0', 'P1')
+        AND is_active = true
+        AND is_branded = false
+        AND (
+          ahrefs_intent_flags->>'commercial'     = 'true'
+          OR ahrefs_intent_flags->>'transactional' = 'true'
+        )
+      ORDER BY ahrefs_sum_traffic DESC NULLS LAST
+      LIMIT ${seedLimit}
+    `)) as unknown as { rows?: Array<{ keyword_text: string; id: string }> } | Array<{ keyword_text: string; id: string }>;
+
+    const seeds: string[] = (Array.isArray(seedRows) ? seedRows : (seedRows.rows ?? []))
+      .map((r) => r.keyword_text)
+      .filter(Boolean);
+
+    log.info({ seeds: seeds.length }, "seo.discovery.weekly: step A — seeds loaded");
+
+    // Collect: { text, searchVolume, seedKeyword }
+    interface RawCandidate {
+      text: string;
+      searchVolume: number | null;
+      seedKeyword: string;
+    }
+
+    const rawMap = new Map<string, RawCandidate>(); // keyed by lowercased text
+
+    for (const seed of seeds) {
+      try {
+        const res = await client.relatedKeywords({
+          keyword: seed,
+          locationCode,
+          languageCode,
+          limit: relatedLimit,
+          depth: 1,
+          dispatchContext: dispatchCtx,
+        });
+        const items: RelatedKeywordItem[] = res.tasks[0]?.result?.[0]?.items ?? [];
+        for (const item of items) {
+          const text = item.keyword_data?.keyword?.trim();
+          if (!text) continue;
+          const key = text.toLowerCase();
+          if (!rawMap.has(key)) {
+            rawMap.set(key, {
+              text,
+              searchVolume: item.keyword_data?.keyword_info?.search_volume ?? null,
+              seedKeyword: seed,
+            });
+          }
+        }
+      } catch (err) {
+        // Per-seed failure: log and continue — one bad seed should not abort the run
+        log.warn(
+          { seed, err: (err as Error).message },
+          "seo.discovery.weekly: relatedKeywords failed for seed — skipping",
+        );
+      }
+    }
+
+    const rawCandidates = rawMap.size;
+    log.info(
+      { rawCandidates, seedsExpanded: seeds.length },
+      "seo.discovery.weekly: step A complete",
+    );
+
+    // ------------------------------------------------------------------
+    // Step B — Bulk KD filter (batches of 1000)
+    // ------------------------------------------------------------------
+    const allTexts = Array.from(rawMap.keys());
+    const kdMap = new Map<string, number>(); // lowercased text → KD score
+
+    for (const batch of chunks(allTexts, 1000)) {
+      try {
+        const res = await client.bulkKeywordDifficulty({
+          keywords: batch.map((k) => rawMap.get(k)!.text), // use original casing
+          locationCode,
+          languageCode,
+          dispatchContext: dispatchCtx,
+        });
+        const items = res.tasks[0]?.result?.[0]?.items ?? [];
+        for (const item of items) {
+          if (item.keyword && item.keyword_difficulty != null) {
+            kdMap.set(item.keyword.toLowerCase(), item.keyword_difficulty);
+          }
+        }
+      } catch (err) {
+        log.warn(
+          { batchSize: batch.length, err: (err as Error).message },
+          "seo.discovery.weekly: bulkKeywordDifficulty batch failed — continuing without KD filter for this batch",
+        );
+      }
+    }
+
+    // Filter: keep KD < maxKd (or unknown KD — let it through, reviewer decides)
+    const afterKdFilter: RawCandidate[] = [];
+    for (const [key, candidate] of rawMap) {
+      const kd = kdMap.get(key);
+      if (kd == null || kd < maxKd) {
+        afterKdFilter.push(candidate);
+      }
+    }
+
+    log.info(
+      { afterDedup: rawCandidates, afterKdFilter: afterKdFilter.length },
+      "seo.discovery.weekly: step B complete",
+    );
+
+    // ------------------------------------------------------------------
+    // Step C — Exclude already-tracked keywords, insert remaining as
+    //          pending discovery candidates
+    // ------------------------------------------------------------------
+
+    // Pull existing keyword_text values for this brand+location to dedupe
+    const existingRows = (await db.execute(sql`
+      SELECT lower(keyword_text) AS ktext
+      FROM keywords
+      WHERE brand_id = ${payload.brandId}::uuid
+        AND location_id = ${locationId}::uuid
+    `)) as unknown as { rows?: Array<{ ktext: string }> } | Array<{ ktext: string }>;
+
+    const existingSet = new Set<string>(
+      (Array.isArray(existingRows) ? existingRows : (existingRows.rows ?? []))
+        .map((r) => r.ktext),
+    );
+
+    const newCandidates = afterKdFilter.filter(
+      (c) => !existingSet.has(c.text.toLowerCase()),
+    );
+
+    log.info(
+      {
+        afterKdFilter: afterKdFilter.length,
+        afterExistingFilter: newCandidates.length,
+      },
+      "seo.discovery.weekly: step C — existing keyword exclusion done",
+    );
+
+    const now = new Date();
+    let insertedCandidates = 0;
+
+    for (const batch of chunks(newCandidates, 500)) {
+      const rows = batch.map((c) => ({
+        brandId: payload.brandId,
+        keywordText: c.text,
+        locationId,
+        searchVolume: c.searchVolume,
+        isDiscoveryCandidate: true,
+        discoveredAt: now,
+        discoverySeedKeyword: c.seedKeyword,
+        candidateReviewStatus: "pending" as const,
+        // Difficulty from the KD map (may be undefined → null)
+        difficulty: kdMap.has(c.text.toLowerCase())
+          ? kdMap.get(c.text.toLowerCase())!.toString()
+          : null,
+      }));
+
+      await db
+        .insert(keywordsTable)
+        .values(rows)
+        .onConflictDoNothing();
+
+      insertedCandidates += rows.length;
+    }
+
+    log.info(
+      { insertedCandidates },
+      "seo.discovery.weekly: step C complete — candidates inserted",
+    );
+
+    // ------------------------------------------------------------------
+    // Step D — Competitor keyword mining
+    // Pull ranked keywords for each curated competitor domain, apply the
+    // same filter pipeline, and insert additional candidates.
+    // ------------------------------------------------------------------
+    let competitorCandidatesInserted = 0;
+
+    for (const domain of CURATED_COMPETITORS) {
+      try {
+        const res = await client.rankedKeywords({
+          target: domain,
+          locationCode,
+          languageCode,
+          limit: competitorRankedLimit,
+        });
+        const items: RankedKeywordItem[] = res.tasks[0]?.result?.[0]?.items ?? [];
+
+        const compTexts: string[] = items
+          .map((i) => i.keyword_data?.keyword?.trim())
+          .filter((t): t is string => typeof t === "string" && t.length > 0 && !existingSet.has(t.toLowerCase()));
+
+        // KD filter for competitor keywords (best-effort; not batching separately
+        // to avoid extra API cost — use already-fetched kdMap, pass-through unknown)
+        const compCandidates = compTexts.filter((t) => {
+          const kd = kdMap.get(t.toLowerCase());
+          return kd == null || kd < maxKd;
+        });
+
+        if (compCandidates.length > 0) {
+          const compRows = compCandidates.map((text) => ({
+            brandId: payload.brandId,
+            keywordText: text,
+            locationId,
+            isDiscoveryCandidate: true,
+            discoveredAt: now,
+            discoverySeedKeyword: `competitor:${domain}`,
+            candidateReviewStatus: "pending" as const,
+            difficulty: kdMap.has(text.toLowerCase())
+              ? kdMap.get(text.toLowerCase())!.toString()
+              : null,
+          }));
+
+          for (const batch of chunks(compRows, 500)) {
+            await db.insert(keywordsTable).values(batch).onConflictDoNothing();
+            competitorCandidatesInserted += batch.length;
+          }
+        }
+
+        log.info(
+          { domain, ranked: items.length, inserted: compCandidates.length },
+          "seo.discovery.weekly: step D — competitor mined",
+        );
+      } catch (err) {
+        log.warn(
+          { domain, err: (err as Error).message },
+          "seo.discovery.weekly: rankedKeywords failed for competitor — skipping",
+        );
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // Step E — competitor_movements snapshot
+    // For each curated competitor, write one row for this week.
+    // keywords_common = brand's tracked keywords that overlap with the
+    // competitor's known shared_keyword_count from competitor_insights.
+    // ------------------------------------------------------------------
+    let competitorMovementsWritten = 0;
+
+    // Fetch current competitor_insights rows for the curated set
+    const insightRows = (await db.execute(sql`
+      SELECT competitor_domain, shared_keyword_count
+      FROM competitor_insights
+      WHERE brand_id = ${payload.brandId}::uuid
+        AND competitor_domain = ANY(ARRAY[${sql.join(
+          CURATED_COMPETITORS.map((d) => sql`${d}`),
+          sql`, `,
+        )}])
+    `)) as unknown as
+      | { rows?: Array<{ competitor_domain: string; shared_keyword_count: number }> }
+      | Array<{ competitor_domain: string; shared_keyword_count: number }>;
+
+    const insightMap = new Map<string, number>(
+      (Array.isArray(insightRows) ? insightRows : (insightRows.rows ?? []))
+        .map((r) => [r.competitor_domain, r.shared_keyword_count]),
+    );
+
+    // Fetch last week's movements to compute delta + is_new
+    const prevWeekRows = (await db.execute(sql`
+      SELECT competitor_domain, keywords_common
+      FROM competitor_movements
+      WHERE brand_id = ${payload.brandId}::uuid
+        AND competitor_domain = ANY(ARRAY[${sql.join(
+          CURATED_COMPETITORS.map((d) => sql`${d}`),
+          sql`, `,
+        )}])
+      ORDER BY captured_at DESC
+    `)) as unknown as
+      | { rows?: Array<{ competitor_domain: string; keywords_common: number }> }
+      | Array<{ competitor_domain: string; keywords_common: number }>;
+
+    const prevMap = new Map<string, number>();
+    for (const row of (Array.isArray(prevWeekRows) ? prevWeekRows : (prevWeekRows.rows ?? []))) {
+      if (!prevMap.has(row.competitor_domain)) {
+        prevMap.set(row.competitor_domain, row.keywords_common);
+      }
+    }
+
+    const movementRows = CURATED_COMPETITORS.map((domain) => {
+      const keywordsCommon = insightMap.get(domain) ?? 0;
+      const prev = prevMap.get(domain);
+      return {
+        brandId: payload.brandId,
+        competitorDomain: domain,
+        snapshotWeek: weekLabel,
+        keywordsCommon,
+        keywordsCommonDelta: prev != null ? keywordsCommon - prev : null,
+        isNewThisWeek: prev == null,
+        isLostThisWeek: false,
+        sourceProvider: "dataforseo_labs",
+        sourceMetadata: { dispatchContext: dispatchCtx },
+        capturedAt: now,
+      };
+    });
+
+    if (movementRows.length > 0) {
+      await db
+        .insert(competitorMovementsTable)
+        .values(movementRows)
+        .onConflictDoNothing(); // unique (brand_id, competitor_domain, snapshot_week)
+      competitorMovementsWritten = movementRows.length;
+    }
+
+    log.info(
+      { competitorMovementsWritten },
+      "seo.discovery.weekly: step E — competitor_movements written",
+    );
+
+    // ------------------------------------------------------------------
+    // Step F — 30-day auto-archive sweep
+    // Move stale pending candidates to 'archived' (is_discovery_candidate
+    // stays true per Phase 0 approval — archived ≠ deleted).
+    // ------------------------------------------------------------------
+    const archiveResult = (await db.execute(sql`
+      UPDATE keywords
+      SET
+        candidate_review_status = 'archived',
+        candidate_reviewed_at   = now()
+      WHERE brand_id = ${payload.brandId}::uuid
+        AND candidate_review_status = 'pending'
+        AND discovered_at < now() - INTERVAL '30 days'
+    `)) as unknown as { rowCount?: number; count?: number };
+
+    const archivedStale =
+      typeof archiveResult === "object" && archiveResult !== null
+        ? ((archiveResult as { rowCount?: number }).rowCount ??
+           (archiveResult as { count?: number }).count ??
+           0)
+        : 0;
+
+    log.info(
+      { archivedStale },
+      "seo.discovery.weekly: step F — archive sweep complete",
+    );
+
+    // ------------------------------------------------------------------
+    // Step G — success event
+    // ------------------------------------------------------------------
+    const result: DiscoveryWeeklyResult = {
+      weekLabel,
+      seedsExpanded: seeds.length,
+      rawCandidates,
+      afterDedup: rawCandidates,
+      afterKdFilter: afterKdFilter.length,
+      afterExistingFilter: newCandidates.length,
+      insertedCandidates,
+      competitorCandidatesInserted,
+      competitorMovementsWritten,
+      archivedStale,
+    };
+
+    await db.insert(eventsTable).values({
+      eventType: SUCCESS_EVENT,
+      brandId: payload.brandId,
+      subjectType: "discovery_weekly",
+      subjectId: payload.brandId,
+      payload: {
+        idempotencyKey: payload.idempotencyKey,
+        ...result,
+      },
+    });
+
+    log.info(result, "seo.discovery.weekly: done");
+    return result;
+  });
+}

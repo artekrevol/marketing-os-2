@@ -7,13 +7,17 @@ import {
   closeAllQueues,
   addRepeatable,
 } from "@workspace/jobs";
+import { guardedDb, brandsTable } from "@workspace/db";
 import { loadEnv } from "./env";
 import { logger } from "./logger";
 import { initSentry, captureJobError } from "./sentry";
 import { dispatch } from "./jobs";
 import { recordDeadJob } from "./jobs/dead-letter";
 import { recordTerminalIntegrationFailure } from "./jobs/terminal-failure";
-import { registerActiveCrawlSchedules } from "./jobs/seo/schedules";
+import {
+  registerActiveCrawlSchedules,
+  registerDiscoveryWeeklySchedule,
+} from "./jobs/seo/schedules";
 import { startHealthServer } from "./health";
 
 const startedAt = Date.now();
@@ -125,6 +129,19 @@ async function main(): Promise<void> {
     await registerActiveCrawlSchedules(logger);
   } catch (err) {
     logger.error({ err }, "worker: failed to register active crawl schedules");
+  }
+
+  // Discovery Engine — register weekly keyword discovery repeatable for
+  // each brand. Safe to call on every boot (addRepeatable is idempotent).
+  try {
+    const brands = await guardedDb
+      .select({ id: brandsTable.id })
+      .from(brandsTable);
+    for (const { id } of brands) {
+      await registerDiscoveryWeeklySchedule(id, logger);
+    }
+  } catch (err) {
+    logger.error({ err }, "worker: failed to register discovery weekly schedules");
   }
 
   const health = startHealthServer(env.PORT, startedAt);

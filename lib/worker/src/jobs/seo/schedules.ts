@@ -6,8 +6,41 @@ import {
   crawlSchedulesTable,
   type CrawlSchedule,
 } from "@workspace/db";
-import { registerCrawlSchedule } from "@workspace/jobs";
+import { registerCrawlSchedule, addRepeatable, buildJobId } from "@workspace/jobs";
 import type { Logger } from "pino";
+
+/**
+ * Register the weekly Discovery Engine repeatable for a brand.
+ * Fires every Monday at 02:00 UTC ("0 2 * * 1").
+ *
+ * The idempotencyKey encodes brand + a fixed "weekly" segment so BullMQ
+ * dedupes re-registrations on every boot. The week label is intentionally
+ * NOT embedded in the repeatable payload — it is computed at runtime by
+ * the handler from `new Date()`, so a missed Monday run that fires on
+ * Tuesday still records the correct ISO week.
+ *
+ * `addRepeatable` is idempotent (BullMQ keys by name+pattern+jobId), so
+ * calling this on every worker boot is safe.
+ */
+export async function registerDiscoveryWeeklySchedule(
+  brandId: string,
+  log: Logger,
+): Promise<void> {
+  try {
+    await addRepeatable(
+      "integrations",
+      "seo.discovery.weekly",
+      {
+        brandId,
+        idempotencyKey: buildJobId("seo.discovery.weekly", `${brandId}:weekly`),
+      },
+      "0 2 * * 1", // Monday 02:00 UTC
+    );
+    log.info({ brandId }, "seo: discovery weekly schedule registered");
+  } catch (err) {
+    log.error({ err, brandId }, "seo: failed to register discovery weekly schedule");
+  }
+}
 
 /**
  * Boot-time reconciliation: read every active `crawl_schedules` row and

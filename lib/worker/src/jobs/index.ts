@@ -23,6 +23,7 @@ import {
   handleSeoRefreshContentContext,
   handleSeoRefreshContentContextNightly,
 } from "./seo/refresh-content-context";
+import { handleSeoDiscoveryWeekly } from "./seo/discovery-weekly";
 
 type Handler<N extends JobName> = (data: JobData<N>, log: ReturnType<typeof jobLogger>) => Promise<unknown>;
 
@@ -44,6 +45,7 @@ export const HANDLERS: { [N in JobName]: Handler<N> } = {
   "content.publish-link-keyword": handlePublishLinkKeyword,
   "seo.refresh-content-context": handleSeoRefreshContentContext,
   "seo.refresh-content-context-nightly": handleSeoRefreshContentContextNightly,
+  "seo.discovery.weekly": handleSeoDiscoveryWeekly,
 };
 
 /**

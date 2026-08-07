@@ -168,6 +168,30 @@ export const SeoRefreshContentContextPayload = BasePayload.extend({
 // snapshot is older than 7 days.
 export const SeoRefreshContentContextNightlyPayload = BasePayload.extend({});
 
+// Discovery Engine — weekly keyword candidate discovery.
+// Expands a brand's top commercial/transactional seed keywords via
+// DataForSEO Labs related_keywords, then mines curated competitor domains
+// via ranked_keywords. Surviving candidates (KD < maxKd, not already
+// tracked) are inserted as is_discovery_candidate=true / 'pending' review.
+// Also writes competitor_movements snapshots and runs the 30-day archive sweep.
+// Runs every Monday at 02:00 UTC via a BullMQ repeatable.
+export const SeoDiscoveryWeeklyPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  /** ISO week label e.g. "2026-30". Auto-set by scheduler; override for backfill. */
+  weekLabel: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/, "weekLabel must be YYYY-WW")
+    .optional(),
+  /** Max keyword difficulty (0–100) to accept as a candidate. Default 69 (KD<70). */
+  maxKd: z.number().int().min(0).max(100).default(69),
+  /** How many seed keywords to pull. Default 20 (aligns with dispatcher-approved seed set). */
+  seedLimit: z.number().int().min(1).max(50).default(20),
+  /** Max related keywords returned per seed. DataForSEO cap 1000. Default 500. */
+  relatedLimit: z.number().int().min(1).max(1000).default(500),
+  /** Max ranked keywords pulled per competitor domain. Default 200. */
+  competitorRankedLimit: z.number().int().min(1).max(1000).default(200),
+});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -236,6 +260,11 @@ export const JOB_REGISTRY = {
   "seo.refresh-content-context-nightly": {
     queue: "integrations" as QueueName,
     schema: SeoRefreshContentContextNightlyPayload,
+  },
+  // Discovery Engine — weekly keyword candidate discovery + competitor movements.
+  "seo.discovery.weekly": {
+    queue: "integrations" as QueueName,
+    schema: SeoDiscoveryWeeklyPayload,
   },
 } as const;
 
