@@ -392,16 +392,55 @@ export async function handleSeoDiscoveryWeekly(
 
     // ------------------------------------------------------------------
     // Step D — Competitor keyword mining
-    // Pull ranked keywords for each curated competitor domain, apply the
-    // same filter pipeline, and insert additional candidates.
+    //
+    // D.0  Resolve relevant competitor domains from competitor_insights
+    //      (is_relevant_competitor IS NULL = not yet reviewed = include;
+    //       is_relevant_competitor = false = explicitly excluded).
+    //      Falls back to CURATED_COMPETITORS when the DB is empty
+    //      (e.g. first run or unconfigured brand).
+    //
+    // D.1  Fetch ranked keywords per domain. Deduplicate across domains:
+    //      a keyword seen for multiple competitors keeps the first domain's
+    //      attribution (highest shared_keyword_count order from D.0).
+    //
+    // D.2  Bulk KD score competitor keywords not already in kdMap (Step B
+    //      only scored related keywords). This makes Step D's KD filter
+    //      as accurate as Step B's — same predicate, same threshold.
+    //
+    // D.3  Apply kdPassesThroughFilter; count drops.
+    // D.4  Insert candidates in batches of 500.
     // ------------------------------------------------------------------
-    let competitorCandidatesInserted = 0;
-    // KD filter tracking for Step D (competitor mining). Uses same
-    // effectiveMaxKd and same predicate as Step B for consistency.
-    let compBeforeKdFilter = 0; // total competitor keywords entering KD filter
-    let droppedCompetitor = 0;  // total dropped by KD filter across all domains
 
-    for (const domain of CURATED_COMPETITORS) {
+    // D.0 — Resolve competitor domains from DB
+    const relCompRows = (await db.execute(sql`
+      SELECT competitor_domain
+      FROM competitor_insights
+      WHERE brand_id = ${payload.brandId}::uuid
+        AND (is_relevant_competitor IS NULL OR is_relevant_competitor = true)
+      ORDER BY shared_keyword_count DESC NULLS LAST
+    `)) as unknown as
+      | { rows?: Array<{ competitor_domain: string }> }
+      | Array<{ competitor_domain: string }>;
+
+    const dbCompetitors: string[] = (
+      Array.isArray(relCompRows) ? relCompRows : (relCompRows.rows ?? [])
+    ).map((r) => r.competitor_domain).filter(Boolean);
+
+    // Fall back to compile-time curated list when the DB table is empty.
+    const competitorDomains = dbCompetitors.length > 0
+      ? dbCompetitors
+      : CURATED_COMPETITORS;
+
+    log.info(
+      { count: competitorDomains.length, source: dbCompetitors.length > 0 ? "db" : "fallback" },
+      "seo.discovery.weekly: step D.0 — competitor set resolved",
+    );
+
+    // D.1 — Fetch ranked keywords; deduplicate across domains
+    // Map: lowercased text → { original-cased text, first-attribution domain }
+    const compMap = new Map<string, { text: string; domain: string }>();
+
+    for (const domain of competitorDomains) {
       try {
         const res = await client.rankedKeywords({
           target: domain,
@@ -411,58 +450,20 @@ export async function handleSeoDiscoveryWeekly(
         });
         const items: RankedKeywordItem[] = res.tasks[0]?.result?.[0]?.items ?? [];
 
-        // Candidates after existing-keyword exclusion (pre-KD filter).
-        const compTextsAll: string[] = items
-          .map((i) => i.keyword_data?.keyword?.trim())
-          .filter(
-            (t): t is string =>
-              typeof t === "string" &&
-              t.length > 0 &&
-              !existingSet.has(t.toLowerCase()),
-          );
-
-        compBeforeKdFilter += compTextsAll.length;
-
-        // KD filter: same logic as Step B — pass-through unknown, drop KD >= threshold.
-        // Uses already-fetched kdMap (no extra API call per competitor).
-        const compCandidates = compTextsAll.filter((t) => {
-          const kd = kdMap.get(t.toLowerCase());
-          if (kd != null && kd >= effectiveMaxKd) {
-            droppedCompetitor++;
-            return false;
-          }
-          return true;
-        });
-
-        if (compCandidates.length > 0) {
-          const compRows = compCandidates.map((text) => ({
-            brandId: payload.brandId,
-            keywordText: text,
-            locationId,
-            isDiscoveryCandidate: true,
-            discoveredAt: now,
-            discoverySeedKeyword: `competitor:${domain}`,
-            candidateReviewStatus: "pending" as const,
-            difficulty: kdMap.has(text.toLowerCase())
-              ? kdMap.get(text.toLowerCase())!.toString()
-              : null,
-          }));
-
-          for (const batch of chunks(compRows, 500)) {
-            await db.insert(keywordsTable).values(batch).onConflictDoNothing();
-            competitorCandidatesInserted += batch.length;
-          }
+        let added = 0;
+        for (const item of items) {
+          const text = item.keyword_data?.keyword?.trim();
+          if (!text) continue;
+          const lower = text.toLowerCase();
+          // Skip: already tracked, already seen from another competitor
+          if (existingSet.has(lower) || compMap.has(lower)) continue;
+          compMap.set(lower, { text, domain });
+          added++;
         }
 
         log.info(
-          {
-            domain,
-            ranked: items.length,
-            beforeKdFilter: compTextsAll.length,
-            droppedKd: compTextsAll.length - compCandidates.length,
-            inserted: compCandidates.length,
-          },
-          "seo.discovery.weekly: step D — competitor mined",
+          { domain, ranked: items.length, addedUnique: added },
+          "seo.discovery.weekly: step D.1 — ranked keywords fetched",
         );
       } catch (err) {
         log.warn(
@@ -472,26 +473,112 @@ export async function handleSeoDiscoveryWeekly(
       }
     }
 
+    // D.2 — Bulk KD score competitor keywords not already in kdMap.
+    // Step B populated kdMap only for related keywords; competitor keywords
+    // need a separate scoring pass so the filter has real KD values.
+    const unscoredCompTexts = Array.from(compMap.entries())
+      .filter(([lower]) => !kdMap.has(lower))
+      .map(([, { text }]) => text);
+
+    for (const batch of chunks(unscoredCompTexts, 1000)) {
+      try {
+        const res = await client.bulkKeywordDifficulty({
+          keywords: batch,
+          locationCode,
+          languageCode,
+          dispatchContext: `${dispatchCtx}_competitor_kd`,
+        });
+        const items = res.tasks[0]?.result?.[0]?.items ?? [];
+        for (const item of items) {
+          if (item.keyword && item.keyword_difficulty != null) {
+            kdMap.set(item.keyword.toLowerCase(), item.keyword_difficulty);
+          }
+        }
+      } catch (err) {
+        log.warn(
+          { batchSize: batch.length, err: (err as Error).message },
+          "seo.discovery.weekly: bulkKeywordDifficulty (competitor) failed — continuing without KD for batch",
+        );
+      }
+    }
+
+    log.info(
+      { unscored: unscoredCompTexts.length, kdMapSize: kdMap.size },
+      "seo.discovery.weekly: step D.2 — competitor KD scoring complete",
+    );
+
+    // D.3 — Apply KD filter using the same predicate as Step B
+    const compBeforeKdFilter = compMap.size;
+    let droppedCompetitor = 0;
+
+    const compCandidates: Array<{ text: string; domain: string; difficulty: string | null }> = [];
+    for (const [lower, { text, domain }] of compMap) {
+      const kd = kdMap.get(lower);
+      if (!kdPassesThroughFilter(kd, effectiveMaxKd)) {
+        droppedCompetitor++;
+        continue;
+      }
+      compCandidates.push({
+        text,
+        domain,
+        difficulty: kd != null ? kd.toString() : null,
+      });
+    }
+
+    log.info(
+      {
+        beforeKdFilter: compBeforeKdFilter,
+        afterKdFilter: compCandidates.length,
+        droppedKd: droppedCompetitor,
+        threshold: effectiveMaxKd,
+      },
+      "seo.discovery.weekly: step D.3 — KD filter applied to competitor keywords",
+    );
+
+    // D.4 — Insert candidates
+    let competitorCandidatesInserted = 0;
+    for (const batch of chunks(compCandidates, 500)) {
+      const rows = batch.map(({ text, domain, difficulty }) => ({
+        brandId: payload.brandId,
+        keywordText: text,
+        locationId,
+        isDiscoveryCandidate: true,
+        discoveredAt: now,
+        discoverySeedKeyword: `competitor:${domain}`,
+        candidateReviewStatus: "pending" as const,
+        difficulty,
+      }));
+      await db.insert(keywordsTable).values(rows).onConflictDoNothing();
+      competitorCandidatesInserted += rows.length;
+    }
+
+    log.info(
+      { competitorCandidatesInserted },
+      "seo.discovery.weekly: step D complete — competitor candidates inserted",
+    );
+
     // ------------------------------------------------------------------
     // Step E — competitor_movements snapshot
-    // For each curated competitor, write one row for this week.
-    // keywords_common = brand's tracked keywords that overlap with the
-    // competitor's known shared_keyword_count from competitor_insights.
+    // For each relevant competitor, write one row for this week.
+    // Uses competitorDomains (DB-resolved) — not the hard-coded fallback —
+    // so curation changes take effect on the next run.
     // ------------------------------------------------------------------
     let competitorMovementsWritten = 0;
 
-    // Fetch current competitor_insights rows for the curated set
-    const insightRows = (await db.execute(sql`
-      SELECT competitor_domain, shared_keyword_count
-      FROM competitor_insights
-      WHERE brand_id = ${payload.brandId}::uuid
-        AND competitor_domain = ANY(ARRAY[${sql.join(
-          CURATED_COMPETITORS.map((d) => sql`${d}`),
-          sql`, `,
-        )}])
-    `)) as unknown as
-      | { rows?: Array<{ competitor_domain: string; shared_keyword_count: number }> }
-      | Array<{ competitor_domain: string; shared_keyword_count: number }>;
+    // Fetch current competitor_insights rows for the active set
+    const insightRows = competitorDomains.length > 0
+      ? (await db.execute(sql`
+          SELECT competitor_domain, shared_keyword_count
+          FROM competitor_insights
+          WHERE brand_id = ${payload.brandId}::uuid
+            AND competitor_domain = ANY(ARRAY[${sql.join(
+              competitorDomains.map((d) => sql`${d}`),
+              sql`, `,
+            )}])
+        `)) as unknown as
+          | { rows?: Array<{ competitor_domain: string; shared_keyword_count: number }> }
+          | Array<{ competitor_domain: string; shared_keyword_count: number }>
+      : [];
 
     const insightMap = new Map<string, number>(
       (Array.isArray(insightRows) ? insightRows : (insightRows.rows ?? []))
@@ -499,18 +586,20 @@ export async function handleSeoDiscoveryWeekly(
     );
 
     // Fetch last week's movements to compute delta + is_new
-    const prevWeekRows = (await db.execute(sql`
-      SELECT competitor_domain, keywords_common
-      FROM competitor_movements
-      WHERE brand_id = ${payload.brandId}::uuid
-        AND competitor_domain = ANY(ARRAY[${sql.join(
-          CURATED_COMPETITORS.map((d) => sql`${d}`),
-          sql`, `,
-        )}])
-      ORDER BY captured_at DESC
-    `)) as unknown as
-      | { rows?: Array<{ competitor_domain: string; keywords_common: number }> }
-      | Array<{ competitor_domain: string; keywords_common: number }>;
+    const prevWeekRows = competitorDomains.length > 0
+      ? (await db.execute(sql`
+          SELECT competitor_domain, keywords_common
+          FROM competitor_movements
+          WHERE brand_id = ${payload.brandId}::uuid
+            AND competitor_domain = ANY(ARRAY[${sql.join(
+              competitorDomains.map((d) => sql`${d}`),
+              sql`, `,
+            )}])
+          ORDER BY captured_at DESC
+        `)) as unknown as
+          | { rows?: Array<{ competitor_domain: string; keywords_common: number }> }
+          | Array<{ competitor_domain: string; keywords_common: number }>
+      : [];
 
     const prevMap = new Map<string, number>();
     for (const row of (Array.isArray(prevWeekRows) ? prevWeekRows : (prevWeekRows.rows ?? []))) {
@@ -519,7 +608,7 @@ export async function handleSeoDiscoveryWeekly(
       }
     }
 
-    const movementRows = CURATED_COMPETITORS.map((domain) => {
+    const movementRows = competitorDomains.map((domain) => {
       const keywordsCommon = insightMap.get(domain) ?? 0;
       const prev = prevMap.get(domain);
       return {
@@ -560,6 +649,7 @@ export async function handleSeoDiscoveryWeekly(
         candidate_review_status = 'archived',
         candidate_reviewed_at   = now()
       WHERE brand_id = ${payload.brandId}::uuid
+        AND is_discovery_candidate = true
         AND candidate_review_status = 'pending'
         AND discovered_at < now() - INTERVAL '30 days'
     `)) as unknown as { rowCount?: number; count?: number };

@@ -57,7 +57,8 @@ export async function guardBrand(
   return { ok: true, brandId, userId: req.auth.userId };
 }
 
-/** Uniform 500 handler — log with context, return a clean body. */
+/** Uniform 500 handler — logs full error server-side; returns a generic
+ * body to the client to avoid leaking schema or infrastructure details. */
 export function fail(
   res: Response,
   req: Request,
@@ -65,7 +66,8 @@ export function fail(
   err: unknown,
 ): void {
   req.log.error({ err }, `seo: ${scope} failed`);
-  res
-    .status(500)
-    .json({ error: "internal_error", message: (err as Error).message });
+  res.status(500).json({
+    error: "internal_error",
+    message: "An internal error occurred. Please try again or contact support.",
+  });
 }
