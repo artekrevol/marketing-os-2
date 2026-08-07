@@ -19,7 +19,7 @@ const log = pino({
 const BRAND_ID = "2d10bb54-ba9a-4444-8a18-a262bca9b2bc"; // TekRevol
 const WEEK = isoWeekLabel(new Date());
 // Use a test-suffixed idempotency key so this run doesn't block the real Monday schedule.
-const IDEM_KEY = `seo-discovery-weekly:${BRAND_ID}-${WEEK}-manual`;
+const IDEM_KEY = `seo-discovery-weekly:${BRAND_ID}-${WEEK}-manual-v2`;
 
 log.info({ brandId: BRAND_ID, week: WEEK, idempotencyKey: IDEM_KEY }, "manual-discovery-run: starting");
 

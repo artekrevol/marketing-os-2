@@ -38,6 +38,47 @@ const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
 const jitter = (n: number) => n + Math.floor(Math.random() * 200);
 
+/**
+ * Minimal shape needed to inspect task-level status codes.
+ * DataForSEO wraps billing/auth errors in HTTP 200 envelopes where the
+ * outer status_code is 20000 but individual tasks carry the real error code.
+ * Without this check the caller sees empty `result: null` → `items ?? []`
+ * and has no way to distinguish "no keywords" from "account balance zero".
+ */
+type DfsTaskCheckable = {
+  tasks_error?: number;
+  tasks?: Array<{ status_code: number; status_message: string }>;
+};
+
+/**
+ * Throws a DataForSEOError when any task in the response carries a
+ * non-20000 status code.  Called immediately after schema.parse() so the
+ * error surfaces before callers interpret empty results as real data.
+ *
+ * Retry policy per task code:
+ *   40200 Payment Required  → non-retriable (account-level; retrying wastes budget)
+ *   40101 Unauthorized      → non-retriable (credentials wrong)
+ *   5xxxx Server error      → retriable
+ *   other 4xxxx             → non-retriable (bad request, plan limit, etc.)
+ */
+function assertTasksOk(endpoint: string, parsed: DfsTaskCheckable): void {
+  if (!parsed.tasks_error || parsed.tasks_error === 0) return;
+  const failed = parsed.tasks?.find((t) => t.status_code !== 20000);
+  const code = failed?.status_code ?? 0;
+  const msg = failed?.status_message ?? "unknown task error";
+  const retriable = code >= 50000; // server-side errors only
+  const hint =
+    code === 40200
+      ? " — account balance is insufficient; top up at app.dataforseo.com"
+      : code === 40101
+        ? " — check DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD credentials"
+        : "";
+  throw new DataForSEOError(
+    `DataForSEO ${endpoint} task ${code}: ${msg}${hint}`,
+    { endpoint, retriable, responseBody: { taskStatusCode: code } },
+  );
+}
+
 export interface DataForSEOClientOpts {
   login?: string;
   password?: string;
@@ -156,21 +197,26 @@ export class DataForSEOClient {
 
         const json = (await res.json()) as unknown;
         if (!res.ok) {
+          const hint =
+            res.status === 402
+              ? " — account balance is insufficient; top up at app.dataforseo.com"
+              : "";
           await this.logCall({
             endpoint,
             status: "error",
             httpStatus: res.status,
             durationMs: Date.now() - start,
             requestMeta: { keyword: req.keyword },
-            errorMessage: `HTTP ${res.status}`,
+            errorMessage: `HTTP ${res.status}${hint}`,
           });
           throw new DataForSEOError(
-            `DataForSEO ${endpoint} failed: ${res.status}`,
+            `DataForSEO ${endpoint} failed: ${res.status}${hint}`,
             { httpStatus: res.status, endpoint, retriable: false, responseBody: json },
           );
         }
 
         const parsed = SerpResponseSchema.parse(json);
+        assertTasksOk(endpoint, parsed);
         await this.logCall({
           endpoint,
           status: "ok",
@@ -270,21 +316,26 @@ export class DataForSEOClient {
 
         const json = (await res.json()) as unknown;
         if (!res.ok) {
+          const hint402 =
+            res.status === 402
+              ? " — account balance is insufficient; top up at app.dataforseo.com"
+              : "";
           await this.logCall({
             endpoint,
             status: "error",
             httpStatus: res.status,
             durationMs: Date.now() - start,
             requestMeta,
-            errorMessage: `HTTP ${res.status}`,
+            errorMessage: `HTTP ${res.status}${hint402}`,
           });
           throw new DataForSEOError(
-            `DataForSEO ${endpoint} failed: ${res.status}`,
+            `DataForSEO ${endpoint} failed: ${res.status}${hint402}`,
             { httpStatus: res.status, endpoint, retriable: false, responseBody: json },
           );
         }
 
         const parsed = schema.parse(json);
+        assertTasksOk(endpoint, parsed as DfsTaskCheckable);
         await this.logCall({
           endpoint,
           status: "ok",
