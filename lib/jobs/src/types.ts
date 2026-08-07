@@ -182,8 +182,13 @@ export const SeoDiscoveryWeeklyPayload = BasePayload.extend({
     .string()
     .regex(/^\d{4}-\d{2}$/, "weekLabel must be YYYY-WW")
     .optional(),
-  /** Max keyword difficulty (0–100) to accept as a candidate. Default 69 (KD<70). */
-  maxKd: z.number().int().min(0).max(100).default(69),
+  /**
+   * Max keyword difficulty score (0–100) accepted as a candidate (exclusive upper bound:
+   * drop KD ≥ maxKd). Defaults to 70, matching env var DISCOVERY_KD_FILTER_MAX.
+   * Pass explicitly to override for backfill runs. The env var takes precedence over
+   * this default at runtime (operator-level tuning without code changes).
+   */
+  maxKd: z.number().int().min(0).max(100).default(70),
   /** How many seed keywords to pull. Default 20 (aligns with dispatcher-approved seed set). */
   seedLimit: z.number().int().min(1).max(50).default(20),
   /** Max related keywords returned per seed. DataForSEO cap 1000. Default 500. */

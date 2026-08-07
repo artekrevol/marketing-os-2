@@ -47,6 +47,21 @@ const CURATED_COMPETITORS = [
   "appwrk.com",
 ];
 
+export interface KdFilterStats {
+  /** Total candidates entering the KD filter (Step B + Step D combined). */
+  candidatesBeforeKdFilter: number;
+  /** Total candidates surviving the KD filter (Step B + Step D combined). */
+  candidatesAfterKdFilter: number;
+  /** Dropped in Step B (related-keywords expansion). */
+  droppedRelatedKeywordsStep: number;
+  /** Dropped in Step D (competitor keyword mining). */
+  droppedCompetitorMiningStep: number;
+  /** Effective threshold used (exclusive upper bound: drop KD ≥ threshold). */
+  threshold: number;
+  /** (before − after) / before, expressed as a percentage (0–100, 2 dp). */
+  dropRatePct: number;
+}
+
 export interface DiscoveryWeeklyResult {
   weekLabel: string;
   seedsExpanded: number;
@@ -58,6 +73,7 @@ export interface DiscoveryWeeklyResult {
   competitorCandidatesInserted: number;
   competitorMovementsWritten: number;
   archivedStale: number;
+  kdFilterStats: KdFilterStats;
   duplicate?: true;
 }
 
@@ -89,18 +105,38 @@ export async function handleSeoDiscoveryWeekly(
       competitorCandidatesInserted: 0,
       competitorMovementsWritten: 0,
       archivedStale: 0,
+      kdFilterStats: {
+        candidatesBeforeKdFilter: 0,
+        candidatesAfterKdFilter: 0,
+        droppedRelatedKeywordsStep: 0,
+        droppedCompetitorMiningStep: 0,
+        threshold: payload.maxKd,
+        dropRatePct: 0,
+      },
       duplicate: true,
     };
   }
 
   const weekLabel = payload.weekLabel ?? isoWeekLabel(new Date());
   const dispatchCtx = `discovery_week_${weekLabel}`;
-  const maxKd = payload.maxKd;
+
+  // Resolve effective KD threshold. DISCOVERY_KD_FILTER_MAX env var takes
+  // precedence at runtime (operator-level tuning without code changes).
+  // Explicit payload.maxKd is used as fallback when the env var is absent.
+  const envKdRaw = process.env["DISCOVERY_KD_FILTER_MAX"];
+  const effectiveMaxKd: number =
+    envKdRaw != null && /^\d+$/.test(envKdRaw)
+      ? Math.min(100, Math.max(0, parseInt(envKdRaw, 10)))
+      : payload.maxKd;
+
   const seedLimit = payload.seedLimit;
   const relatedLimit = payload.relatedLimit;
   const competitorRankedLimit = payload.competitorRankedLimit;
 
-  log.info({ weekLabel, dispatchCtx, maxKd, seedLimit }, "seo.discovery.weekly: starting");
+  log.info(
+    { weekLabel, dispatchCtx, effectiveMaxKd, envKdRaw, seedLimit },
+    "seo.discovery.weekly: starting",
+  );
 
   return withBrandScope(payload.brandId, async ({ db, scoped }) => {
     const client = new DataForSEOClient({ brandId: payload.brandId });
@@ -222,17 +258,26 @@ export async function handleSeoDiscoveryWeekly(
       }
     }
 
-    // Filter: keep KD < maxKd (or unknown KD — let it through, reviewer decides)
+    // Filter: keep KD < effectiveMaxKd (unknown KD passes through — reviewer decides).
+    // Drop KD >= effectiveMaxKd: high-difficulty keywords unlikely to be winnable
+    // and waste reviewer attention. Threshold is operator-configurable via
+    // DISCOVERY_KD_FILTER_MAX env var; defaults to 70.
     const afterKdFilter: RawCandidate[] = [];
     for (const [key, candidate] of rawMap) {
       const kd = kdMap.get(key);
-      if (kd == null || kd < maxKd) {
+      if (kd == null || kd < effectiveMaxKd) {
         afterKdFilter.push(candidate);
       }
     }
+    const droppedRelated = rawCandidates - afterKdFilter.length;
 
     log.info(
-      { afterDedup: rawCandidates, afterKdFilter: afterKdFilter.length },
+      {
+        afterDedup: rawCandidates,
+        afterKdFilter: afterKdFilter.length,
+        droppedRelated,
+        threshold: effectiveMaxKd,
+      },
       "seo.discovery.weekly: step B complete",
     );
 
@@ -304,6 +349,10 @@ export async function handleSeoDiscoveryWeekly(
     // same filter pipeline, and insert additional candidates.
     // ------------------------------------------------------------------
     let competitorCandidatesInserted = 0;
+    // KD filter tracking for Step D (competitor mining). Uses same
+    // effectiveMaxKd and same predicate as Step B for consistency.
+    let compBeforeKdFilter = 0; // total competitor keywords entering KD filter
+    let droppedCompetitor = 0;  // total dropped by KD filter across all domains
 
     for (const domain of CURATED_COMPETITORS) {
       try {
@@ -315,15 +364,27 @@ export async function handleSeoDiscoveryWeekly(
         });
         const items: RankedKeywordItem[] = res.tasks[0]?.result?.[0]?.items ?? [];
 
-        const compTexts: string[] = items
+        // Candidates after existing-keyword exclusion (pre-KD filter).
+        const compTextsAll: string[] = items
           .map((i) => i.keyword_data?.keyword?.trim())
-          .filter((t): t is string => typeof t === "string" && t.length > 0 && !existingSet.has(t.toLowerCase()));
+          .filter(
+            (t): t is string =>
+              typeof t === "string" &&
+              t.length > 0 &&
+              !existingSet.has(t.toLowerCase()),
+          );
 
-        // KD filter for competitor keywords (best-effort; not batching separately
-        // to avoid extra API cost — use already-fetched kdMap, pass-through unknown)
-        const compCandidates = compTexts.filter((t) => {
+        compBeforeKdFilter += compTextsAll.length;
+
+        // KD filter: same logic as Step B — pass-through unknown, drop KD >= threshold.
+        // Uses already-fetched kdMap (no extra API call per competitor).
+        const compCandidates = compTextsAll.filter((t) => {
           const kd = kdMap.get(t.toLowerCase());
-          return kd == null || kd < maxKd;
+          if (kd != null && kd >= effectiveMaxKd) {
+            droppedCompetitor++;
+            return false;
+          }
+          return true;
         });
 
         if (compCandidates.length > 0) {
@@ -347,7 +408,13 @@ export async function handleSeoDiscoveryWeekly(
         }
 
         log.info(
-          { domain, ranked: items.length, inserted: compCandidates.length },
+          {
+            domain,
+            ranked: items.length,
+            beforeKdFilter: compTextsAll.length,
+            droppedKd: compTextsAll.length - compCandidates.length,
+            inserted: compCandidates.length,
+          },
           "seo.discovery.weekly: step D — competitor mined",
         );
       } catch (err) {
@@ -463,8 +530,28 @@ export async function handleSeoDiscoveryWeekly(
     );
 
     // ------------------------------------------------------------------
-    // Step G — success event
+    // Step G — success event + completion summary
     // ------------------------------------------------------------------
+
+    // KD filter stats: combine Step B (related keywords) and Step D (competitor mining).
+    // Unknown-KD keywords pass through in both steps — this is intentional and transparent.
+    const totalBeforeKdFilter = rawCandidates + compBeforeKdFilter;
+    const totalAfterKdFilter = afterKdFilter.length + (compBeforeKdFilter - droppedCompetitor);
+    const totalDropped = droppedRelated + droppedCompetitor;
+    const dropRatePct =
+      totalBeforeKdFilter > 0
+        ? Math.round((totalDropped / totalBeforeKdFilter) * 10_000) / 100
+        : 0;
+
+    const kdFilterStats: KdFilterStats = {
+      candidatesBeforeKdFilter: totalBeforeKdFilter,
+      candidatesAfterKdFilter: totalAfterKdFilter,
+      droppedRelatedKeywordsStep: droppedRelated,
+      droppedCompetitorMiningStep: droppedCompetitor,
+      threshold: effectiveMaxKd,
+      dropRatePct,
+    };
+
     const result: DiscoveryWeeklyResult = {
       weekLabel,
       seedsExpanded: seeds.length,
@@ -476,6 +563,7 @@ export async function handleSeoDiscoveryWeekly(
       competitorCandidatesInserted,
       competitorMovementsWritten,
       archivedStale,
+      kdFilterStats,
     };
 
     await db.insert(eventsTable).values({
@@ -486,10 +574,36 @@ export async function handleSeoDiscoveryWeekly(
       payload: {
         idempotencyKey: payload.idempotencyKey,
         ...result,
+        // Dispatcher-requested metadata key for drop analysis.
+        candidates_dropped_kd_filter: {
+          related_keywords_step: droppedRelated,
+          competitor_mining_step: droppedCompetitor,
+          threshold: effectiveMaxKd,
+        },
       },
     });
 
-    log.info(result, "seo.discovery.weekly: done");
+    // Completion summary — one log line with the KD filter signal.
+    // Drop rate > 40% consistently → adjust threshold (dispatcher spec).
+    log.info(
+      {
+        ...result,
+        "kd_filter_summary": {
+          total_before: totalBeforeKdFilter,
+          total_after: totalAfterKdFilter,
+          drop_rate_pct: dropRatePct,
+          threshold: effectiveMaxKd,
+          high_drop_rate_alert: dropRatePct > 40,
+        },
+      },
+      [
+        `seo.discovery.weekly: done`,
+        `  Total candidates before KD filter: ${totalBeforeKdFilter}`,
+        `  Candidates after KD filter: ${totalAfterKdFilter}`,
+        `  Drop rate: ${dropRatePct}%${dropRatePct > 40 ? " ⚠ exceeds 40% — consider raising threshold" : ""}`,
+      ].join("\n"),
+    );
+
     return result;
   });
 }
