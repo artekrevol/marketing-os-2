@@ -883,16 +883,17 @@ export const seo = {
 
   listBacklinks: async (
     brandId: string,
-    params: { isLost?: string; isSpam?: string; minDr?: number; search?: string; limit?: number; offset?: number },
+    params: { isLost?: string; isSpam?: string; isNofollow?: string; minDr?: number; search?: string; limit?: number; offset?: number },
   ) =>
     jsonOrThrow<{ stats: Record<string, number>; backlinks: unknown[]; limit: number; offset: number }>(
       await authedFetch(
         `/api/seo/backlinks?${qs(brandId, {
-          ...(params.isLost !== undefined && { isLost: params.isLost }),
-          ...(params.isSpam !== undefined && { isSpam: params.isSpam }),
-          ...(params.minDr !== undefined && { minDr: String(params.minDr) }),
+          ...(params.isLost      !== undefined && { isLost:     params.isLost }),
+          ...(params.isSpam      !== undefined && { isSpam:     params.isSpam }),
+          ...(params.isNofollow  !== undefined && { isNofollow: params.isNofollow }),
+          ...(params.minDr       !== undefined && { minDr:      String(params.minDr) }),
           ...(params.search && { search: params.search }),
-          limit: String(params.limit ?? 50),
+          limit:  String(params.limit  ?? 50),
           offset: String(params.offset ?? 0),
         })}`,
       ),

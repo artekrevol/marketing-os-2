@@ -67,8 +67,9 @@ function BacklinksInner({ brandId }: { brandId: string }) {
   const LIMIT = 50;
 
   const queryParams = {
-    isLost: filter === "lost" ? "true" : filter === "active" ? "false" : undefined,
-    isSpam: filter === "spam" ? "true" : undefined,
+    isLost:     filter === "lost"     ? "true" : filter === "active" ? "false" : undefined,
+    isSpam:     filter === "spam"     ? "true" : undefined,
+    isNofollow: filter === "nofollow" ? "true" : undefined,
     search: debouncedSearch || undefined,
     limit: LIMIT,
     offset,

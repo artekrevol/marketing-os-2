@@ -3,6 +3,7 @@ import {
   uuid,
   text,
   integer,
+  bigint,
   numeric,
   boolean,
   timestamp,
@@ -82,12 +83,18 @@ export const ahrefsBacklinksTable = pgTable(
     dr: numeric("dr", { precision: 5, scale: 2 }),
     /** URL Rating of referring page. */
     ur: numeric("ur", { precision: 5, scale: 2 }),
-    /** Organic traffic to the referring domain. */
-    domainTraffic: integer("domain_traffic"),
+    /** Organic traffic to the referring domain (bigint: top domains exceed 2.1B). */
+    domainTraffic: bigint("domain_traffic", { mode: "number" }),
     /** Organic traffic to the referring page. */
-    pageTraffic: integer("page_traffic"),
+    pageTraffic: bigint("page_traffic", { mode: "number" }),
     /** Target URL on our site that is being linked to. */
     targetUrl: text("target_url"),
+    /**
+     * HTTP status of our target page as reported by the Ahrefs BrokenBacklinks
+     * export ("Target page HTTP code").  Null for normal backlink rows.
+     * Populated by the BrokenBacklinks file type ingestion.
+     */
+    targetHttpCode: integer("target_http_code"),
     anchor: text("anchor"),
     leftContext: text("left_context"),
     rightContext: text("right_context"),

@@ -186,7 +186,7 @@ function BrokenLinksPanel({ data }: { data: AhrefsSummary }) {
         <span className="text-xs font-medium uppercase tracking-wide text-ink-muted">Broken Links</span>
         {links.length > 0 && (
           <span className="ml-auto bg-amber-100 text-amber-700 text-[10px] font-medium px-1.5 py-0.5 rounded-full">
-            {links.length} DR 70+
+            {links.length} DR 40+
           </span>
         )}
       </div>
@@ -195,7 +195,7 @@ function BrokenLinksPanel({ data }: { data: AhrefsSummary }) {
       ) : (
         <div className="flex-1">
           <p className="text-xs text-ink-muted mb-2">
-            {links.length} backlinks from DR 70+ domains point to broken targets.
+            {links.length} backlinks from DR 40+ domains point to broken targets.
           </p>
           <ul className="space-y-1">
             {uniqueDomains.map((d) => (

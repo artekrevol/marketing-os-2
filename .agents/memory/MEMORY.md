@@ -4,3 +4,4 @@
 - [Surgical rewrite live offenders](surgical-rewrite-live-offenders.md) — final-stitch per-paragraph nets must recompute offenders from LIVE stitched, not plan-time snapshots; a para hit by two nets silently no-ops the second.
 - [Ahrefs MCP integration](ahrefs-mcp-integration.md) — StreamableHTTP only; forced-tool draft-section blocks Ahrefs tool calls; AHREFS_TOOL_NAME_SET must be Set<string> not narrow union.
 - [Ahrefs REST v3 field names](ahrefs-rest-api-fields.md) — confirmed column names, response keys, and quirks per endpoint; field errors return available columns list in 400 body.
+- [Ahrefs real-data ingestion](ahrefs-real-data-ingestion.md) — real XLSX column names, bigint overflow for traffic cols, is_lost date quirk, intents CSV parsing, drizzle sql[] binding bug, broken-link evidence strategy.

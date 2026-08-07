@@ -52,27 +52,20 @@ router.get("/ahrefs/summary", async (req, res) => {
           ORDER BY traffic_change ASC
           LIMIT 5
         `),
-        exec<{ referring_page_url: string; target_url: string; dr: string; anchor: string; domain: string }>(sql`
-          -- "Broken" = backlink whose target page on our site has a non-Active/non-200 status
-          -- (e.g. 404, "Not found") as reported in the Top Pages / Broken Backlinks export.
-          -- We join ahrefs_backlinks → ahrefs_page_performance on target_url.
-          -- If no page-performance data has been ingested yet the set is empty, which is
-          -- correct: we cannot claim a page is broken without evidence.
+        exec<{ referring_page_url: string; target_url: string; dr: string; anchor: string; target_http_code: number; domain: string }>(sql`
+          -- "Broken" = backlink whose target URL returned a 4xx/5xx HTTP code,
+          -- as reported directly by the Ahrefs BrokenBacklinks export
+          -- ("Target page HTTP code" column → target_http_code on the row).
+          -- No join to ahrefs_page_performance needed: the evidence is on the backlink row.
           SELECT b.referring_page_url, b.target_url, b.dr, b.anchor,
+                 b.target_http_code,
                  split_part(b.referring_page_url, '/', 3) AS domain
           FROM ahrefs_backlinks b
-          INNER JOIN ahrefs_page_performance pp
-                  ON pp.brand_id = b.brand_id
-                 AND pp.url      = b.target_url
           WHERE b.brand_id = ${guard.brandId}::uuid
-            AND b.is_lost   = false
+            AND b.is_lost  = false
             AND b.target_url IS NOT NULL
-            AND pp.status IS NOT NULL
-            AND (
-              (pp.status ~ '^\d+$' AND pp.status::int BETWEEN 400 AND 599)
-              OR pp.status ILIKE 'not found'
-              OR pp.status ILIKE '%broken%'
-            )
+            AND b.target_http_code BETWEEN 400 AND 599
+            AND b.dr::numeric >= 40
           ORDER BY b.dr::numeric DESC NULLS LAST
           LIMIT 20
         `),
@@ -118,9 +111,10 @@ router.get("/backlinks", async (req, res) => {
   const guard = await guardBrand(req, req.query["brandId"]);
   if (!guard.ok) { res.status(guard.status).json({ error: guard.error }); return; }
   try {
-    const isLost = req.query["isLost"];
-    const isSpam = req.query["isSpam"];
-    const minDr  = req.query["minDr"];
+    const isLost     = req.query["isLost"];
+    const isSpam     = req.query["isSpam"];
+    const isNofollow = req.query["isNofollow"];
+    const minDr      = req.query["minDr"];
     const search = req.query["search"];
     const limit  = Math.min(Number(req.query["limit"] ?? 50), 200);
     const offset = Number(req.query["offset"] ?? 0);
@@ -156,7 +150,8 @@ router.get("/backlinks", async (req, res) => {
           FROM ahrefs_backlinks
           WHERE brand_id = ${guard.brandId}::uuid
             ${isLost === "true" ? sql`AND is_lost = true` : isLost === "false" ? sql`AND is_lost = false` : sql``}
-            ${isSpam === "true" ? sql`AND is_spam = true` : sql``}
+            ${isSpam === "true"     ? sql`AND is_spam = true`     : sql``}
+            ${isNofollow === "true" ? sql`AND is_nofollow = true` : sql``}
             ${minDr ? sql`AND dr::numeric >= ${Number(minDr)}` : sql``}
             ${search ? sql`AND (referring_page_url ILIKE ${"%" + String(search) + "%"} OR anchor ILIKE ${"%" + String(search) + "%"})` : sql``}
           ORDER BY dr::numeric DESC NULLS LAST, referring_page_url
@@ -189,24 +184,15 @@ router.get("/backlinks/broken", async (req, res) => {
       const r = (await db.execute(sql`
         SELECT
           b.id::text, b.referring_page_url, b.referring_page_title,
-          b.dr, b.ur, b.anchor, b.target_url, b.link_type,
+          b.dr, b.ur, b.anchor, b.target_url, b.target_http_code, b.link_type,
           b.first_seen, b.last_seen,
-          pp.status AS target_status,
           split_part(b.referring_page_url, '/', 3) AS referring_domain
         FROM ahrefs_backlinks b
-        INNER JOIN ahrefs_page_performance pp
-                ON pp.brand_id = b.brand_id
-               AND pp.url      = b.target_url
         WHERE b.brand_id = ${guard.brandId}::uuid
-          AND b.is_lost   = false
+          AND b.is_lost  = false
           AND b.target_url IS NOT NULL
+          AND b.target_http_code BETWEEN 400 AND 599
           AND b.dr::numeric >= 40
-          AND pp.status IS NOT NULL
-          AND (
-            (pp.status ~ '^\d+$' AND pp.status::int BETWEEN 400 AND 599)
-            OR pp.status ILIKE 'not found'
-            OR pp.status ILIKE '%broken%'
-          )
         ORDER BY b.dr::numeric DESC NULLS LAST
         LIMIT 200
       `)) as unknown as { rows?: unknown[] } | unknown[];
@@ -232,24 +218,17 @@ router.get("/backlinks/broken/export", async (req, res) => {
     const rows = await withBrandScope(guard.brandId, async ({ db }) => {
       const r = (await db.execute(sql`
         SELECT
-          pp.url            AS broken_url,
-          pp.status         AS target_status,
-          COUNT(b.id)::int  AS backlink_count,
-          MAX(b.dr::numeric) AS max_dr
-        FROM ahrefs_page_performance pp
-        INNER JOIN ahrefs_backlinks b
-                ON b.brand_id   = pp.brand_id
-               AND b.target_url = pp.url
-               AND b.is_lost    = false
-        WHERE pp.brand_id = ${guard.brandId}::uuid
+          b.target_url          AS broken_url,
+          b.target_http_code::text AS target_status,
+          COUNT(b.id)::int      AS backlink_count,
+          MAX(b.dr::numeric)    AS max_dr
+        FROM ahrefs_backlinks b
+        WHERE b.brand_id = ${guard.brandId}::uuid
+          AND b.is_lost  = false
+          AND b.target_url IS NOT NULL
+          AND b.target_http_code BETWEEN 400 AND 599
           AND b.dr::numeric >= 40
-          AND pp.status IS NOT NULL
-          AND (
-            (pp.status ~ '^\d+$' AND pp.status::int BETWEEN 400 AND 599)
-            OR pp.status ILIKE 'not found'
-            OR pp.status ILIKE '%broken%'
-          )
-        GROUP BY pp.url, pp.status
+        GROUP BY b.target_url, b.target_http_code
         ORDER BY max_dr DESC NULLS LAST
       `)) as unknown as { rows?: Array<{ broken_url: string; target_status: string; backlink_count: number; max_dr: number }> }
            | Array<{ broken_url: string; target_status: string; backlink_count: number; max_dr: number }>;

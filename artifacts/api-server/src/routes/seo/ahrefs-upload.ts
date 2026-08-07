@@ -54,6 +54,33 @@ function readXlsx(buf: Buffer): Record<string, unknown>[] {
   return XLSX.utils.sheet_to_json(ws, { defval: null }) as Record<string, unknown>[];
 }
 
+/**
+ * Validate that a parsed XLSX row set contains all required column headers.
+ * Returns a descriptive error string if any are missing, or null if OK.
+ */
+function validateHeaders(
+  rows: Record<string, unknown>[],
+  required: string[],
+  fileLabel: string,
+): string | null {
+  if (rows.length === 0) return `${fileLabel}: file is empty`;
+  const present = new Set(Object.keys(rows[0]!));
+  const missing = required.filter((h) => !present.has(h));
+  if (missing.length > 0) {
+    return `${fileLabel}: missing required columns: ${missing.join(", ")}`;
+  }
+  return null;
+}
+
+const REQUIRED_HEADERS: Record<string, string[]> = {
+  backlinks:       ["Referring page URL", "Domain rating", "Target URL"],
+  broken_backlinks:["Referring page URL", "Domain rating", "Target URL", "Target page HTTP code"],
+  anchors:         ["Anchor text", "Ref. domains", "Ref. pages"],
+  top_pages:       ["URL", "Current traffic"],
+  content_gap:     ["Keyword", "Volume", "KD"],
+  organic_keywords:["Keyword"],
+};
+
 /** Detect which Ahrefs export a file is by its name */
 function detectFileType(filename: string): string | null {
   const n = filename.toLowerCase();
@@ -85,16 +112,22 @@ async function ingestBacklinks(
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK);
     for (const row of chunk) {
+      // "Lost" column contains a date string when lost, null when still active.
+      // safeBool() on a date string incorrectly returns false, so check for non-null instead.
       const isLost = brokenOnly
         ? false // broken backlinks aren't "lost" — they point to dead pages on our side
-        : safeBool(row["Lost"]);
-      const lostAt = isLost ? parseDate(row["Last seen"]) : null;
+        : row["Lost"] != null;
+      const lostAt = isLost ? parseDate(row["Lost"]) : null;
+
+      // target_http_code comes from BrokenBacklinks export ("Target page HTTP code").
+      // For normal Backlinks rows this is null; preserve any existing value on conflict.
+      const targetHttpCode = brokenOnly ? safeInt(row["Target page HTTP code"]) : null;
 
       await dbExec(sql`
         INSERT INTO ahrefs_backlinks
           (brand_id, import_batch_id, referring_page_url, referring_page_title,
            language, platform, referring_page_http_code, dr, ur, domain_traffic,
-           page_traffic, target_url, anchor, left_context, right_context,
+           page_traffic, target_url, target_http_code, anchor, left_context, right_context,
            link_type, is_nofollow, is_spam, is_ugc, is_sponsored,
            is_lost, drop_reason, first_seen, last_seen, lost_at, page_type, author,
            created_at, updated_at)
@@ -110,6 +143,7 @@ async function ingestBacklinks(
           ${safeInt(row["Domain traffic"])},
           ${safeInt(row["Page traffic"])},
           ${safeStr(row["Target URL"])},
+          ${targetHttpCode},
           ${safeStr(row["Anchor"])},
           ${safeStr(row["Left context"])},
           ${safeStr(row["Right context"])},
@@ -136,6 +170,9 @@ async function ingestBacklinks(
           domain_traffic    = EXCLUDED.domain_traffic,
           page_traffic      = EXCLUDED.page_traffic,
           target_url        = EXCLUDED.target_url,
+          -- Preserve an existing target_http_code from a BrokenBacklinks upload
+          -- if the current row (a normal Backlinks row) doesn't carry one.
+          target_http_code  = COALESCE(EXCLUDED.target_http_code, ahrefs_backlinks.target_http_code),
           anchor            = EXCLUDED.anchor,
           is_nofollow       = EXCLUDED.is_nofollow,
           is_spam           = EXCLUDED.is_spam,
@@ -381,13 +418,22 @@ async function ingestContentGap(
     if (!keyword) continue;
 
     const intentsRaw = safeStr(row["Intents"]);
+    // Ahrefs exports intents as CSV-quoted values like: "Informational","Commercial"
+    // Split by comma FIRST, then strip surrounding quotes from each element.
     const intents = intentsRaw
       ? intentsRaw
-          .replace(/^"|"$/g, "")
           .split(",")
-          .map((s) => s.trim())
+          .map((s) => s.trim().replace(/^"|"$/g, "").trim())
           .filter(Boolean)
       : [];
+
+    // Format as a PostgreSQL array literal {val1,val2} passed as a single string parameter.
+    // Drizzle's sql template spreads JS arrays into multiple positional params ($4,$5)
+    // and casts them as records — not text[].  A literal string + ::text[] cast is correct.
+    const intentsPg =
+      intents.length > 0
+        ? `{${intents.map((s) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`
+        : null;
 
     const volume = safeInt(row["Volume"]);
     const kd = safeInt(row["KD"]);
@@ -417,7 +463,7 @@ async function ingestContentGap(
         VALUES (
           ${brandId}::uuid, ${batchId}::uuid,
           ${keyword},
-          ${intents.length > 0 ? intents : null}::text[],
+          ${intentsPg}::text[],
           ${volume}, ${kd}, ${cpc},
           ${ourUrl}, ${ourPosition}, ${ourTraffic},
           ${comp}, ${compUrl}, ${compPos}, ${compTraffic},
@@ -516,6 +562,16 @@ router.post("/upload", upload.array("files", 12), async (req, res) => {
 
       const rows = readXlsx(file.buffer);
       if (rows.length === 0) continue;
+
+      // Validate required headers before touching the DB.
+      const requiredHeaders = REQUIRED_HEADERS[fileType];
+      if (requiredHeaders) {
+        const headerError = validateHeaders(rows, requiredHeaders, file.originalname);
+        if (headerError) {
+          res.status(400).json({ error: "invalid_headers", message: headerError });
+          return;
+        }
+      }
 
       await withBrandScope(guard.brandId, async ({ db }) => {
         const exec = (q: ReturnType<typeof sql>) =>
