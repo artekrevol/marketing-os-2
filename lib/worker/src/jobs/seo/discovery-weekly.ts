@@ -22,14 +22,61 @@ const SUCCESS_EVENT = "seo.discovery.weekly.completed";
 /**
  * Returns the ISO week label (YYYY-WW) for a given Date (UTC).
  * Week 1 is the week containing the first Thursday of the year (ISO 8601).
+ *
+ * Exported for smoke-test coverage.
  */
-function isoWeekLabel(date: Date): string {
+export function isoWeekLabel(date: Date): string {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   // ISO week: Thursday is the anchor day (day 4). Adjust so Thursday = day 0.
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
   return `${d.getUTCFullYear()}-${String(week).padStart(2, "0")}`;
+}
+
+/**
+ * True when the keyword difficulty `kd` should survive the KD filter.
+ * Identical predicate used in Step B (related keywords) and Step D
+ * (competitor mining): unknown KD passes through; drop KD >= threshold.
+ *
+ * Exported for smoke-test coverage.
+ */
+export function kdPassesThroughFilter(
+  kd: number | null | undefined,
+  threshold: number,
+): boolean {
+  return kd == null || kd < threshold;
+}
+
+/**
+ * Compute drop-rate percentage from before/after candidate counts.
+ * Returns 0 when `before` is 0 to avoid divide-by-zero.
+ * Result is rounded to 2 decimal places (e.g. 33.33).
+ *
+ * Exported for smoke-test coverage.
+ */
+export function computeDropRatePct(before: number, after: number): number {
+  if (before === 0) return 0;
+  const dropped = before - after;
+  return Math.round((dropped / before) * 10_000) / 100;
+}
+
+/**
+ * Resolve the effective KD threshold from the environment variable
+ * DISCOVERY_KD_FILTER_MAX (operator-level override) and the payload default.
+ * - env var present and is a valid integer string → clamp to [0, 100]
+ * - env var absent or invalid → payload.maxKd as-is
+ *
+ * Exported for smoke-test coverage.
+ */
+export function resolveKdThreshold(
+  envVar: string | undefined,
+  payloadMaxKd: number,
+): number {
+  if (envVar != null && /^\d+$/.test(envVar)) {
+    return Math.min(100, Math.max(0, parseInt(envVar, 10)));
+  }
+  return payloadMaxKd;
 }
 
 /** Chunk an array into slices of `size`. */
