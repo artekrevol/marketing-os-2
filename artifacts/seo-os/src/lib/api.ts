@@ -527,6 +527,21 @@ export type SeoCompetitorInsight = {
   updatedAt: string;
 };
 
+/** Row returned by GET /api/seo/competitor-curation (snake_case from DB) */
+export type SeoCompetitorCurationRow = {
+  id: string;
+  competitor_domain: string;
+  shared_keyword_count: number | null;
+  ahrefs_domain_rating: string | number | null;
+  ahrefs_keywords_common: number | null;
+  is_relevant_competitor: boolean | null;
+  exclusion_reason: string | null;
+  last_reviewed_at: string | null;
+  last_reviewed_by: string | null;
+  last_computed_at: string | null;
+  created_at: string;
+};
+
 export type SeoCrawlBatch = {
   id: string;
   brandId: string;
@@ -744,6 +759,81 @@ export const seo = {
       await authedFetch(`/api/seo/competitor-pages/discover`, {
         method: "POST",
         body: JSON.stringify(input),
+      }),
+    ),
+
+  // ----- Discovery Inbox -----
+  listDiscoveryCandidates: async (
+    brandId: string,
+    status?: string,
+  ): Promise<import("@/pages/seo/DiscoveryInbox").DiscoveryCandidate[]> =>
+    (
+      await jsonOrThrow<{ candidates: import("@/pages/seo/DiscoveryInbox").DiscoveryCandidate[] }>(
+        await authedFetch(
+          `/api/seo/discovery-inbox?${qs(brandId, status ? { status } : {})}`,
+        ),
+      )
+    ).candidates,
+
+  reviewCandidate: async (
+    brandId: string,
+    keywordId: string,
+    decision: string,
+  ): Promise<{ ok: boolean; keywordId: string; decision: string }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/discovery-inbox/review`, {
+        method: "POST",
+        body: JSON.stringify({ brandId, keywordId, decision }),
+      }),
+    ),
+
+  reviewCandidatesBulk: async (
+    brandId: string,
+    keywordIds: string[],
+    decision: string,
+  ): Promise<{ ok: boolean; updated: number; decision: string }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/discovery-inbox/review-bulk`, {
+        method: "POST",
+        body: JSON.stringify({ brandId, keywordIds, decision }),
+      }),
+    ),
+
+  // ----- Competitor Curation -----
+  listCompetitorCuration: async (
+    brandId: string,
+    filter?: string,
+  ): Promise<SeoCompetitorCurationRow[]> =>
+    (
+      await jsonOrThrow<{ competitors: SeoCompetitorCurationRow[] }>(
+        await authedFetch(
+          `/api/seo/competitor-curation?${qs(brandId, filter ? { filter } : {})}`,
+        ),
+      )
+    ).competitors,
+
+  updateCompetitorCuration: async (
+    brandId: string,
+    id: string,
+    isRelevantCompetitor: boolean,
+    exclusionReason?: string | null,
+  ): Promise<{ ok: boolean; id: string; isRelevantCompetitor: boolean }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/competitor-curation/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify({ brandId, isRelevantCompetitor, exclusionReason }),
+      }),
+    ),
+
+  bulkMarkIrrelevant: async (
+    brandId: string,
+    ids: string[],
+    exclusionReason: string | null,
+  ): Promise<{ ok: boolean; updated: number }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/competitor-curation/bulk-mark-irrelevant`, {
+        method: "POST",
+        body: JSON.stringify({ brandId, ids, exclusionReason }),
       }),
     ),
 

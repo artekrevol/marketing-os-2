@@ -9,6 +9,8 @@ import crawlsRouter from "./crawls.js";
 import rankingsRouter from "./rankings.js";
 import dashboardRouter from "./dashboard.js";
 import schedulesRouter from "./schedules.js";
+import discoveryInboxRouter from "./discovery-inbox.js";
+import competitorCurationRouter from "./competitor-curation.js";
 
 /**
  * SEO Intelligence API — mounted at `/api/seo` behind `requireSeoRole`
@@ -16,6 +18,9 @@ import schedulesRouter from "./schedules.js";
  * route runs `requireAuth` and resolves brand access via `guardBrand`
  * (see `_shared.ts`); all multi-row DB work goes through `withBrandScope()`
  * for tenant isolation.
+ *
+ * Discovery Inbox and Competitor Curation further restrict to admin+lead
+ * via `requireAdminOrLead` inside their own route handlers.
  */
 const router: IRouter = Router();
 
@@ -29,5 +34,7 @@ router.use("/crawls", crawlsRouter);
 router.use("/rankings", rankingsRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/schedules", schedulesRouter);
+router.use("/discovery-inbox", discoveryInboxRouter);
+router.use("/competitor-curation", competitorCurationRouter);
 
 export default router;

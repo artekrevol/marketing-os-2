@@ -30,6 +30,8 @@ type Ctx = {
   activeBrand: Brand | null;
   setActiveBrand: (b: Brand) => void;
   isAdmin: boolean;
+  /** Raw role string from /api/me: "admin" | "lead" | "reviewer" | "member" */
+  role: string;
 };
 
 const BrandCtx = createContext<Ctx>({
@@ -38,6 +40,7 @@ const BrandCtx = createContext<Ctx>({
   activeBrand: null,
   setActiveBrand: () => {},
   isAdmin: false,
+  role: "member",
 });
 
 const STORAGE_KEY = "seo-os.activeBrandSlug";
@@ -54,6 +57,7 @@ export function BrandProvider({
   const [brands, setBrands] = useState<Brand[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState<string>("member");
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +74,7 @@ export function BrandProvider({
         if (cancelled) return;
         const allBrands = data.brands;
         setBrands(allBrands);
+        setRole(data.role ?? "member");
 
         let nextActive: string | null = null;
         try {
@@ -108,8 +113,8 @@ export function BrandProvider({
   }, []);
 
   const value = useMemo<Ctx>(
-    () => ({ loading, accessible: brands, activeBrand, setActiveBrand, isAdmin }),
-    [loading, brands, activeBrand, setActiveBrand, isAdmin],
+    () => ({ loading, accessible: brands, activeBrand, setActiveBrand, isAdmin, role }),
+    [loading, brands, activeBrand, setActiveBrand, isAdmin, role],
   );
 
   return <BrandCtx.Provider value={value}>{children}</BrandCtx.Provider>;

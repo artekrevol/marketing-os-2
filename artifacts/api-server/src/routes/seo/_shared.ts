@@ -1,6 +1,24 @@
 import type { Request, Response } from "express";
 import { assertBrandAccess, BrandAccessError } from "../../middlewares/auth.js";
 
+/**
+ * Inline role check for admin + lead only routes (Discovery Inbox, Competitor
+ * Curation). Must be called after `requireAuth` / `requireSeoRole` so
+ * `req.auth` is populated. Returns `true` if the caller may proceed; `false`
+ * if a 403 has already been written to `res`.
+ */
+export function requireAdminOrLead(req: Request, res: Response): boolean {
+  const role = req.auth?.role;
+  if (role !== "admin" && role !== "lead") {
+    res.status(403).json({
+      error: "forbidden",
+      message: "Requires admin or lead role",
+    });
+    return false;
+  }
+  return true;
+}
+
 /** Canonical UUID matcher — reject bad input before it reaches Postgres. */
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

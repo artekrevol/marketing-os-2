@@ -15,6 +15,8 @@ import SeoRankings from "@/pages/seo/Rankings";
 import SeoCompetitors from "@/pages/seo/Competitors";
 import SeoCompetitorInsights from "@/pages/seo/CompetitorInsights";
 import SeoSchedule from "@/pages/seo/Schedule";
+import SeoDiscoveryInbox from "@/pages/seo/DiscoveryInbox";
+import SeoCompetitorCuration from "@/pages/seo/CompetitorCuration";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -38,6 +40,8 @@ function Routed() {
       <Route path="/seo/competitors" component={SeoCompetitors} />
       <Route path="/seo/insights" component={SeoCompetitorInsights} />
       <Route path="/seo/schedules" component={SeoSchedule} />
+      <Route path="/seo/discovery-inbox" component={SeoDiscoveryInbox} />
+      <Route path="/seo/competitor-curation" component={SeoCompetitorCuration} />
       <Route path="/">{() => <Redirect to="/quality-gate" />}</Route>
       <Route component={NotFound} />
     </Switch>
