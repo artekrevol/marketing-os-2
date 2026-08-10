@@ -1,0 +1,19 @@
+Chrome audit revealed the Ahrefs Intelligence pages (Site Health, Backlinks, Content Gap) aren't accessible in the deployed environment. Direct URL /seo-os/site-health returns 404. The shell nav shows the pre-Ahrefs SEO OS structure (Dashboard with 4 static counters, Keywords without KD/intent, Rankings as a crawl-based tracker, Recovery War Room, Insights, Schedules).
+
+Investigate three specific things:
+
+1. Which environment did Task #42 ship to? The completion report showed migration 0002/0003 applied and real Ahrefs data ingested (12,898 backlinks, 4,481 content gaps, etc.). Confirm that environment matches where I'm looking. If we have separate dev/production instances, is Task #42 only on dev?
+
+2. Are the new routes actually wired to the shell nav? The dispatch spec called for adding Site Health, Backlinks, Content Gap under an "Intelligence" heading in _shell.tsx. My current shell shows the old structure. Confirm whether the nav update was actually committed and deployed.
+
+3. Are the new pages in the frontend bundle? If routes were added to App.tsx but the components weren't included in the build, or if the frontend hasn't been rebuilt/redeployed since Task #42 landed, that's why direct URLs 404.
+
+What I need reported back:
+
+The exact URL where Task #42's frontend pages should be accessible
+Confirmation that the shell nav includes the Intelligence group with the three new items (screenshot or code snippet from the deployed _shell.tsx)
+Confirmation that the deployed API endpoints (/api/seo/ahrefs/summary, /api/seo/backlinks, /api/seo/content-gap) respond with the ingested data on the environment I'm testing
+
+If it turns out Task #42 shipped to dev but not production, deploy it. If the nav wasn't wired despite spec, fix that. If the frontend build is stale, rebuild and redeploy. Don't audit or improve — just make the shipped work actually reachable in the environment I'm looking at.
+
+Once the pages are reachable, I'll re-run the Chrome audit against the real Ahrefs Intelligence UI.
