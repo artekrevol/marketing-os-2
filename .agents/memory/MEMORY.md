@@ -6,3 +6,4 @@
 - [Ahrefs REST v3 field names](ahrefs-rest-api-fields.md) — confirmed column names, response keys, and quirks per endpoint; field errors return available columns list in 400 body.
 - [Ahrefs real-data ingestion](ahrefs-real-data-ingestion.md) — real XLSX column names, bigint overflow for traffic cols, is_lost date quirk, intents CSV parsing, drizzle sql[] binding bug, broken-link evidence strategy.
 - [Keyword quality guard](keyword-quality-guard.md) — all worker keyword SELECTs that hit external APIs MUST filter is_active=true AND list_id IS NOT NULL; orphan keywords are not automatically garbage.
+- [Worker log visibility](worker-log-visibility.md) — pino JSON logs invisible in Replit workflow viewer; use shell with 2>&1 to see them; cron-alive probe at */5 * * * * registered 2026-08-10.

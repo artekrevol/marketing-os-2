@@ -85,6 +85,24 @@ async function main(): Promise<void> {
     return w;
   });
 
+  // -----------------------------------------------------------------------
+  // TEMPORARY — cron-alive verification probe (remove after confirmed)
+  // Fires every 5 minutes; produces a "job: started" log line each time.
+  // Query: SELECT COUNT(*) FROM events WHERE event_type='system.heartbeat'
+  //        AND created_at > now() - interval '35 minutes'  — expect >=3.
+  // -----------------------------------------------------------------------
+  try {
+    await addRepeatable(
+      "maintenance",
+      "maintenance.heartbeat-noop",
+      { idempotencyKey: "cron-alive-probe", message: "cron alive" },
+      "*/5 * * * *",
+    );
+    logger.info({ pattern: "*/5 * * * *" }, "worker: cron-alive probe registered");
+  } catch (err) {
+    logger.error({ err }, "worker: failed to register cron-alive probe");
+  }
+
   // Recovery War Room — register the nightly snapshot fan-out
   // (amendments §E). BullMQ keys repeatable schedules by
   // `(name, repeat.pattern)` so re-registering on every boot is safe.

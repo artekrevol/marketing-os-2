@@ -1,0 +1,118 @@
+Both diagnostics are substantive. Let me engage with each honestly — one has clean product decisions to make, the other reveals something more concerning than the surface bug.
+
+## The orphan keyword report — Ahtesham decision, clean
+
+**Cohort A (Dec 2025 geo batch, 192 keywords)** is a clean bulk-assign candidate. All track_daily=true, all is_active=true, real Ahrefs traffic data, TekRevol actually ranks for them. These are literally what someone at TekRevol decided to track. Not touching them is preserving a decision that was made intentionally, just before the list structure existed.
+
+**Cohort B (Jul 2026 broad batch, 229 keywords)** needs Ahtesham's split. The agent's read is right — service terms mixed with informational/blog content. `payday loan apps iphone` and `what is fortnite worth` shouldn't be in competitor discovery or paid rank tracking; TekRevol probably ranks for them incidentally via blog content, not as strategic targets.
+
+**Recommended action pattern:**
+
+Don't ask Ahtesham to review 422 keywords individually. Give him the split the agent already made and ask him to confirm or override:
+
+- Cohort A → "Geo Service Keywords" list (assign as-is)
+- Cohort B service terms (P0/P1, `is_branded = false`) → "Broad Service Terms" list
+- Cohort B informational/branded terms (`is_branded = true` OR P3 informational) → "Content Keywords" list, `track_daily = false` (already the case)
+- The one "Other" orphan (`mobile app development`, track_daily=true) → probably goes to "Broad Service Terms"
+
+That's a 5-minute review for him instead of 60 minutes. He sees the pre-assigned buckets, moves any that look wrong, hits confirm. The agent can even generate a preview CSV he reviews before anything commits.
+
+**Suggested reply on this part:**
+
+> On the orphan keywords: don't ask Ahtesham to review 422 rows. Pre-classify per the agent's own analysis and give him a preview to confirm/override:
+>
+> - Cohort A (192 Dec 2025 geo) → assign to new list "Geo Service Keywords"
+> - Cohort B service terms (P0/P1, non-branded, track_daily=false but service-line pattern in keyword text) → new list "Broad Service Terms"
+> - Cohort B informational/branded → new list "Content Keywords", track_daily stays false
+> - The single "mobile app development" orphan → "Broad Service Terms"
+>
+> Generate the preview as CSV or a summary table showing which keyword goes to which list. Do NOT execute the assignments yet — I'll review the split, adjust if needed, then approve the bulk assign.
+
+## The Recovery War Room diagnosis — bigger issue than the surface bug
+
+The diagnostic surfaces something I want to name directly. The stale window isn't just a chart bug. The BullMQ worker cron pipeline has been silently failing for ~80 days.
+
+**Specifically:**
+
+- Recovery snapshots: 0 rows produced by the nightly cron since May 21 (81 days ago)
+- Rank crawls: last meaningful crawl in March 2026, then one stray row June 30, then nothing
+- Task #28 has been the ticket for this since at least May and hasn't been resolved
+
+**What this means beyond the burn-down chart:**
+
+Any feature depending on nightly workers has been getting stale data for two-plus months. That includes:
+- Recovery War Room (visible symptom)
+- Rank tracking freshness across the Rankings page
+- Anything downstream that reads from `rank_snapshots` with recency assumptions
+- The DataForSEO SERP integration you were counting on for daily rank refresh
+
+**The bigger question:** how much of what we've been building on top of assumes worker cron reliability that hasn't actually been reliable?
+
+The Discovery Engine (Dispatch 1) uses BullMQ scheduled at Monday 04:00 UTC. If Task #28's root cause is a generic cron reliability issue, Monday's fire may not happen at all — or fire and silently fail — and we'd only discover it Tuesday when Ahtesham opens an empty Discovery Inbox.
+
+## What this changes about Monday
+
+**Before Monday's Discovery Engine first fire, I want you to have verification the worker cron pipeline actually works.**
+
+Not just "the code compiles" or "the schedule is registered." Actual proof that a BullMQ scheduled job fires when it's supposed to, executes the handler, and completes successfully. Otherwise Monday morning we'll be diagnosing why Discovery Inbox is empty and finding out it's because of the same 80-day-old Task #28 issue.
+
+**Suggested reply on this part:**
+
+> The Recovery War Room diagnosis reveals something bigger than a chart bug — the BullMQ worker cron pipeline has been silently non-functional for 80 days. Recovery snapshots stopped May 21, rank crawls effectively stopped in March.
+>
+> Before Monday's Discovery Engine first fire, I need proof the cron pipeline actually works. Specifically:
+>
+> **1. Diagnose Task #28's root cause before fixing.** Why did the nightly cron stop running in late May? Is it a worker registration issue, a Redis connection issue, a handler crash that's not being logged, or a BullMQ scheduler misconfiguration?
+>
+> **2. Test that any BullMQ scheduled job actually fires reliably.** Register a test job that runs every 10 minutes and does nothing but log "cron alive." Let it run for 30 minutes. Verify 3 log entries appear. If the test job doesn't fire, Discovery Engine's Monday fire won't fire either.
+>
+> **3. Only after that verification, fix the recovery snapshot pipeline** — backfill missing days, add the projection guard (projectedDate > Date.now() absolute check), close Task #28.
+>
+> This is more urgent than the burn-down cosmetic fix. Everything we're shipping that depends on scheduled workers assumes they work. If they don't, Discovery Engine ships Monday into a broken pipeline.
+>
+> Report the Task #28 root cause diagnosis before doing anything else.
+
+## The two operational realities worth naming
+
+**Reality 1: Task #28 has been open since May.** The cron pipeline has been silently broken for nearly three months. Nobody noticed because nobody was checking. That's a monitoring gap.
+
+**Reality 2: Your platform now depends on worker crons for four critical flows:**
+- Discovery Engine weekly (Dispatch 1, Monday 02:00 UTC)
+- Recovery snapshots nightly (03:00, currently dead)
+- Rank refresh (DataForSEO SERP, currently degraded)
+- Content Intelligence integration (Dispatch 3, not yet built)
+
+If cron reliability is the actual issue, no amount of feature building fixes it. Every scheduled workflow you dispatch will have the same failure mode.
+
+**This is worth solving now, not later.** Reliable cron isn't a fancy feature — it's table stakes for any platform that depends on scheduled work.
+
+## Suggested action stack
+
+**Tonight (or first thing tomorrow):**
+1. Send both reply messages to the agent — orphan keyword pre-classification + Task #28 root cause investigation
+2. Do NOT fix Recovery War Room cosmetics yet — root cause first
+
+**When Task #28 root cause comes back:**
+- Understand what the actual failure is
+- Decide whether it's a one-line fix or a real reliability issue
+- If reliability issue, that becomes the next dispatch — cron infrastructure hardening before more features
+
+**Monday morning:**
+- Verify Discovery Engine actually fired at 02:00 UTC
+- If yes, celebrate briefly and move on
+- If no, the cron reliability issue is confirmed and blocks introducing Ahtesham to any scheduled-workflow features
+
+**When cron reliability is confirmed:**
+- Bulk-assign orphan keywords per Ahtesham's confirmation
+- Introduce Ahtesham to the tool with Discovery Inbox populated
+- Re-run Chrome audit against production with real data flowing
+
+## One meta-observation
+
+This session started with "add Ahrefs bulk pull to SEO OS," moved through discovery engine architecture, hit plan-tier caps, pivoted to CSV import, added AI mentions strategy, and now we're diagnosing an 80-day-old cron reliability issue that undercuts every scheduled workflow we've built.
+
+That's not a criticism of the direction. It's a pattern worth naming: **each dispatch has revealed that the previous foundation had unaddressed reliability issues.** Task #28 has been "on the list" without being fixed. The plan-tier caps weren't verified before designing against them. The tobacco keyword contamination existed for six weeks without anyone noticing.
+
+**The pattern to break:** stop treating reliability issues as background items to address "later." Every scheduled workflow you dispatch inherits every reliability issue in the platform. Discovery Engine's Monday fire is the acid test — if it fires cleanly, the platform is genuinely reliable. If it doesn't, the cron reliability work has to happen before any more scheduled features ship.
+
+Send the reply. When Task #28's root cause is understood, we'll know whether Monday needs a contingency plan or whether it's genuinely ready to fire.
