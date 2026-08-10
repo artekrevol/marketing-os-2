@@ -1,0 +1,13 @@
+Task #42 genuinely delivered this time. Real data through the pipeline, real bugs surfaced and fixed, acceptance criteria met with evidence — /web-development at −97.9%, Investopedia DR 92 broken link, "custom software development" at KD 3 all landing in the dashboard alerts rail.
+
+The five real-data bugs (integer overflow on Wikipedia's traffic, is_lost silently always false, intents parsing corruption, drizzle array binding, target_http_code not persisted) are all class of thing that only surface when real Ahrefs export files hit the pipeline. Unit tests couldn't have caught them. This is why acceptance testing with real data is the actual completion gate, not typecheck + smoke tests.
+
+Two follow-ups worth doing before Ahtesham opens this:
+
+1. Backfill the remaining files. Currently ingested: Backlinks, BrokenBacklinks, TopPages, ContentGap. Not yet ingested: ReferringDomains (12,857 rows), Anchors (30,001 rows), OrganicKeywords (3,876 rows with intent flags — enriches existing keywords table), BestByLinks (1,668 rows), ReferringIPs (3,612 rows), LinkingAuthors (1,463 rows). Upload each remaining file, verify row counts and no parse errors. Some of these feed features (organic keywords intent, anchor distribution chart) that need the data to demonstrate value.
+
+2. Screenshot the dashboard for the record. Playwright browser install failed in this environment — that's fine, but the visual verification still matters. Take a manual screenshot when the dashboard is loaded with all data, share it here. This is the "does it actually look like intelligence at a glance" check that API-level data verification doesn't cover.
+
+After both: task genuinely closes clean. Migration 0002 is the auditable artifact of all schema fixes.
+
+One meta-observation for future tasks: the discipline that landed here — real data upload as part of the acceptance test — should be the standard for any dispatch that ingests external data. Discovery Engine has the same pattern (DataForSEO Labs data must actually flow through, not just work in sandbox). Same rule applies.

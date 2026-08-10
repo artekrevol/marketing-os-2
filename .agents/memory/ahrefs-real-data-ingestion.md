@@ -45,6 +45,18 @@ const pgArr = vals.length > 0
 
 **Why:** The pg wire protocol sends JS arrays as multiple parameters; PostgreSQL can't reconstruct a text[] from them without explicit array constructor syntax.
 
+## referring_domains.traffic_domain — also bigint
+Same overflow as `ahrefs_backlinks.domain_traffic`. Google's domain traffic is 1,386,482,944 and Wikipedia is 4,062,811,136. Column type must be `bigint` in both schema and DB.
+Migration 0003 covers this ALTER.
+
+## ahrefs_best_by_links table
+BestByLinks export (Ahrefs ContentPagePerformance group, filename contains "bestbylinks") has columns:
+`["#","Page title","Page URL","Language","Platform","UR","Referring domains","Top DR","Links to target","New Links","Lost Links","Dofollow","Nofollow","Redirects","Page HTTP code","First seen","Last seen"]`
+Stored in `ahrefs_best_by_links` table (brand_id + page_url unique). Added in migration 0003.
+
+## Upload route: brandId is a form field, not query param
+The `/api/seo/ahrefs/upload` route reads `brandId` from `req.body` (multer form field), NOT the URL query string. When testing via curl, use `-F "brandId=<uuid>"`, not `?brandId=<uuid>`.
+
 ## DR threshold consistency
 - Summary `brokenHighDrLinks` and list `/backlinks/broken` must both enforce `b.dr::numeric >= 40`.
 - Dashboard.tsx label must read "DR 40+" to match (was "DR 70+" mismatch).

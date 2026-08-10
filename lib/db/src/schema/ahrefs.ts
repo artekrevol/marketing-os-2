@@ -4,6 +4,7 @@ import {
   uuid,
   text,
   integer,
+  bigint,
   numeric,
   boolean,
   jsonb,
@@ -130,8 +131,8 @@ export const referringDomainsTable = pgTable(
     isSpam: boolean("is_spam").notNull().default(false),
     /** true if the referring entity is a root domain (vs. subdomain). */
     isRootDomain: boolean("is_root_domain").notNull().default(true),
-    /** Organic search traffic to the referring domain (Ahrefs estimate). */
-    trafficDomain: integer("traffic_domain"),
+    /** Organic search traffic to the referring domain (Ahrefs estimate). Bigint: top domains (Wikipedia) exceed 4B. */
+    trafficDomain: bigint("traffic_domain", { mode: "number" }),
     firstSeen: timestamp("first_seen", { withTimezone: true }),
     lastSeen: timestamp("last_seen", { withTimezone: true }),
     sourceProvider: text("source_provider").notNull().default("ahrefs_bulk_import"),
@@ -151,6 +152,42 @@ export const referringDomainsTable = pgTable(
 
 export type ReferringDomain = typeof referringDomainsTable.$inferSelect;
 export type InsertReferringDomain = typeof referringDomainsTable.$inferInsert;
+
+/* -------------------------------------------------------------------------- */
+/* ahrefs_best_by_links — top pages ranked by referring-domain count         */
+/* -------------------------------------------------------------------------- */
+export const ahrefsBestByLinksTable = pgTable(
+  "ahrefs_best_by_links",
+  {
+    id:            uuid("id").primaryKey().defaultRandom(),
+    brandId:       uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "restrict" }),
+    pageUrl:       text("page_url").notNull(),
+    pageTitle:     text("page_title"),
+    language:      text("language"),
+    platform:      text("platform"),
+    ur:            numeric("ur", { precision: 5, scale: 2 }),
+    refDomains:    integer("ref_domains"),
+    topDr:         integer("top_dr"),
+    linksToTarget: integer("links_to_target"),
+    newLinks:      integer("new_links"),
+    lostLinks:     integer("lost_links"),
+    dofollowLinks: integer("dofollow_links"),
+    nofollowLinks: integer("nofollow_links"),
+    redirectLinks: integer("redirect_links"),
+    pageHttpCode:  integer("page_http_code"),
+    firstSeen:     timestamp("first_seen", { withTimezone: true }),
+    lastSeen:      timestamp("last_seen", { withTimezone: true }),
+    createdAt:     timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt:     timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("ahrefs_best_by_links_brand_url_uq").on(t.brandId, t.pageUrl),
+    index("ahrefs_best_by_links_brand_idx").on(t.brandId),
+    index("ahrefs_best_by_links_ref_domains_idx").on(t.brandId, t.refDomains),
+  ],
+);
+
+export type AhrefsBestByLinks = typeof ahrefsBestByLinksTable.$inferSelect;
 
 /* -------------------------------------------------------------------------- */
 /* ahrefs_rest_usage — REST API call log with unit consumption per dispatch   */

@@ -16,3 +16,7 @@ ALTER TABLE ahrefs_backlinks ADD COLUMN IF NOT EXISTS target_http_code integer;
 -- ref_pages_count was present in the Drizzle schema and live DB but missing
 -- from the 0001 migration CREATE TABLE.  Add it for fresh installs.
 ALTER TABLE ahrefs_anchors ADD COLUMN IF NOT EXISTS ref_pages_count integer;
+
+-- traffic_domain on referring_domains: same bigint overflow as ahrefs_backlinks.
+-- Wikipedia's domain traffic is 4,062,811,136 which exceeds PostgreSQL integer max (2,147,483,647).
+ALTER TABLE referring_domains ALTER COLUMN traffic_domain TYPE bigint;

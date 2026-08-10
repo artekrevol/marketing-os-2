@@ -283,6 +283,64 @@ async function ingestAnchors(
   return count;
 }
 
+async function ingestBestByLinks(
+  brandId: string,
+  rows: Record<string, unknown>[],
+  dbExec: (q: ReturnType<typeof sql>) => Promise<unknown>,
+): Promise<number> {
+  let count = 0;
+  for (const row of rows) {
+    const pageUrl = safeStr(row["Page URL"]);
+    if (!pageUrl) continue;
+    await dbExec(sql`
+      INSERT INTO ahrefs_best_by_links
+        (brand_id, page_url, page_title, language, platform, ur,
+         ref_domains, top_dr, links_to_target, new_links, lost_links,
+         dofollow_links, nofollow_links, redirect_links, page_http_code,
+         first_seen, last_seen, created_at, updated_at)
+      VALUES (
+        ${brandId}::uuid,
+        ${pageUrl},
+        ${safeStr(row["Page title"])},
+        ${safeStr(row["Language"])},
+        ${safeStr(row["Platform"])},
+        ${safeNum(row["UR"])},
+        ${safeInt(row["Referring domains"])},
+        ${safeInt(row["Top DR"])},
+        ${safeInt(row["Links to target"])},
+        ${safeInt(row["New Links"])},
+        ${safeInt(row["Lost Links"])},
+        ${safeInt(row["Dofollow"])},
+        ${safeInt(row["Nofollow"])},
+        ${safeInt(row["Redirects"])},
+        ${safeInt(row["Page HTTP code"])},
+        ${parseDate(row["First seen"])},
+        ${parseDate(row["Last seen"])},
+        now(), now()
+      )
+      ON CONFLICT (brand_id, page_url)
+      DO UPDATE SET
+        page_title      = EXCLUDED.page_title,
+        language        = EXCLUDED.language,
+        platform        = EXCLUDED.platform,
+        ur              = EXCLUDED.ur,
+        ref_domains     = EXCLUDED.ref_domains,
+        top_dr          = EXCLUDED.top_dr,
+        links_to_target = EXCLUDED.links_to_target,
+        new_links       = EXCLUDED.new_links,
+        lost_links      = EXCLUDED.lost_links,
+        dofollow_links  = EXCLUDED.dofollow_links,
+        nofollow_links  = EXCLUDED.nofollow_links,
+        redirect_links  = EXCLUDED.redirect_links,
+        page_http_code  = EXCLUDED.page_http_code,
+        last_seen       = EXCLUDED.last_seen,
+        updated_at      = now()
+    `);
+    count++;
+  }
+  return count;
+}
+
 async function ingestTopPages(
   brandId: string,
   batchId: string,
@@ -525,6 +583,7 @@ router.post("/upload", upload.array("files", 12), async (req, res) => {
       pagePerformance: 0,
       organicKeywords: 0,
       contentGap: 0,
+      bestByLinks: 0,
       fileCount: 0,
     };
 
@@ -591,6 +650,8 @@ router.post("/upload", upload.array("files", 12), async (req, res) => {
           counts.organicKeywords += await ingestOrganicKeywords(guard.brandId, rows, exec);
         } else if (fileType === "content_gap") {
           counts.contentGap += await ingestContentGap(guard.brandId, batchId, rows, exec);
+        } else if (fileType === "best_by_links") {
+          counts.bestByLinks += await ingestBestByLinks(guard.brandId, rows, exec);
         }
       });
     }
@@ -651,6 +712,7 @@ router.post("/upload", upload.array("files", 12), async (req, res) => {
         pagePerformance: counts.pagePerformance,
         organicKeywords: counts.organicKeywords,
         contentGap: counts.contentGap,
+        bestByLinks: counts.bestByLinks,
       },
       delta: {
         newLinks: delta["new_links"] ?? 0,
