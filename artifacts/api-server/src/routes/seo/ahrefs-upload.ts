@@ -93,8 +93,15 @@ function detectFileType(filename: string): string | null {
   if (n.includes("toppages")) return "top_pages";
   if (n.includes("bestbylinks")) return "best_by_links";
   if (n.includes("contentgap")) return "content_gap";
-  if (n.includes("linkingauthors")) return "linking_authors"; // ignored
-  if (n.includes("referringips")) return "referring_ips"; // ignored
+  // Intentionally not ingested — no table or feature consumes these yet.
+  // linking_authors: per-author backlink data; reserved for future author-based
+  //   outreach discovery (who writes the content that links to us).
+  // referring_ips: IP-level referring host data; reserved for future bot/link-farm
+  //   detection (clusters of links from the same IP range).
+  // To add support, create a table, write an ingest function following the pattern
+  //   above, add a case to the switch in the upload handler, and update INGEST.md.
+  if (n.includes("linkingauthors")) return "linking_authors";
+  if (n.includes("referringips")) return "referring_ips";
   return null;
 }
 
