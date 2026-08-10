@@ -1,0 +1,25 @@
+The 422 legitimate orphan keywords are now excluded from all workers, which is architecturally correct but creates a product issue — real keywords sitting in limbo, invisible to every pipeline. Two decisions before this dispatch closes cleanly:
+
+Report the current state of these 422 keywords to the dispatcher. Break down by cohort (Dec 2025 geo batch, Jul 2026 broad batch) with sample keywords from each so I can eyeball whether Ahtesham would want them tracked.
+Do NOT auto-assign to any list yet. That's an editorial decision Ahtesham should make, not one to make in code. Just report the state so I can loop him in.
+
+This isn't blocking — the tobacco bug is fixed. But leaving 422 legitimate keywords in a silent-limbo state before Ahtesham's first use of the tool is a poor first-impression risk.
+
+The Recovery War Room stale-window bug is still open
+
+The audit report from Claude Chrome flagged two data-integrity issues. The tobacco contamination is now resolved. The Recovery War Room 90-day burn-down window showing May 14 - Jun 7 (as of Aug 11) is still not diagnosed.
+
+Send this as a separate message to the agent:
+
+Separate diagnostic — Recovery War Room shows a "90-day burn-down" chart with window May 14 - Jun 7 as of Aug 11, 2026. Two problems visible:
+
+Window is only 24 days wide, not 90
+Window is stale by ~2 months, and "Projected Recovery" date (6/7/2026) is in the past even though the tracked avg. position got worse (18.4 → 20.2)
+
+Investigate before fixing:
+
+Is the 90-day window computed from a specific start date that got hardcoded during dev?
+Is there a data pipeline that stopped delivering snapshots after Jun 7, so the chart is showing "last available data" rather than "current 90-day window"?
+Is the "Projected Recovery" calculation running against stale inputs, or is the projection logic itself broken (should never return a past date when trend is worsening)?
+
+Report root cause before fixing. This is the second Recovery War Room integrity issue we're chasing — worth understanding whether both issues share a common upstream cause.
