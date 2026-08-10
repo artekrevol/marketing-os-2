@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import {
   withBrandScope,
   brandsTable,
@@ -92,10 +92,17 @@ export async function handleSeoCrawlRun(
       eq(crawlBatchesTable.id, payload.batchId),
     );
 
+    // Only crawl keywords that have been deliberately added to a tracked list
+    // (list_id IS NOT NULL) and are active. Orphaned/test keywords must not
+    // consume paid DataForSEO Standard Queue tasks or produce rank snapshots.
+    const qualityFilter = and(
+      eq(keywordsTable.isActive, true),
+      isNotNull(keywordsTable.listId),
+    );
     const keywords = (await scoped.select(keywordsTable, {
       where: payload.keywordIds?.length
-        ? inArray(keywordsTable.id, payload.keywordIds)
-        : undefined,
+        ? and(qualityFilter, inArray(keywordsTable.id, payload.keywordIds))
+        : qualityFilter,
     })) as Keyword[];
 
     const locations = (await scoped.select(locationsTable)) as Location[];

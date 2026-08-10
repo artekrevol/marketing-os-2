@@ -215,6 +215,7 @@ export async function handleSeoDiscoveryWeekly(
       WHERE brand_id = ${payload.brandId}::uuid
         AND priority IN ('P0', 'P1')
         AND is_active = true
+        AND list_id IS NOT NULL
         AND is_branded = false
         AND (
           ahrefs_intent_flags->>'commercial'     = 'true'

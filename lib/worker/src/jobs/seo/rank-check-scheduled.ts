@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import {
   withBrandScope,
   crawlBatchesTable,
@@ -26,8 +26,15 @@ export async function handleSeoRankCheckScheduled(
   const listId = payload.listId ?? null;
 
   const prepared = await withBrandScope(payload.brandId, async ({ scoped }) => {
+    // Require is_active = true AND list_id IS NOT NULL on every tick.
+    // Orphaned/test keywords must not enter the crawl pipeline and consume
+    // paid DataForSEO tasks. The optional listId narrows to a specific list.
     const keywords = (await scoped.select(keywordsTable, {
-      where: listId ? eq(keywordsTable.listId, listId) : undefined,
+      where: and(
+        eq(keywordsTable.isActive, true),
+        isNotNull(keywordsTable.listId),
+        listId ? eq(keywordsTable.listId, listId) : undefined,
+      ),
     })) as Keyword[];
 
     if (keywords.length === 0) {

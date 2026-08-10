@@ -1,4 +1,4 @@
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
   withBrandScope,
   brandsTable,
@@ -11,7 +11,6 @@ import {
   type Location,
   type BlacklistedDomain,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
 import type { JobData } from "@workspace/jobs";
 import { DataForSEOClient } from "@workspace/integrations-dataforseo";
 import type { Logger } from "pino";
@@ -61,10 +60,17 @@ export async function handleSeoCompetitorDiscover(
         .filter((d): d is string => d != null),
     );
 
+    // Only process keywords that have been deliberately added to a tracked list
+    // (list_id IS NOT NULL) and are active. This prevents orphaned/test keywords
+    // from consuming paid DataForSEO SERP credits and polluting competitor_pages.
+    const qualityFilter = and(
+      eq(keywordsTable.isActive, true),
+      isNotNull(keywordsTable.listId),
+    );
     const keywords = (await scoped.select(keywordsTable, {
       where: payload.keywordIds?.length
-        ? inArray(keywordsTable.id, payload.keywordIds)
-        : undefined,
+        ? and(qualityFilter, inArray(keywordsTable.id, payload.keywordIds))
+        : qualityFilter,
     })) as Keyword[];
 
     const locations = (await scoped.select(locationsTable)) as Location[];
