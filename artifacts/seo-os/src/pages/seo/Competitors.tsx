@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search } from "lucide-react";
+import { Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { seo } from "@/lib/api";
 import { SeoShell, withBrand, StateBox } from "./_shell";
@@ -20,6 +20,14 @@ function CompetitorsInner({ brandId }: { brandId: string }) {
       void qc.invalidateQueries({ queryKey: ["seo", "competitor-pages", brandId] });
     },
     onError: (e: Error) => toast.error(e.message),
+  });
+
+  const deleteM = useMutation({
+    mutationFn: (id: string) => seo.deleteCompetitorPage(id, brandId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["seo", "competitor-pages", brandId] });
+    },
+    onError: (e: Error) => toast.error(`Delete failed: ${e.message}`),
   });
 
   const pages = pagesQ.data ?? [];
@@ -55,6 +63,7 @@ function CompetitorsInner({ brandId }: { brandId: string }) {
                 <th className="text-left font-medium px-4 py-2">Position</th>
                 <th className="text-left font-medium px-4 py-2">URL</th>
                 <th className="text-left font-medium px-4 py-2">Captured</th>
+                <th className="px-4 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -74,6 +83,16 @@ function CompetitorsInner({ brandId }: { brandId: string }) {
                   </td>
                   <td className="px-4 py-2 text-xs text-ink-muted">
                     {new Date(p.capturedAt).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      onClick={() => deleteM.mutate(p.id)}
+                      disabled={deleteM.isPending}
+                      className="text-ink-muted hover:text-red-600 disabled:opacity-40 transition-colors"
+                      title="Remove this competitor page"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </td>
                 </tr>
               ))}

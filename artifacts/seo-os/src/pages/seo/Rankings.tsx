@@ -1,11 +1,24 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play } from "lucide-react";
+import { Play, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { toast } from "sonner";
 import { seo } from "@/lib/api";
 import { SeoShell, withBrand, StateBox } from "./_shell";
 
+type SortKey = "keyword_text" | "position" | "captured_at";
+type SortDir = "asc" | "desc";
+
+function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
+  if (col !== sortKey) return <ChevronsUpDown className="h-3 w-3 inline ml-1 opacity-30" />;
+  return sortDir === "asc"
+    ? <ChevronUp className="h-3 w-3 inline ml-1" />
+    : <ChevronDown className="h-3 w-3 inline ml-1" />;
+}
+
 function RankingsInner({ brandId }: { brandId: string }) {
   const qc = useQueryClient();
+  const [sortKey, setSortKey] = useState<SortKey>("position");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const rankingsQ = useQuery({
     queryKey: ["seo", "rankings", "current", brandId],
@@ -27,9 +40,34 @@ function RankingsInner({ brandId }: { brandId: string }) {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const rankings = rankingsQ.data ?? [];
+  const rawRankings = rankingsQ.data ?? [];
   const batches = batchesQ.data ?? [];
   const running = batches.find((b) => b.status === "pending" || b.status === "running");
+
+  const rankings = [...rawRankings].sort((a, b) => {
+    let cmp = 0;
+    if (sortKey === "keyword_text") {
+      cmp = a.keyword_text.localeCompare(b.keyword_text);
+    } else if (sortKey === "position") {
+      const ap = a.position ?? 999;
+      const bp = b.position ?? 999;
+      cmp = ap - bp;
+    } else {
+      cmp = new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime();
+    }
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  function toggleSort(col: SortKey) {
+    if (sortKey === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(col);
+      setSortDir(col === "position" ? "asc" : "asc");
+    }
+  }
+
+  const thClass = "text-left font-medium px-4 py-2 cursor-pointer select-none hover:text-ink";
 
   return (
     <SeoShell
@@ -78,10 +116,16 @@ function RankingsInner({ brandId }: { brandId: string }) {
           <table className="w-full text-sm">
             <thead className="bg-secondary/40 text-ink-muted text-xs uppercase tracking-wide">
               <tr>
-                <th className="text-left font-medium px-4 py-2">Keyword</th>
-                <th className="text-left font-medium px-4 py-2">Position</th>
+                <th className={thClass} onClick={() => toggleSort("keyword_text")}>
+                  Keyword <SortIcon col="keyword_text" sortKey={sortKey} sortDir={sortDir} />
+                </th>
+                <th className={thClass} onClick={() => toggleSort("position")}>
+                  Position <SortIcon col="position" sortKey={sortKey} sortDir={sortDir} />
+                </th>
                 <th className="text-left font-medium px-4 py-2">URL</th>
-                <th className="text-left font-medium px-4 py-2">Captured</th>
+                <th className={thClass} onClick={() => toggleSort("captured_at")}>
+                  Captured <SortIcon col="captured_at" sortKey={sortKey} sortDir={sortDir} />
+                </th>
               </tr>
             </thead>
             <tbody>

@@ -562,9 +562,6 @@ function HeadlineCard({ overview }: { overview: RecoveryOverview }) {
           <span className={deltaTone(top3Delta)}>({fmtDelta(top3Delta)})</span>
         </div>
       </div>
-      <div className="mt-3 pt-3 border-t border-rule/60 text-[11px] text-ink-muted font-mono">
-        — (pending GSC ingestion)
-      </div>
     </div>
   );
 }
@@ -596,11 +593,17 @@ function ProjectionCard({ overview }: { overview: RecoveryOverview }) {
     );
   } else if (p.status === "projecting") {
     const date = new Date(p.projectedRecoveryDate);
-    const days = Math.max(
-      0,
-      Math.round((date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
-    );
-    body = (
+    const msRemaining = date.getTime() - Date.now();
+    const isStale = msRemaining < 0;
+    const days = Math.round(Math.abs(msRemaining) / (1000 * 60 * 60 * 24));
+    body = isStale ? (
+      <>
+        <div className="font-serif text-2xl text-ink-muted">{date.toLocaleDateString()}</div>
+        <div className="mt-1 text-xs text-amber-700 font-medium">
+          Projected date has passed — rankings data is stale. Fresh crawl needed to reproject.
+        </div>
+      </>
+    ) : (
       <>
         <div className="font-serif text-2xl">{date.toLocaleDateString()}</div>
         <div className="mt-1 text-xs text-ink-muted">

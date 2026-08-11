@@ -765,6 +765,12 @@ export const seo = {
         body: JSON.stringify(input),
       }),
     ),
+  deleteCompetitorPage: async (id: string, brandId: string): Promise<void> => {
+    await authedFetch(
+      `/api/seo/competitor-pages/${encodeURIComponent(id)}?${qs(brandId)}`,
+      { method: "DELETE" },
+    );
+  },
 
   // ----- Discovery Inbox -----
   listDiscoveryCandidates: async (

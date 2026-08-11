@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, inArray } from "drizzle-orm";
+import { eq, desc, inArray, and } from "drizzle-orm";
 import {
+  db,
   withBrandScope,
   competitorPagesTable,
   keywordsTable,
@@ -88,6 +89,38 @@ router.post("/discover", async (req, res) => {
     res.status(202).json({ ok: true, status: "queued", jobId });
   } catch (err) {
     fail(res, req, "competitor-pages.discover", err);
+  }
+});
+
+/**
+ * DELETE /api/seo/competitor-pages/:id?brandId=
+ *
+ * Removes a single competitor page from the brand's dataset.
+ * Scoped to the requesting brand — cannot delete another brand's rows.
+ */
+router.delete("/:id", async (req, res) => {
+  const guard = await guardBrand(req, req.query["brandId"]);
+  if (!guard.ok) {
+    res.status(guard.status).json({ error: guard.error });
+    return;
+  }
+  const { id } = req.params;
+  if (!id || !UUID_RE.test(id)) {
+    res.status(400).json({ error: "id must be a UUID" });
+    return;
+  }
+  try {
+    await db
+      .delete(competitorPagesTable)
+      .where(
+        and(
+          eq(competitorPagesTable.id, id),
+          eq(competitorPagesTable.brandId, guard.brandId),
+        ),
+      );
+    res.json({ ok: true });
+  } catch (err) {
+    fail(res, req, "competitor-pages.delete", err);
   }
 });
 

@@ -58,6 +58,41 @@ async function bootstrapSchema(): Promise<void> {
 }
 
 /**
+ * Boot-time cleanup — removes known bad data idempotently.
+ * Safe to run on every boot; all operations are guarded so re-running is a no-op.
+ */
+async function runBootCleanup(): Promise<void> {
+  try {
+    // Remove competitor pages captured from the orphan keyword "marketing os smoke"
+    // (list_id IS NULL) which produced tobacco-industry SERP results. Idempotent.
+    const pages = await db.execute(sql`
+      DELETE FROM competitor_pages
+      WHERE keyword_id IN (
+        SELECT id FROM keywords
+        WHERE keyword_text = 'marketing os smoke'
+          AND list_id IS NULL
+      )
+    `);
+    const kw = await db.execute(sql`
+      DELETE FROM keywords
+      WHERE keyword_text = 'marketing os smoke'
+        AND list_id IS NULL
+    `);
+    const deletedPages = pages.rowCount ?? 0;
+    const deletedKw = kw.rowCount ?? 0;
+    if (deletedPages > 0 || deletedKw > 0) {
+      logger.info(
+        { deletedPages, deletedKw },
+        "boot-cleanup: removed tobacco-keyword data",
+      );
+    }
+  } catch (err: unknown) {
+    // Non-fatal — log and continue. The quality guard on the worker prevents re-ingestion.
+    logger.warn({ err }, "boot-cleanup: failed (non-fatal)");
+  }
+}
+
+/**
  * Boot-time data seeding (admin users, baseline brands, default QA checks).
  * Schema is owned by Drizzle — schema patches belong in proper migrations,
  * not here. The narrow exception is `bootstrapSchema()` above.
@@ -212,6 +247,7 @@ if (Number.isNaN(port) || port <= 0) {
 
 await bootstrapSchema();
 await runMigrations();
+await runBootCleanup();
 await runBootSeeds();
 
 const server = app.listen(port, (err) => {
