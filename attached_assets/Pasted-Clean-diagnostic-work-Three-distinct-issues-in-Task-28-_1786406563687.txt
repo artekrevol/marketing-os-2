@@ -1,0 +1,26 @@
+Clean diagnostic work. Three distinct issues in Task #28 identified, cron infrastructure verified end-to-end, orphan classification well-reasoned.
+
+On orphan keywords:
+Generate a CSV export of the three-list classification for Ahtesham to review. Columns: keyword_text, current_priority, current_track_daily, proposed_list, agent_notes (for the 4 edge cases). Ahtesham reviews the CSV, marks any overrides inline, sends it back. Then the bulk assignment executes based on his confirmed version, not the agent's proposed version. No assignments happen until Ahtesham signs off.
+
+On Monday's Discovery Engine fire — this is the important part:
+
+The Replit workspace ephemerality issue is real. Manually keeping the workspace open through Sunday night isn't production reliability — it's theater.
+
+Three options:
+
+Ship Task #4 (Sprint 2 — Railway + BullMQ) this weekend. If feasible, this is the right answer. Always-on worker hosting means Monday's fire happens reliably regardless of workspace state, and every future scheduled workflow inherits the same reliability.
+Accept manual trigger Tuesday morning as the honest first test. Not a real cron reliability proof, but a valid handler+integration test. If Task #4 can't ship this weekend, this is more honest than pretending Path A gives us production reliability.
+I do Path A this once knowing it's not proof of anything. Keep the workspace open Sunday night, fire happens, we know the pipeline works but haven't proven it works without human intervention. Task #4 becomes urgent for the following week.
+
+Report on Task #4's realistic ship-this-weekend feasibility. That determines which option we take.
+
+On rank_snapshots pipeline being dead since June 30:
+
+Separately from the Monday question — the rank crawl pipeline has been stopped for 6 weeks. That's a separate Task #28 sub-issue. Diagnose why the rank crawl scheduler stopped producing data, what would need to happen to restart it, and whether backfilling June 30 to today is possible or whether we accept a data gap. Report before fixing.
+
+On Recovery War Room:
+
+No cosmetic fixes yet. The chart accurately reflects stale data — misleading users into thinking data is fresh when it's not is worse than showing them the stale state. Fix the upstream rank_snapshots pipeline first, then the burn-down window will reflect current reality automatically.
+
+Then add the absolute-date guard on projection (projectedDate > Date.now()) as documented — that prevents future stale-pipeline states from showing past dates as future projections. One-line defense against the failure mode we've now experienced.

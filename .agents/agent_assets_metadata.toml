@@ -1,0 +1,9 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "Yy0y3wkrSDsbBVxo-nh8X"
+uri = "file://attached_assets/tekrevol-orphan-keywords-classification.csv"
+type = "table"
+title = "TekRevol — Orphan Keyword Classification (422 keywords)"
+description = "For Ahtesham: review proposed_list column, override inline, send back. agent_notes flags 7 edge cases requiring judgment. No assignments execute until confirmed version returns."
