@@ -11,12 +11,13 @@ const Schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().min(1),
   // Integration secrets — optional so the worker boots on Replit without
-  // DataForSEO / Originality AI / OpenAI credentials. Jobs that actually
-  // need them will throw at run-time if the value is empty.
+  // DataForSEO / Originality AI / OpenAI / Anthropic credentials. Jobs that
+  // actually need them will throw at run-time if the value is empty.
   DATAFORSEO_LOGIN: z.string().default(""),
   DATAFORSEO_PASSWORD: z.string().default(""),
   ORIGINALITY_AI_KEY: z.string().default(""),
   OPENAI_API_KEY: z.string().default(""),
+  ANTHROPIC_API_KEY: z.string().default(""),
   // Sentry is optional — empty DSN means Sentry.init is a no-op.
   SENTRY_DSN: z.string().default(""),
 });
