@@ -114,86 +114,79 @@ async function ingestBacklinks(
   brokenOnly: boolean,
   dbExec: (q: ReturnType<typeof sql>) => Promise<unknown>,
 ): Promise<number> {
-  let count = 0;
   const CHUNK = 200;
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK);
-    for (const row of chunk) {
+    const values = chunk.map((row) => {
       // "Lost" column contains a date string when lost, null when still active.
-      // safeBool() on a date string incorrectly returns false, so check for non-null instead.
-      const isLost = brokenOnly
-        ? false // broken backlinks aren't "lost" — they point to dead pages on our side
-        : row["Lost"] != null;
+      const isLost = brokenOnly ? false : row["Lost"] != null;
       const lostAt = isLost ? parseDate(row["Lost"]) : null;
-
-      // target_http_code comes from BrokenBacklinks export ("Target page HTTP code").
-      // For normal Backlinks rows this is null; preserve any existing value on conflict.
+      // target_http_code comes from BrokenBacklinks export only.
       const targetHttpCode = brokenOnly ? safeInt(row["Target page HTTP code"]) : null;
-
-      await dbExec(sql`
-        INSERT INTO ahrefs_backlinks
-          (brand_id, import_batch_id, referring_page_url, referring_page_title,
-           language, platform, referring_page_http_code, dr, ur, domain_traffic,
-           page_traffic, target_url, target_http_code, anchor, left_context, right_context,
-           link_type, is_nofollow, is_spam, is_ugc, is_sponsored,
-           is_lost, drop_reason, first_seen, last_seen, lost_at, page_type, author,
-           created_at, updated_at)
-        VALUES (
-          ${brandId}::uuid, ${batchId}::uuid,
-          ${safeStr(row["Referring page URL"])},
-          ${safeStr(row["Referring page title"])},
-          ${safeStr(row["Language"])},
-          ${safeStr(row["Platform"])},
-          ${safeInt(row["Referring page HTTP code"])},
-          ${safeNum(row["Domain rating"])},
-          ${safeNum(row["UR"])},
-          ${safeInt(row["Domain traffic"])},
-          ${safeInt(row["Page traffic"])},
-          ${safeStr(row["Target URL"])},
-          ${targetHttpCode},
-          ${safeStr(row["Anchor"])},
-          ${safeStr(row["Left context"])},
-          ${safeStr(row["Right context"])},
-          ${safeStr(row["Type"])},
-          ${safeBool(row["Nofollow"])},
-          ${safeBool(row["Is spam"])},
-          ${safeBool(row["UGC"])},
-          ${safeBool(row["Sponsored"])},
-          ${isLost},
-          ${safeStr(row["Drop reason"])},
-          ${parseDate(row["First seen"])},
-          ${parseDate(row["Last seen"])},
-          ${lostAt},
-          ${safeStr(row["Page type"])},
-          ${safeStr(row["Author"])},
-          now(), now()
-        )
-        ON CONFLICT (brand_id, referring_page_url)
-        DO UPDATE SET
-          import_batch_id   = EXCLUDED.import_batch_id,
-          referring_page_title = EXCLUDED.referring_page_title,
-          dr                = EXCLUDED.dr,
-          ur                = EXCLUDED.ur,
-          domain_traffic    = EXCLUDED.domain_traffic,
-          page_traffic      = EXCLUDED.page_traffic,
-          target_url        = EXCLUDED.target_url,
-          -- Preserve an existing target_http_code from a BrokenBacklinks upload
-          -- if the current row (a normal Backlinks row) doesn't carry one.
-          target_http_code  = COALESCE(EXCLUDED.target_http_code, ahrefs_backlinks.target_http_code),
-          anchor            = EXCLUDED.anchor,
-          is_nofollow       = EXCLUDED.is_nofollow,
-          is_spam           = EXCLUDED.is_spam,
-          is_lost           = EXCLUDED.is_lost,
-          drop_reason       = EXCLUDED.drop_reason,
-          first_seen        = COALESCE(ahrefs_backlinks.first_seen, EXCLUDED.first_seen),
-          last_seen         = EXCLUDED.last_seen,
-          lost_at           = EXCLUDED.lost_at,
-          updated_at        = now()
-      `);
-      count++;
-    }
+      return sql`(
+        ${brandId}::uuid, ${batchId}::uuid,
+        ${safeStr(row["Referring page URL"])},
+        ${safeStr(row["Referring page title"])},
+        ${safeStr(row["Language"])},
+        ${safeStr(row["Platform"])},
+        ${safeInt(row["Referring page HTTP code"])},
+        ${safeNum(row["Domain rating"])},
+        ${safeNum(row["UR"])},
+        ${safeInt(row["Domain traffic"])},
+        ${safeInt(row["Page traffic"])},
+        ${safeStr(row["Target URL"])},
+        ${targetHttpCode},
+        ${safeStr(row["Anchor"])},
+        ${safeStr(row["Left context"])},
+        ${safeStr(row["Right context"])},
+        ${safeStr(row["Type"])},
+        ${safeBool(row["Nofollow"])},
+        ${safeBool(row["Is spam"])},
+        ${safeBool(row["UGC"])},
+        ${safeBool(row["Sponsored"])},
+        ${isLost},
+        ${safeStr(row["Drop reason"])},
+        ${parseDate(row["First seen"])},
+        ${parseDate(row["Last seen"])},
+        ${lostAt},
+        ${safeStr(row["Page type"])},
+        ${safeStr(row["Author"])},
+        now(), now()
+      )`;
+    });
+    await dbExec(sql`
+      INSERT INTO ahrefs_backlinks
+        (brand_id, import_batch_id, referring_page_url, referring_page_title,
+         language, platform, referring_page_http_code, dr, ur, domain_traffic,
+         page_traffic, target_url, target_http_code, anchor, left_context, right_context,
+         link_type, is_nofollow, is_spam, is_ugc, is_sponsored,
+         is_lost, drop_reason, first_seen, last_seen, lost_at, page_type, author,
+         created_at, updated_at)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (brand_id, referring_page_url)
+      DO UPDATE SET
+        import_batch_id      = EXCLUDED.import_batch_id,
+        referring_page_title = EXCLUDED.referring_page_title,
+        dr                   = EXCLUDED.dr,
+        ur                   = EXCLUDED.ur,
+        domain_traffic       = EXCLUDED.domain_traffic,
+        page_traffic         = EXCLUDED.page_traffic,
+        target_url           = EXCLUDED.target_url,
+        -- Preserve an existing target_http_code from a BrokenBacklinks upload
+        -- if the current row (a normal Backlinks row) doesn't carry one.
+        target_http_code     = COALESCE(EXCLUDED.target_http_code, ahrefs_backlinks.target_http_code),
+        anchor               = EXCLUDED.anchor,
+        is_nofollow          = EXCLUDED.is_nofollow,
+        is_spam              = EXCLUDED.is_spam,
+        is_lost              = EXCLUDED.is_lost,
+        drop_reason          = EXCLUDED.drop_reason,
+        first_seen           = COALESCE(ahrefs_backlinks.first_seen, EXCLUDED.first_seen),
+        last_seen            = EXCLUDED.last_seen,
+        lost_at              = EXCLUDED.lost_at,
+        updated_at           = now()
+    `);
   }
-  return count;
+  return rows.length;
 }
 
 async function ingestReferringDomains(
@@ -201,46 +194,48 @@ async function ingestReferringDomains(
   rows: Record<string, unknown>[],
   dbExec: (q: ReturnType<typeof sql>) => Promise<unknown>,
 ): Promise<number> {
-  let count = 0;
-  for (const row of rows) {
-    const domain = safeStr(row["Domain"]);
-    if (!domain) continue;
-    const isLost = safeStr(row["Lost"]) != null;
-    await dbExec(sql`
-      INSERT INTO referring_domains
-        (brand_id, domain, dr, backlinks_count, linked_domains, dofollow_links,
-         is_lost, is_spam, traffic_domain, first_seen, last_seen,
-         source_provider, source_metadata, ahrefs_last_updated, created_at, updated_at)
-      VALUES (
-        ${brandId}::uuid, ${domain},
+  const validRows = rows.filter((row) => safeStr(row["Domain"]) != null);
+  const CHUNK = 300;
+  for (let i = 0; i < validRows.length; i += CHUNK) {
+    const chunk = validRows.slice(i, i + CHUNK);
+    const values = chunk.map((row) => {
+      const isLost = safeStr(row["Lost"]) != null;
+      return sql`(
+        ${brandId}::uuid, ${safeStr(row["Domain"])},
         ${safeNum(row["DR"])},
         ${safeInt(row["Links to target"])},
         ${safeInt(row["Dofollow linked domains"])},
         ${safeInt(row["Dofollow links"])},
         ${isLost},
         ${safeBool(row["Is spam"])},
-        ${safeInt(row["Traffic "] ?? row["Traffic"])},
+        ${safeInt((row["Traffic "] ?? row["Traffic"]) as unknown)},
         ${parseDate(row["First seen"])},
         ${isLost ? parseDate(row["Lost"]) : null},
-        'ahrefs_bulk_import', '{}', now(), now(), now()
-      )
+        ${"ahrefs_bulk_import"}, ${"{}"}::jsonb, now(), now(), now()
+      )`;
+    });
+    await dbExec(sql`
+      INSERT INTO referring_domains
+        (brand_id, domain, dr, backlinks_count, linked_domains, dofollow_links,
+         is_lost, is_spam, traffic_domain, first_seen, last_seen,
+         source_provider, source_metadata, ahrefs_last_updated, created_at, updated_at)
+      VALUES ${sql.join(values, sql`, `)}
       ON CONFLICT (brand_id, domain)
       DO UPDATE SET
-        dr                 = EXCLUDED.dr,
-        backlinks_count    = EXCLUDED.backlinks_count,
-        linked_domains     = EXCLUDED.linked_domains,
-        dofollow_links     = EXCLUDED.dofollow_links,
-        is_lost            = EXCLUDED.is_lost,
-        is_spam            = EXCLUDED.is_spam,
-        traffic_domain     = EXCLUDED.traffic_domain,
-        first_seen         = COALESCE(referring_domains.first_seen, EXCLUDED.first_seen),
-        last_seen          = EXCLUDED.last_seen,
+        dr                  = EXCLUDED.dr,
+        backlinks_count     = EXCLUDED.backlinks_count,
+        linked_domains      = EXCLUDED.linked_domains,
+        dofollow_links      = EXCLUDED.dofollow_links,
+        is_lost             = EXCLUDED.is_lost,
+        is_spam             = EXCLUDED.is_spam,
+        traffic_domain      = EXCLUDED.traffic_domain,
+        first_seen          = COALESCE(referring_domains.first_seen, EXCLUDED.first_seen),
+        last_seen           = EXCLUDED.last_seen,
         ahrefs_last_updated = now(),
-        updated_at         = now()
+        updated_at          = now()
     `);
-    count++;
   }
-  return count;
+  return validRows.length;
 }
 
 async function ingestAnchors(
@@ -249,45 +244,45 @@ async function ingestAnchors(
   rows: Record<string, unknown>[],
   dbExec: (q: ReturnType<typeof sql>) => Promise<unknown>,
 ): Promise<number> {
-  let count = 0;
-  for (const row of rows) {
-    const anchorText = safeStr(row["Anchor text"]);
-    if (anchorText == null) continue;
+  const validRows = rows.filter((row) => safeStr(row["Anchor text"]) != null);
+  const CHUNK = 300;
+  for (let i = 0; i < validRows.length; i += CHUNK) {
+    const chunk = validRows.slice(i, i + CHUNK);
+    const values = chunk.map((row) => sql`(
+      ${brandId}::uuid, ${batchId}::uuid,
+      ${safeStr(row["Anchor text"])},
+      ${safeInt(row["Ref. domains"])},
+      ${safeInt(row["Top DR"])},
+      ${safeInt(row["Ref. pages"])},
+      ${safeInt(row["Links to target"])},
+      ${safeInt(row["New links"])},
+      ${safeInt(row["Lost links"])},
+      ${safeInt(row["Dofollow links"])},
+      ${parseDate(row["First seen"])},
+      ${safeStr(row["Lost"]) != null},
+      now(), now()
+    )`);
     await dbExec(sql`
       INSERT INTO ahrefs_anchors
         (brand_id, import_batch_id, anchor_text, ref_domains_count, top_dr,
          ref_pages_count, links_to_target, new_links, lost_links, dofollow_links,
          first_seen, is_lost, created_at, updated_at)
-      VALUES (
-        ${brandId}::uuid, ${batchId}::uuid,
-        ${anchorText},
-        ${safeInt(row["Ref. domains"])},
-        ${safeInt(row["Top DR"])},
-        ${safeInt(row["Ref. pages"])},
-        ${safeInt(row["Links to target"])},
-        ${safeInt(row["New links"])},
-        ${safeInt(row["Lost links"])},
-        ${safeInt(row["Dofollow links"])},
-        ${parseDate(row["First seen"])},
-        ${safeStr(row["Lost"]) != null},
-        now(), now()
-      )
+      VALUES ${sql.join(values, sql`, `)}
       ON CONFLICT (brand_id, anchor_text)
       DO UPDATE SET
-        import_batch_id  = EXCLUDED.import_batch_id,
+        import_batch_id   = EXCLUDED.import_batch_id,
         ref_domains_count = EXCLUDED.ref_domains_count,
-        top_dr           = EXCLUDED.top_dr,
-        ref_pages_count  = EXCLUDED.ref_pages_count,
-        links_to_target  = EXCLUDED.links_to_target,
-        new_links        = EXCLUDED.new_links,
-        lost_links       = EXCLUDED.lost_links,
-        dofollow_links   = EXCLUDED.dofollow_links,
-        is_lost          = EXCLUDED.is_lost,
-        updated_at       = now()
+        top_dr            = EXCLUDED.top_dr,
+        ref_pages_count   = EXCLUDED.ref_pages_count,
+        links_to_target   = EXCLUDED.links_to_target,
+        new_links         = EXCLUDED.new_links,
+        lost_links        = EXCLUDED.lost_links,
+        dofollow_links    = EXCLUDED.dofollow_links,
+        is_lost           = EXCLUDED.is_lost,
+        updated_at        = now()
     `);
-    count++;
   }
-  return count;
+  return validRows.length;
 }
 
 async function ingestBestByLinks(
@@ -295,36 +290,37 @@ async function ingestBestByLinks(
   rows: Record<string, unknown>[],
   dbExec: (q: ReturnType<typeof sql>) => Promise<unknown>,
 ): Promise<number> {
-  let count = 0;
-  for (const row of rows) {
-    const pageUrl = safeStr(row["Page URL"]);
-    if (!pageUrl) continue;
+  const validRows = rows.filter((row) => safeStr(row["Page URL"]) != null);
+  const CHUNK = 200;
+  for (let i = 0; i < validRows.length; i += CHUNK) {
+    const chunk = validRows.slice(i, i + CHUNK);
+    const values = chunk.map((row) => sql`(
+      ${brandId}::uuid,
+      ${safeStr(row["Page URL"])},
+      ${safeStr(row["Page title"])},
+      ${safeStr(row["Language"])},
+      ${safeStr(row["Platform"])},
+      ${safeNum(row["UR"])},
+      ${safeInt(row["Referring domains"])},
+      ${safeInt(row["Top DR"])},
+      ${safeInt(row["Links to target"])},
+      ${safeInt(row["New Links"])},
+      ${safeInt(row["Lost Links"])},
+      ${safeInt(row["Dofollow"])},
+      ${safeInt(row["Nofollow"])},
+      ${safeInt(row["Redirects"])},
+      ${safeInt(row["Page HTTP code"])},
+      ${parseDate(row["First seen"])},
+      ${parseDate(row["Last seen"])},
+      now(), now()
+    )`);
     await dbExec(sql`
       INSERT INTO ahrefs_best_by_links
         (brand_id, page_url, page_title, language, platform, ur,
          ref_domains, top_dr, links_to_target, new_links, lost_links,
          dofollow_links, nofollow_links, redirect_links, page_http_code,
          first_seen, last_seen, created_at, updated_at)
-      VALUES (
-        ${brandId}::uuid,
-        ${pageUrl},
-        ${safeStr(row["Page title"])},
-        ${safeStr(row["Language"])},
-        ${safeStr(row["Platform"])},
-        ${safeNum(row["UR"])},
-        ${safeInt(row["Referring domains"])},
-        ${safeInt(row["Top DR"])},
-        ${safeInt(row["Links to target"])},
-        ${safeInt(row["New Links"])},
-        ${safeInt(row["Lost Links"])},
-        ${safeInt(row["Dofollow"])},
-        ${safeInt(row["Nofollow"])},
-        ${safeInt(row["Redirects"])},
-        ${safeInt(row["Page HTTP code"])},
-        ${parseDate(row["First seen"])},
-        ${parseDate(row["Last seen"])},
-        now(), now()
-      )
+      VALUES ${sql.join(values, sql`, `)}
       ON CONFLICT (brand_id, page_url)
       DO UPDATE SET
         page_title      = EXCLUDED.page_title,
@@ -343,9 +339,8 @@ async function ingestBestByLinks(
         last_seen       = EXCLUDED.last_seen,
         updated_at      = now()
     `);
-    count++;
   }
-  return count;
+  return validRows.length;
 }
 
 async function ingestTopPages(
@@ -354,25 +349,20 @@ async function ingestTopPages(
   rows: Record<string, unknown>[],
   dbExec: (q: ReturnType<typeof sql>) => Promise<unknown>,
 ): Promise<number> {
-  let count = 0;
-  for (const row of rows) {
-    const url = safeStr(row["URL"]);
-    if (!url) continue;
-    const prevTraffic = safeInt(row["Previous traffic"]);
-    const currTraffic = safeInt(row["Current traffic"]);
-    const trafficChange =
-      prevTraffic != null && currTraffic != null
-        ? currTraffic - prevTraffic
-        : safeInt(row["Traffic change"]);
-    await dbExec(sql`
-      INSERT INTO ahrefs_page_performance
-        (brand_id, import_batch_id, url, status, ur, prev_traffic, curr_traffic,
-         traffic_change, prev_traffic_value, curr_traffic_value, curr_ref_domains,
-         prev_keywords, curr_keywords, page_type, prev_top_keyword, curr_top_keyword,
-         created_at, updated_at)
-      VALUES (
+  const validRows = rows.filter((row) => safeStr(row["URL"]) != null);
+  const CHUNK = 200;
+  for (let i = 0; i < validRows.length; i += CHUNK) {
+    const chunk = validRows.slice(i, i + CHUNK);
+    const values = chunk.map((row) => {
+      const prevTraffic = safeInt(row["Previous traffic"]);
+      const currTraffic = safeInt(row["Current traffic"]);
+      const trafficChange =
+        prevTraffic != null && currTraffic != null
+          ? currTraffic - prevTraffic
+          : safeInt(row["Traffic change"]);
+      return sql`(
         ${brandId}::uuid, ${batchId}::uuid,
-        ${url},
+        ${safeStr(row["URL"])},
         ${safeStr(row["Status"])},
         ${safeNum(row["UR"])},
         ${prevTraffic},
@@ -387,7 +377,15 @@ async function ingestTopPages(
         ${safeStr(row["Previous top keyword"])},
         ${safeStr(row["Current top keyword"])},
         now(), now()
-      )
+      )`;
+    });
+    await dbExec(sql`
+      INSERT INTO ahrefs_page_performance
+        (brand_id, import_batch_id, url, status, ur, prev_traffic, curr_traffic,
+         traffic_change, prev_traffic_value, curr_traffic_value, curr_ref_domains,
+         prev_keywords, curr_keywords, page_type, prev_top_keyword, curr_top_keyword,
+         created_at, updated_at)
+      VALUES ${sql.join(values, sql`, `)}
       ON CONFLICT (brand_id, url)
       DO UPDATE SET
         import_batch_id    = EXCLUDED.import_batch_id,
@@ -405,9 +403,8 @@ async function ingestTopPages(
         curr_top_keyword   = EXCLUDED.curr_top_keyword,
         updated_at         = now()
     `);
-    count++;
   }
-  return count;
+  return validRows.length;
 }
 
 async function ingestOrganicKeywords(
@@ -464,7 +461,6 @@ async function ingestContentGap(
   rows: Record<string, unknown>[],
   dbExec: (q: ReturnType<typeof sql>) => Promise<unknown>,
 ): Promise<number> {
-  let count = 0;
   if (rows.length === 0) return 0;
 
   // Detect competitor domains from the column headers
@@ -478,23 +474,38 @@ async function ingestContentGap(
     ),
   ];
 
+  // Pre-collect all valid (keyword × competitor) pairs before batching
+  type GapEntry = {
+    keyword: string;
+    intentsPg: string | null;
+    volume: number | null;
+    kd: number | null;
+    cpc: string | null;
+    ourUrl: string | null;
+    ourPosition: number | null;
+    ourTraffic: number | null;
+    comp: string;
+    compUrl: string | null;
+    compPos: number;
+    compTraffic: number | null;
+    priorityScore: number | null;
+  };
+
+  const entries: GapEntry[] = [];
+
   for (const row of rows) {
     const keyword = safeStr(row["Keyword"]);
     if (!keyword) continue;
 
     const intentsRaw = safeStr(row["Intents"]);
     // Ahrefs exports intents as CSV-quoted values like: "Informational","Commercial"
-    // Split by comma FIRST, then strip surrounding quotes from each element.
     const intents = intentsRaw
       ? intentsRaw
           .split(",")
           .map((s) => s.trim().replace(/^"|"$/g, "").trim())
           .filter(Boolean)
       : [];
-
     // Format as a PostgreSQL array literal {val1,val2} passed as a single string parameter.
-    // Drizzle's sql template spreads JS arrays into multiple positional params ($4,$5)
-    // and casts them as records — not text[].  A literal string + ::text[] cast is correct.
     const intentsPg =
       intents.length > 0
         ? `{${intents.map((s) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`
@@ -503,12 +514,9 @@ async function ingestContentGap(
     const volume = safeInt(row["Volume"]);
     const kd = safeInt(row["KD"]);
     const cpc = safeNum(row["CPC"]);
-
-    // Our data (might be null if we don't rank)
     const ourUrl = safeStr(row["www.tekrevol.com/: URL"]);
     const ourPosition = safeInt(row["www.tekrevol.com/: Organic Position"]);
     const ourTraffic = safeInt(row["www.tekrevol.com/: Organic Traffic"]);
-
     const priorityScore =
       volume != null && kd != null ? Math.round(volume * (1 - kd / 100)) : null;
 
@@ -516,44 +524,52 @@ async function ingestContentGap(
       const compUrl = safeStr(row[`${comp}: URL`]);
       const compPos = safeInt(row[`${comp}: Organic Position`]);
       const compTraffic = safeInt(row[`${comp}: Organic Traffic`]);
-
-      if (!compPos) continue; // competitor doesn't rank for this keyword either
-
-      await dbExec(sql`
-        INSERT INTO ahrefs_content_gap
-          (brand_id, import_batch_id, keyword, intents, volume, kd, cpc,
-           our_url, our_position, our_traffic,
-           competitor_domain, competitor_url, competitor_position, competitor_traffic,
-           priority_score, created_at, updated_at)
-        VALUES (
-          ${brandId}::uuid, ${batchId}::uuid,
-          ${keyword},
-          ${intentsPg}::text[],
-          ${volume}, ${kd}, ${cpc},
-          ${ourUrl}, ${ourPosition}, ${ourTraffic},
-          ${comp}, ${compUrl}, ${compPos}, ${compTraffic},
-          ${priorityScore}, now(), now()
-        )
-        ON CONFLICT (brand_id, keyword, competitor_domain)
-        DO UPDATE SET
-          import_batch_id      = EXCLUDED.import_batch_id,
-          intents              = EXCLUDED.intents,
-          volume               = EXCLUDED.volume,
-          kd                   = EXCLUDED.kd,
-          cpc                  = EXCLUDED.cpc,
-          our_url              = EXCLUDED.our_url,
-          our_position         = EXCLUDED.our_position,
-          our_traffic          = EXCLUDED.our_traffic,
-          competitor_url       = EXCLUDED.competitor_url,
-          competitor_position  = EXCLUDED.competitor_position,
-          competitor_traffic   = EXCLUDED.competitor_traffic,
-          priority_score       = EXCLUDED.priority_score,
-          updated_at           = now()
-      `);
-      count++;
+      if (!compPos) continue; // competitor doesn't rank for this keyword
+      entries.push({
+        keyword, intentsPg, volume, kd, cpc,
+        ourUrl, ourPosition, ourTraffic,
+        comp, compUrl, compPos: compPos!, compTraffic, priorityScore,
+      });
     }
   }
-  return count;
+
+  const CHUNK = 150;
+  for (let i = 0; i < entries.length; i += CHUNK) {
+    const chunk = entries.slice(i, i + CHUNK);
+    const values = chunk.map((e) => sql`(
+      ${brandId}::uuid, ${batchId}::uuid,
+      ${e.keyword},
+      ${e.intentsPg}::text[],
+      ${e.volume}, ${e.kd}, ${e.cpc},
+      ${e.ourUrl}, ${e.ourPosition}, ${e.ourTraffic},
+      ${e.comp}, ${e.compUrl}, ${e.compPos}, ${e.compTraffic},
+      ${e.priorityScore}, now(), now()
+    )`);
+    await dbExec(sql`
+      INSERT INTO ahrefs_content_gap
+        (brand_id, import_batch_id, keyword, intents, volume, kd, cpc,
+         our_url, our_position, our_traffic,
+         competitor_domain, competitor_url, competitor_position, competitor_traffic,
+         priority_score, created_at, updated_at)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (brand_id, keyword, competitor_domain)
+      DO UPDATE SET
+        import_batch_id     = EXCLUDED.import_batch_id,
+        intents             = EXCLUDED.intents,
+        volume              = EXCLUDED.volume,
+        kd                  = EXCLUDED.kd,
+        cpc                 = EXCLUDED.cpc,
+        our_url             = EXCLUDED.our_url,
+        our_position        = EXCLUDED.our_position,
+        our_traffic         = EXCLUDED.our_traffic,
+        competitor_url      = EXCLUDED.competitor_url,
+        competitor_position = EXCLUDED.competitor_position,
+        competitor_traffic  = EXCLUDED.competitor_traffic,
+        priority_score      = EXCLUDED.priority_score,
+        updated_at          = now()
+    `);
+  }
+  return entries.length;
 }
 
 // ---- upload route ----------------------------------------------------------
