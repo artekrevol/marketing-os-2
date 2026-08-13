@@ -7,7 +7,11 @@
  */
 async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) {
+  // Never override Content-Type for FormData — the browser must set it automatically
+  // so the multipart boundary is included (e.g. "multipart/form-data; boundary=...").
+  // Manually setting it to "application/json" causes express.json() to intercept the
+  // multipart body and throw a 413/400 before multer ever sees the files.
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   return fetch(path, { ...init, headers, credentials: "include" });
