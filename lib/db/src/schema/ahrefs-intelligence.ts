@@ -6,6 +6,7 @@ import {
   bigint,
   numeric,
   boolean,
+  jsonb,
   timestamp,
   index,
   unique,
@@ -256,4 +257,51 @@ export const ahrefsContentGapTable = pgTable(
 );
 
 export type AhrefsContentGap = typeof ahrefsContentGapTable.$inferSelect;
+
+/* -------------------------------------------------------------------------- */
+/* ahrefs_raw_snapshots — GCS-backed snapshot store for the two-step upload   */
+/*                                                                             */
+/* Step 1 (HTTP): XLSX files are stored in GCS one-at-a-time, organised by    */
+/*   month ("2026-07"). No parsing happens during upload.                     */
+/* Step 2 (BullMQ): worker downloads files, parses, upserts intelligence     */
+/*   tables, and marks the snapshot 'done'.                                   */
+/*                                                                             */
+/* Historical snapshots remain in GCS indefinitely and can be re-ingested.   */
+/* -------------------------------------------------------------------------- */
+export const ahrefsRawSnapshotsTable = pgTable(
+  "ahrefs_raw_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brandsTable.id, { onDelete: "restrict" }),
+    /** "2026-07" — month label used as the GCS folder name. */
+    snapshotMonth: text("snapshot_month").notNull(),
+    /** pending → ingesting → done | error */
+    status: text("status").notNull().default("pending"),
+    /** [{name, objectName, size}] — one entry per uploaded XLSX file. */
+    filePaths: jsonb("file_paths")
+      .$type<Array<{ name: string; objectName: string; size: number }>>()
+      .notNull()
+      .default([]),
+    /** Set once ingestion completes — FK to the created import batch. */
+    batchId: uuid("batch_id").references(() => ahrefsImportBatchesTable.id, {
+      onDelete: "set null",
+    }),
+    errorMessage: text("error_message"),
+    /** {backlinks, referringDomains, anchors, …} row counts from the ingest run. */
+    rowCounts: jsonb("row_counts").$type<Record<string, number>>(),
+    fileCount: integer("file_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    ingestStartedAt: timestamp("ingest_started_at", { withTimezone: true }),
+    ingestCompletedAt: timestamp("ingest_completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("ahrefs_raw_snapshots_brand_month_idx").on(t.brandId, t.snapshotMonth),
+    index("ahrefs_raw_snapshots_status_idx").on(t.status),
+  ],
+);
+
+export type AhrefsRawSnapshot = typeof ahrefsRawSnapshotsTable.$inferSelect;
+export type InsertAhrefsRawSnapshot = typeof ahrefsRawSnapshotsTable.$inferInsert;
 export type InsertAhrefsContentGap = typeof ahrefsContentGapTable.$inferInsert;

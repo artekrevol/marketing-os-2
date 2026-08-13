@@ -1,18 +1,24 @@
-import { useState, useRef } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useRef, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   KeyRound, MapPin, Users, CalendarClock, Upload, TrendingDown,
   AlertTriangle, Link2, Lightbulb, TrendingUp, TrendingDown as TrendDown,
-  X, CheckCircle2,
+  X, CheckCircle2, Clock, Loader2, CheckCheck, FolderOpen, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { seo } from "@/lib/api";
 import { SeoShell, withBrand, StateBox } from "./_shell";
 
 /* -------------------------------------------------------------------------- */
-/* Upload drawer                                                               */
+/* Upload drawer — two-step: store files in GCS, then ingest in background    */
 /* -------------------------------------------------------------------------- */
+function defaultSnapshotMonth() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function UploadDrawer({
   brandId,
   onClose,
@@ -24,19 +30,11 @@ function UploadDrawer({
 }) {
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [snapshotMonth, setSnapshotMonth] = useState(defaultSnapshotMonth);
+  const [phase, setPhase] = useState<"pick" | "uploading" | "queued">("pick");
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const uploadM = useMutation({
-    mutationFn: () => seo.ahrefsUpload(brandId, files),
-    onSuccess: (data) => {
-      toast.success(
-        `Imported ${Object.values(data.imported).reduce((a, b) => a + b, 0).toLocaleString()} rows across ${data.imported ? Object.keys(data.imported).length : 0} file types`,
-      );
-      onSuccess();
-      onClose();
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
 
   const addFiles = (incoming: FileList | null) => {
     if (!incoming) return;
@@ -44,84 +42,306 @@ function UploadDrawer({
       (f) => f.name.endsWith(".xlsx") || f.name.endsWith(".csv"),
     );
     setFiles((prev) => {
-      const urls = new Set(prev.map((f) => f.name));
-      return [...prev, ...valid.filter((f) => !urls.has(f.name))];
+      const existing = new Set(prev.map((f) => f.name));
+      return [...prev, ...valid.filter((f) => !existing.has(f.name))];
     });
   };
+
+  const startUpload = async () => {
+    if (files.length === 0) return;
+    setPhase("uploading");
+    setProgress({ done: 0, total: files.length });
+    setUploadErr(null);
+    try {
+      // 1. Create the snapshot record
+      const { snapshotId } = await seo.ahrefsCreateSnapshot(brandId, snapshotMonth);
+      // 2. Upload each file individually (avoids any body-size limit)
+      for (let i = 0; i < files.length; i++) {
+        await seo.ahrefsUploadFile(brandId, snapshotId, files[i]!);
+        setProgress({ done: i + 1, total: files.length });
+      }
+      // 3. Enqueue the background ingest job
+      await seo.ahrefsIngestSnapshot(brandId, snapshotId);
+      setPhase("queued");
+      toast.success(
+        `${files.length} file${files.length !== 1 ? "s" : ""} stored — import running in background`,
+      );
+      onSuccess();
+      setTimeout(onClose, 1200);
+    } catch (e) {
+      setUploadErr(String(e));
+      setPhase("pick");
+    }
+  };
+
+  // Auto-close after "queued" state is shown briefly
+  useEffect(() => {
+    if (phase !== "queued") return;
+    const t = setTimeout(onClose, 1500);
+    return () => clearTimeout(t);
+  }, [phase, onClose]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
       <div className="bg-background border border-rule rounded-lg shadow-xl w-full max-w-lg p-6">
+        {/* Header */}
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="font-serif text-xl tracking-tight">Upload Ahrefs Snapshot</h2>
             <p className="text-xs text-ink-muted mt-0.5">
-              Export from Ahrefs and drop all files here — we auto-detect each type.
+              Files are stored in GCS and imported in the background — no timeouts.
             </p>
           </div>
-          <button onClick={onClose} className="text-ink-muted hover:text-ink ml-4">
+          <button onClick={onClose} disabled={phase === "uploading"} className="text-ink-muted hover:text-ink ml-4 disabled:opacity-40">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Drop zone */}
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
-          onClick={() => inputRef.current?.click()}
-          className={`border-2 border-dashed rounded-md p-8 text-center cursor-pointer transition-colors ${
-            dragging ? "border-accent bg-accent/5" : "border-rule hover:border-accent/60"
-          }`}
-        >
-          <Upload className="h-8 w-8 text-ink-muted mx-auto mb-2" />
-          <p className="text-sm text-ink-muted">
-            Drop Ahrefs XLSX files here or <span className="text-accent underline">browse</span>
-          </p>
-          <p className="text-xs text-ink-muted mt-1">
-            Backlinks · ReferringDomains · Anchors · BrokenBacklinks · OrganicKeywords · TopPages · ContentGap
-          </p>
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            accept=".xlsx,.csv"
-            className="hidden"
-            onChange={(e) => addFiles(e.target.files)}
-          />
-        </div>
+        {phase === "uploading" ? (
+          /* ── Uploading progress ── */
+          <div className="py-8 text-center">
+            <Loader2 className="h-8 w-8 text-accent mx-auto mb-3 animate-spin" />
+            <p className="text-sm font-medium">
+              Uploading {progress.done} / {progress.total} files…
+            </p>
+            <div className="mt-3 h-1.5 rounded-full bg-secondary overflow-hidden">
+              <div
+                className="h-full bg-accent transition-all duration-300"
+                style={{ width: `${(progress.done / progress.total) * 100}%` }}
+              />
+            </div>
+            <p className="text-xs text-ink-muted mt-2">
+              Each file is securely stored. Do not close this tab.
+            </p>
+          </div>
+        ) : phase === "queued" ? (
+          /* ── Queued ── */
+          <div className="py-8 text-center">
+            <CheckCheck className="h-8 w-8 text-green-500 mx-auto mb-3" />
+            <p className="text-sm font-medium">Import queued!</p>
+            <p className="text-xs text-ink-muted mt-1">
+              The background worker is processing your files. Check the snapshot history for progress.
+            </p>
+          </div>
+        ) : (
+          /* ── Pick files ── */
+          <>
+            {/* Month picker */}
+            <div className="mb-3 flex items-center gap-3">
+              <label className="text-xs font-medium text-ink-muted whitespace-nowrap">Snapshot month</label>
+              <input
+                type="month"
+                value={snapshotMonth}
+                onChange={(e) => setSnapshotMonth(e.target.value)}
+                className="flex-1 border border-rule rounded-sm px-2 py-1 text-sm bg-background focus:outline-none focus:border-accent"
+              />
+              <span className="text-[11px] text-ink-muted">(YYYY-MM)</span>
+            </div>
 
-        {files.length > 0 && (
-          <ul className="mt-3 space-y-1">
-            {files.map((f) => (
-              <li key={f.name} className="flex items-center justify-between text-xs">
-                <span className="truncate text-ink-muted">{f.name}</span>
-                <button
-                  onClick={() => setFiles((p) => p.filter((x) => x.name !== f.name))}
-                  className="text-ink-muted hover:text-red-500 ml-2 shrink-0"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
+            {/* Drop zone */}
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+              onClick={() => inputRef.current?.click()}
+              className={`border-2 border-dashed rounded-md p-6 text-center cursor-pointer transition-colors ${
+                dragging ? "border-accent bg-accent/5" : "border-rule hover:border-accent/60"
+              }`}
+            >
+              <Upload className="h-7 w-7 text-ink-muted mx-auto mb-2" />
+              <p className="text-sm text-ink-muted">
+                Drop Ahrefs XLSX files here or <span className="text-accent underline">browse</span>
+              </p>
+              <p className="text-xs text-ink-muted mt-1">
+                Backlinks · ReferringDomains · Anchors · BrokenBacklinks · OrganicKeywords · TopPages · ContentGap
+              </p>
+              <input
+                ref={inputRef}
+                type="file"
+                multiple
+                accept=".xlsx,.csv"
+                className="hidden"
+                onChange={(e) => addFiles(e.target.files)}
+              />
+            </div>
+
+            {files.length > 0 && (
+              <ul className="mt-3 max-h-36 overflow-y-auto space-y-1">
+                {files.map((f) => (
+                  <li key={f.name} className="flex items-center justify-between text-xs">
+                    <span className="truncate text-ink-muted">{f.name}</span>
+                    <button
+                      onClick={() => setFiles((p) => p.filter((x) => x.name !== f.name))}
+                      className="text-ink-muted hover:text-red-500 ml-2 shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {uploadErr && (
+              <p className="mt-2 text-xs text-red-500">{uploadErr}</p>
+            )}
+
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={onClose}
+                className="flex-1 border border-rule rounded-sm px-4 py-2 text-sm text-ink-muted hover:bg-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={startUpload}
+                disabled={files.length === 0}
+                className="flex-1 bg-ink text-paper rounded-sm px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+              >
+                Upload &amp; Queue Import ({files.length})
+              </button>
+            </div>
+          </>
         )}
+      </div>
+    </div>
+  );
+}
 
-        <div className="flex gap-3 mt-5">
-          <button
-            onClick={onClose}
-            className="flex-1 border border-rule rounded-sm px-4 py-2 text-sm text-ink-muted hover:bg-secondary"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => uploadM.mutate()}
-            disabled={files.length === 0 || uploadM.isPending}
-            className="flex-1 bg-ink text-paper rounded-sm px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-          >
-            {uploadM.isPending ? "Importing…" : `Import ${files.length} file${files.length !== 1 ? "s" : ""}`}
-          </button>
-        </div>
+/* -------------------------------------------------------------------------- */
+/* Snapshot history — date-month folders with status badges                   */
+/* -------------------------------------------------------------------------- */
+type RawSnapshot = {
+  id: string;
+  snapshot_month: string;
+  status: string;
+  file_count: number;
+  row_counts: Record<string, number> | null;
+  error_message: string | null;
+  created_at: string;
+  ingest_started_at: string | null;
+  ingest_completed_at: string | null;
+  backlink_count: number | null;
+  page_count: number | null;
+};
+
+function StatusBadge({ status }: { status: string }) {
+  if (status === "done")
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+        <CheckCircle2 className="h-3 w-3" /> Done
+      </span>
+    );
+  if (status === "ingesting")
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5">
+        <Loader2 className="h-3 w-3 animate-spin" /> Processing
+      </span>
+    );
+  if (status === "error")
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-full px-2 py-0.5">
+        <AlertTriangle className="h-3 w-3" /> Error
+      </span>
+    );
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-ink-muted bg-secondary border border-rule rounded-full px-2 py-0.5">
+      <Clock className="h-3 w-3" /> Pending
+    </span>
+  );
+}
+
+function SnapshotHistory({
+  brandId,
+  onRetrigger,
+}: {
+  brandId: string;
+  onRetrigger: () => void;
+}) {
+  const qc = useQueryClient();
+  const snapshotsQ = useQuery({
+    queryKey: ["seo", "ahrefs-snapshots", brandId],
+    queryFn: () => seo.ahrefsListSnapshots(brandId),
+    refetchInterval: (q) => {
+      const snaps: RawSnapshot[] = (q.state.data as { snapshots: RawSnapshot[] } | undefined)?.snapshots ?? [];
+      const hasActive = snaps.some((s) => s.status === "ingesting" || s.status === "pending");
+      return hasActive ? 5_000 : false;
+    },
+    staleTime: 10_000,
+  });
+
+  const snapshots: RawSnapshot[] = snapshotsQ.data?.snapshots ?? [];
+
+  if (snapshots.length === 0 && !snapshotsQ.isLoading) return null;
+
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium flex items-center gap-2">
+          <FolderOpen className="h-4 w-4 text-ink-muted" />
+          Snapshot History
+        </h3>
+        <button
+          onClick={() => qc.invalidateQueries({ queryKey: ["seo", "ahrefs-snapshots", brandId] })}
+          className="text-ink-muted hover:text-ink"
+          title="Refresh"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <div className="border border-rule rounded-md divide-y divide-rule overflow-hidden">
+        {snapshotsQ.isLoading ? (
+          <div className="p-4 text-xs text-ink-muted text-center">Loading…</div>
+        ) : snapshots.length === 0 ? (
+          <div className="p-4 text-xs text-ink-muted text-center">No snapshots yet</div>
+        ) : (
+          snapshots.map((snap) => {
+            const totalRows = snap.row_counts
+              ? Object.values(snap.row_counts).reduce((a, b) => a + b, 0)
+              : null;
+            return (
+              <div key={snap.id} className="flex items-center justify-between px-4 py-3 bg-background hover:bg-secondary/30 transition-colors">
+                <div className="flex items-center gap-3 min-w-0">
+                  <FolderOpen className="h-4 w-4 text-ink-muted shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{snap.snapshot_month}</p>
+                    <p className="text-[11px] text-ink-muted">
+                      {snap.file_count} file{snap.file_count !== 1 ? "s" : ""}
+                      {totalRows != null && ` · ${totalRows.toLocaleString()} rows ingested`}
+                      {snap.ingest_completed_at &&
+                        ` · ${new Date(snap.ingest_completed_at).toLocaleDateString()}`}
+                    </p>
+                    {snap.status === "error" && snap.error_message && (
+                      <p className="text-[11px] text-red-500 mt-0.5 truncate max-w-xs" title={snap.error_message}>
+                        {snap.error_message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 ml-3">
+                  <StatusBadge status={snap.status} />
+                  {snap.status === "error" && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await seo.ahrefsIngestSnapshot(brandId, snap.id);
+                          toast.success("Re-queued for import");
+                          qc.invalidateQueries({ queryKey: ["seo", "ahrefs-snapshots", brandId] });
+                          onRetrigger();
+                        } catch (e) {
+                          toast.error(String(e));
+                        }
+                      }}
+                      className="text-xs text-accent underline hover:no-underline"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -319,8 +539,10 @@ function DashboardInner({ brandId }: { brandId: string }) {
   const ahrefs = ahrefsQ.data;
   const hasAhrefsData = !!ahrefs?.latestBatch;
 
-  const invalidateAhrefs = () =>
+  const invalidateAhrefs = () => {
     qc.invalidateQueries({ queryKey: ["seo", "ahrefs-summary", brandId] });
+    qc.invalidateQueries({ queryKey: ["seo", "ahrefs-snapshots", brandId] });
+  };
 
   return (
     <>
@@ -419,6 +641,12 @@ function DashboardInner({ brandId }: { brandId: string }) {
             </div>
           </div>
         )}
+
+        {/* Snapshot history — shows all past uploads with live status */}
+        <SnapshotHistory
+          brandId={brandId}
+          onRetrigger={invalidateAhrefs}
+        />
 
         {/* Last crawl */}
         <div className="mt-4">

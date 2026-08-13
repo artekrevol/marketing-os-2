@@ -197,6 +197,14 @@ export const SeoDiscoveryWeeklyPayload = BasePayload.extend({
   competitorRankedLimit: z.number().int().min(1).max(1000).default(200),
 });
 
+// Ingest a stored Ahrefs snapshot: reads XLSX files from GCS, parses, and
+// upserts into the intelligence tables. Decoupled from the HTTP upload so
+// the browser never waits on DB operations and files are preserved on failure.
+export const SeoIngestAhrefsSnapshotPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+  snapshotId: z.string().uuid(),
+});
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -270,6 +278,11 @@ export const JOB_REGISTRY = {
   "seo.discovery.weekly": {
     queue: "integrations" as QueueName,
     schema: SeoDiscoveryWeeklyPayload,
+  },
+  // Two-step Ahrefs upload — files stored in GCS, parsed + ingested in background.
+  "seo.ingest-ahrefs-snapshot": {
+    queue: "integrations" as QueueName,
+    schema: SeoIngestAhrefsSnapshotPayload,
   },
 } as const;
 

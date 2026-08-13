@@ -24,10 +24,10 @@
   },
   "dependencies": {
     "@sentry/node": "^8.55.0",
+    "@workspace/content-ai": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/integrations-dataforseo": "workspace:*",
     "@workspace/integrations-originality-ai": "workspace:*",
-    "@workspace/content-ai": "workspace:*",
     "@workspace/jobs": "workspace:*",
     "@workspace/quality-gate": "workspace:*",
     "@workspace/services-recovery": "workspace:*",
@@ -36,6 +36,7 @@
     "ioredis": "^5.4.2",
     "pino": "^9.6.0",
     "thread-stream": "3.1.0",
+    "xlsx": "^0.18.5",
     "zod": "catalog:"
   },
   "devDependencies": {

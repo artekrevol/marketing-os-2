@@ -12,6 +12,7 @@ import schedulesRouter from "./schedules.js";
 import discoveryInboxRouter from "./discovery-inbox.js";
 import competitorCurationRouter from "./competitor-curation.js";
 import ahrefsUploadRouter from "./ahrefs-upload.js";
+import ahrefsSnapshotsRouter from "./ahrefs-snapshots.js";
 import ahrefsIntelligenceRouter from "./ahrefs-intelligence.js";
 
 /**
@@ -39,8 +40,9 @@ router.use("/schedules", schedulesRouter);
 router.use("/discovery-inbox", discoveryInboxRouter);
 router.use("/competitor-curation", competitorCurationRouter);
 
-// Ahrefs Intelligence — bulk export ingest + intelligence query routes
-router.use("/ahrefs", ahrefsUploadRouter);
+// Ahrefs Intelligence — upload, snapshots, and intelligence query routes
+router.use("/ahrefs/snapshots", ahrefsSnapshotsRouter); // new two-step (mount FIRST — before /ahrefs prefix swallows it)
+router.use("/ahrefs", ahrefsUploadRouter);               // legacy one-shot upload (kept for compatibility)
 router.use("/", ahrefsIntelligenceRouter);
 
 export default router;

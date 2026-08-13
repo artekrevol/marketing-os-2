@@ -74,6 +74,8 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   // DataForSEO Labs Discovery — competitor movements + Labs API cost tracking
   "competitor_movements",
   "dataforseo_labs_usage",
+  // Ahrefs two-step snapshot upload (GCS-backed)
+  "ahrefs_raw_snapshots",
 ]);
 
 /** Brand context attached to a scoped transaction. */

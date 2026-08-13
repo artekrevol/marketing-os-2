@@ -905,6 +905,84 @@ export const seo = {
     return { batchId: lastResult.batchId, imported: merged, delta: lastResult.delta };
   },
 
+  // ---- Ahrefs two-step snapshot upload ----
+
+  /** Step 1a: create a pending snapshot record, returns snapshotId. */
+  ahrefsCreateSnapshot: async (
+    brandId: string,
+    snapshotMonth: string,
+  ): Promise<{ snapshotId: string }> =>
+    jsonOrThrow(
+      await authedFetch("/api/seo/ahrefs/snapshots", {
+        method: "POST",
+        body: JSON.stringify({ brandId, snapshotMonth }),
+      }),
+    ),
+
+  /** Step 1b: upload ONE file to GCS via the API server. */
+  ahrefsUploadFile: async (
+    brandId: string,
+    snapshotId: string,
+    file: File,
+  ): Promise<{ ok: boolean; objectName: string }> => {
+    const form = new FormData();
+    form.append("brandId", brandId);
+    form.append("file", file);
+    return jsonOrThrow(
+      await authedFetch(`/api/seo/ahrefs/snapshots/${snapshotId}/files`, {
+        method: "POST",
+        body: form,
+      }),
+    );
+  },
+
+  /** Step 2: kick off the background BullMQ ingest job. */
+  ahrefsIngestSnapshot: async (
+    brandId: string,
+    snapshotId: string,
+  ): Promise<{ ok: boolean; jobId: string }> =>
+    jsonOrThrow(
+      await authedFetch(`/api/seo/ahrefs/snapshots/${snapshotId}/ingest`, {
+        method: "POST",
+        body: JSON.stringify({ brandId }),
+      }),
+    ),
+
+  /** List all snapshots for a brand (ordered newest-first). */
+  ahrefsListSnapshots: async (
+    brandId: string,
+  ): Promise<{
+    snapshots: Array<{
+      id: string;
+      snapshot_month: string;
+      status: string;
+      file_count: number;
+      row_counts: Record<string, number> | null;
+      error_message: string | null;
+      created_at: string;
+      ingest_started_at: string | null;
+      ingest_completed_at: string | null;
+      backlink_count: number | null;
+      page_count: number | null;
+    }>;
+  }> =>
+    jsonOrThrow(
+      await authedFetch(
+        `/api/seo/ahrefs/snapshots?${qs(brandId)}`,
+      ),
+    ),
+
+  /** Get a single snapshot by id (for polling). */
+  ahrefsGetSnapshot: async (
+    brandId: string,
+    snapshotId: string,
+  ): Promise<{ snapshot: { id: string; status: string; row_counts: Record<string, number> | null; error_message: string | null } }> =>
+    jsonOrThrow(
+      await authedFetch(
+        `/api/seo/ahrefs/snapshots/${snapshotId}?${qs(brandId)}`,
+      ),
+    ),
+
   ahrefsSummary: async (brandId: string) =>
     jsonOrThrow<{
       latestBatch: { id: string; imported_at: string; backlink_count: number; page_count: number; content_gap_count: number; delta_new_links: number; delta_lost_links: number; delta_pages_crashed: number } | null;
