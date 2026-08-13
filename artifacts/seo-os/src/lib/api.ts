@@ -871,11 +871,34 @@ export const seo = {
     imported: Record<string, number>;
     delta: { newLinks: number; lostLinks: number; newGapKeywords: number; pagesRecovered: number; pagesCrashed: number };
   }> => {
-    const form = new FormData();
-    form.append("brandId", brandId);
-    for (const f of files) form.append("files", f);
-    const res = await authedFetch("/api/seo/ahrefs/upload", { method: "POST", body: form });
-    return jsonOrThrow(res);
+    type UploadResult = {
+      batchId: string;
+      imported: Record<string, number>;
+      delta: { newLinks: number; lostLinks: number; newGapKeywords: number; pagesRecovered: number; pagesCrashed: number };
+    };
+
+    // Send files in chunks of 3 to avoid proxy body-size limits (413).
+    // Each chunk is a separate batch; inserts are ON CONFLICT DO UPDATE so
+    // data is consistent regardless of how many batches there are.
+    const CHUNK = 3;
+    let lastResult: UploadResult | null = null;
+    const merged: Record<string, number> = {};
+
+    for (let i = 0; i < files.length; i += CHUNK) {
+      const chunk = files.slice(i, i + CHUNK);
+      const form = new FormData();
+      form.append("brandId", brandId);
+      for (const f of chunk) form.append("files", f);
+      const res = await authedFetch("/api/seo/ahrefs/upload", { method: "POST", body: form });
+      const data = await jsonOrThrow<UploadResult>(res);
+      lastResult = data;
+      for (const [k, v] of Object.entries(data.imported)) {
+        merged[k] = (merged[k] ?? 0) + v;
+      }
+    }
+
+    if (!lastResult) throw new Error("No files to upload");
+    return { batchId: lastResult.batchId, imported: merged, delta: lastResult.delta };
   },
 
   ahrefsSummary: async (brandId: string) =>
