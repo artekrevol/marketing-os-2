@@ -10,11 +10,21 @@ import { sql } from "drizzle-orm";
 import { guardedDb, withBrandScope } from "@workspace/db";
 import { enqueue, type JobData } from "@workspace/jobs";
 import type { Logger } from "pino";
+import { decryptToken, encryptToken } from "./google-crypto.js";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GSC_ANALYTICS_BASE = "https://searchconsole.googleapis.com/webmasters/v3/sites";
 
-/* ── token refresh (inline to avoid cross-package dep) ────────────────────── */
+/* ── typed errors for status classification ───────────────────────────────── */
+
+class GscAuthError extends Error {
+  constructor(msg: string) { super(msg); this.name = "GscAuthError"; }
+}
+class GscRateLimitError extends Error {
+  constructor(msg: string) { super(msg); this.name = "GscRateLimitError"; }
+}
+
+/* ── token refresh (inline — no cross-package dep) ────────────────────────── */
 
 function getGoogleCreds() {
   const clientId = process.env["GOOGLE_CLIENT_ID"];
@@ -23,19 +33,23 @@ function getGoogleCreds() {
   return { clientId, clientSecret };
 }
 
-async function refreshToken(refreshToken: string): Promise<{ access_token: string; expires_in: number }> {
+async function refreshToken(encryptedRefreshToken: string): Promise<{ access_token: string; expires_in: number }> {
   const { clientId, clientSecret } = getGoogleCreds();
+  const plainRefreshToken = decryptToken(encryptedRefreshToken);
   const res = await fetch(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      refresh_token: refreshToken,
+      refresh_token: plainRefreshToken,
       client_id: clientId,
       client_secret: clientSecret,
       grant_type: "refresh_token",
     }),
     signal: AbortSignal.timeout(15_000),
   });
+  if (res.status === 401) {
+    throw new GscAuthError(`Refresh token revoked or expired (401)`);
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Token refresh failed (${res.status}): ${body}`);
@@ -63,20 +77,22 @@ async function loadAndRefreshConnection(brandId: string): Promise<{ token: strin
   if (!conn) return null;
   if (!conn.gsc_property_url) return null; // not configured
 
-  // Refresh token if expiring within 5 min
-  let token = conn.access_token;
+  // Refresh access token if expiring within 5 min (pass encrypted refresh token)
+  let plainToken = decryptToken(conn.access_token);
   const expiry = new Date(conn.token_expiry);
   if (expiry <= new Date(Date.now() + 5 * 60 * 1000)) {
+    // refreshToken() handles decryption of the refresh token internally
     const fresh = await refreshToken(conn.refresh_token);
-    token = fresh.access_token;
+    plainToken = fresh.access_token;
     const newExpiry = new Date(Date.now() + fresh.expires_in * 1000);
+    // Store the new access token encrypted
     await guardedDb.execute(sql`
       UPDATE google_brand_connections
-      SET access_token = ${token}, token_expiry = ${newExpiry.toISOString()}, updated_at = now()
+      SET access_token = ${encryptToken(plainToken)}, token_expiry = ${newExpiry.toISOString()}, updated_at = now()
       WHERE id = ${conn.id}::uuid
     `);
   }
-  return { token, propertyUrl: conn.gsc_property_url };
+  return { token: plainToken, propertyUrl: conn.gsc_property_url };
 }
 
 /* ── GSC search analytics fetch ───────────────────────────────────────────── */
@@ -113,6 +129,12 @@ async function fetchSearchAnalytics(
     }),
     signal: AbortSignal.timeout(60_000),
   });
+  if (res.status === 401) {
+    throw new GscAuthError(`GSC returned 401 — access token invalid or revoked`);
+  }
+  if (res.status === 429) {
+    throw new GscRateLimitError(`GSC rate limit hit (429) — will retry on next scheduled run`);
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`GSC search analytics failed (${res.status}): ${body}`);
@@ -188,10 +210,17 @@ export async function handleSeoSyncGscData(
 ): Promise<{ queryRowsUpserted: number; pageRowsUpserted: number }> {
   const { brandId } = data;
 
-  // Calculate date range: last 90 days, always re-fetch last 7 for GSC data lag
+  // Detect first sync — if no rows exist, do a 16-month backfill; otherwise 90-day window.
+  const countRes = (await guardedDb.execute(sql`
+    SELECT COUNT(*)::int AS count FROM gsc_query_rows WHERE brand_id = ${brandId}::uuid
+  `)) as unknown as { rows?: Array<{ count: number }> } | Array<{ count: number }>;
+  const countRows = Array.isArray(countRes) ? countRes : ((countRes as { rows?: Array<{ count: number }> }).rows ?? []);
+  const existingRows = countRows[0]?.count ?? 0;
+  const backfillDays = existingRows === 0 ? 490 : 90; // 490 days ≈ 16 months
+
   const toDate = new Date();
   const fromDate = new Date();
-  fromDate.setDate(fromDate.getDate() - 90);
+  fromDate.setDate(fromDate.getDate() - backfillDays);
   const dateFrom = data.dateFrom ?? fromDate.toISOString().slice(0, 10);
   const dateTo = data.dateTo ?? toDate.toISOString().slice(0, 10);
 
@@ -270,15 +299,23 @@ export async function handleSeoSyncGscData(
       `);
     }
 
-    log.info({ brandId, queryRowsUpserted, pageRowsUpserted }, "gsc-sync: complete");
+    log.info({ brandId, queryRowsUpserted, pageRowsUpserted, backfillDays }, "gsc-sync: complete");
     return { queryRowsUpserted, pageRowsUpserted };
   } catch (err) {
     if (syncLogId) {
+      // Classify the failure for the frontend to surface the right action to admins:
+      //   token_revoked → needs re-authentication
+      //   rate_limited  → recoverable, will retry on next nightly run
+      //   error         → other unexpected failure
+      const status =
+        err instanceof GscAuthError ? "token_revoked"
+        : err instanceof GscRateLimitError ? "rate_limited"
+        : "error";
       await guardedDb.execute(sql`
         UPDATE gsc_sync_log
-        SET status = 'error', error_message = ${String(err)}, completed_at = now()
+        SET status = ${status}, error_message = ${String(err)}, completed_at = now()
         WHERE id = ${syncLogId}::uuid
-      `).catch(() => {/* ignore */});
+      `).catch(() => {/* ignore log update failures */});
     }
     throw err;
   }

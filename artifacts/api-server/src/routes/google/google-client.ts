@@ -8,12 +8,15 @@
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
 
+// Only request these three sensitive scopes — do NOT add BigQuery, Cloud Storage,
+// or other scopes left over from the previous SEO dashboard project in GCP.
 export const GOOGLE_SCOPES = [
   "openid",
   "email",
   "profile",
   "https://www.googleapis.com/auth/webmasters.readonly",
   "https://www.googleapis.com/auth/analytics.readonly",
+  "https://www.googleapis.com/auth/business.manage",
 ].join(" ");
 
 function clientId(): string {

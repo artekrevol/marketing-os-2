@@ -1,0 +1,49 @@
+Noted — Marketing OS lives entirely in Replit's native environment. No git push, no external repo (artekrevol/marketing-os-2 reference from earlier memory is stale). Any dispatch instructions referencing git show --stat HEAD or git-based verification don't apply here.
+
+Final Phase 0 prompt below, adjusted for Replit-native environment. Copy this exactly:
+
+Approved with credentials in place. Ready for Phase 0 execution.
+
+Environment note: Marketing OS lives entirely in Replit's native environment. No git repo, no external push. Commit verification uses Replit's file history / checkpoint system, not git show --stat HEAD. Substitute Replit's equivalent (checkpoint diff, file change summary) wherever prior dispatches referenced git commands.
+
+Decisions locked:
+
+Testing mode for Google OAuth consent screen. TekRevol internal team only for now. Verification deferred until external client use case emerges.
+Data retention: 16 months initial backfill for GSC, 14 months for GA4, retain indefinitely. Revisit rollup strategy only if any single table exceeds 5M rows.
+Authorization approach: OAuth connections use TekRevol Workspace accounts added to the test users list.
+
+All four Google secrets present in Replit Secrets:
+
+GOOGLE_CLIENT_ID — present, from OAuth client 312948209980-ivgc76d8p0t5tmro5e2nr2gj7nfphkm8.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET — present, matches the current active secret in Google Cloud Console (ends 3K0u)
+GOOGLE_OAUTH_REDIRECT_URI — present, exact value: https://marketing-os-revol.replit.app/api/google/oauth/callback
+GOOGLE_OAUTH_ENCRYPTION_KEY — present, freshly generated 32-byte AES-256 key, backed up to secure storage
+
+Callback route to implement in Phase 2: /api/google/oauth/callback — this exact path is registered in Google Cloud Console as the Authorized Redirect URI. Do NOT use /api/auth/google/callback or any other variant; only the registered path will work.
+
+Google Cloud Console configuration:
+
+Project: seo-dashboard-480323 (SEO Dashboard)
+Client name: Marketing OS
+APIs enabled: Google Search Console API, Google Analytics Data API, Google Analytics Admin API, Business Profile Performance API
+OAuth consent screen in Testing mode
+Sensitive scopes present on consent screen: webmasters (covers webmasters.readonly), analytics (covers analytics.readonly), business.manage
+Test users list populated (abeer@tekrevol.com; additional team addresses to be added as needed)
+Authorized redirect URI: https://marketing-os-revol.replit.app/api/google/oauth/callback
+
+Note on scopes: the OAuth consent screen has additional scopes from the previous SEO dashboard project (BigQuery, Cloud Storage, Cloud Platform admin scopes). These are NOT needed for Marketing OS. Do NOT request these scopes in the OAuth flow — request only webmasters.readonly, analytics.readonly, and business.manage. Google grants only what's explicitly requested; users on the consent screen should see only these three scopes.
+
+Property inventory to verify during Phase 0:
+
+GSC property for tekrevol.com — verify accessibility with OAuth account, expected format sc-domain:tekrevol.com but confirm what actually returns from the sites list API
+GA4 property for tekrevol.com — discover via GA4 Admin API listAccountSummaries/listProperties call; report property ID and access level
+GMB locations for 6 TekRevol offices (Houston, Austin, Dallas, Miami, Dubai, Karachi) — report which are accessible under the OAuth account, flag any scattered across separate accounts requiring consolidation
+
+Smoke tests to add to the original 27:
+
+Test 28: Token refresh works end-to-end — force-expire an access token, verify refresh flow succeeds transparently without user reconnect
+Test 29: OAuth callback handles Google's error responses gracefully — user denies consent, invalid state parameter, expired refresh token
+Test 30: Sync log properly distinguishes rate limit hits (429, recoverable) from auth failures (401, requires user reconnect)
+Test 31: Encrypted refresh tokens can be decrypted, used, and re-encrypted across the refresh cycle without corruption
+
+Execute Phase 0 pre-flight survey now. Report findings before proceeding to Phase 1. Same operational rules as prior dispatches: scoped transactional DDL only, treat architect feedback as authoritative, no scope creep, six pause points across the dispatch. Use Replit's checkpoint/file-change summary in place of git commands wherever verification is required.

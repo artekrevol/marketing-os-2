@@ -49,12 +49,42 @@ Google router is mounted WITHOUT requireSeoRole (`router.use("/google", googleRo
 - Nav: "Search Performance" in Intelligence section; "Integrations" in Settings section (admin-only)
 - API client: `gsc` export in `artifacts/seo-os/src/lib/api.ts`
 
+## Token encryption (AES-256-GCM)
+- Both access_token and refresh_token are encrypted before DB storage.
+- Key: `GOOGLE_OAUTH_ENCRYPTION_KEY` (32 bytes, hex or base64). Present in Replit Secrets.
+- Format: `<iv_b64url>:<authTag_b64url>:<ciphertext_b64url>` (colon-separated).
+- Crypto utilities: `artifacts/api-server/src/routes/google/google-crypto.ts` and `lib/worker/src/jobs/seo/google-crypto.ts` (kept in sync manually).
+- Legacy plaintext tokens (no colon) are passed through with a console.warn — brand needs re-auth to get encrypted storage.
+- **Never store a plaintext token in DB.** All write paths (oauth.ts callback, gsc.ts ensureFreshToken, sync-gsc.ts refresh) call `encryptToken()` before the UPDATE/INSERT.
+
 ## Token refresh
-Both the API server and worker have inline token refresh logic (5 min expiry buffer). The `google-client.ts` shared module is only for the API server. Worker has its own inline refresh to avoid cross-package deps.
+5-minute expiry buffer. Worker's `refreshToken()` accepts the *encrypted* refresh token string and decrypts internally. API server's `ensureFreshToken()` decrypts both tokens before use and re-encrypts the new access token on refresh.
+
+## Sync error classification
+Worker's `gsc_sync_log.status` values and their meaning:
+- `running` — in progress
+- `done` — success
+- `token_revoked` — 401 from token refresh or GSC API; admin must reconnect
+- `rate_limited` — 429 from GSC API; recoverable, will retry on next nightly run
+- `error` — unexpected failure
+
+Frontend (`GoogleIntegrations.tsx`) reads `lastSync.status` and should surface "Reconnect required" banner for `token_revoked`.
+
+## First-sync backfill
+Worker detects first sync by checking row count in `gsc_query_rows` for the brand.
+- First sync: 490-day window (≈ 16 months)
+- Subsequent syncs: 90-day window (catches GSC data lag)
+
+## GCP configuration (locked)
+- Project: seo-dashboard-480323 (SEO Dashboard)
+- OAuth consent: Testing mode — only TekRevol Workspace accounts on test users list
+- Scopes requested: `webmasters.readonly`, `analytics.readonly`, `business.manage` — NO BigQuery/Cloud Storage
+- Callback URI: `https://marketing-os-revol.replit.app/api/google/oauth/callback`
 
 ## What user must do before first use
-1. Register callback URL in GCP: `https://marketing-os-revol.replit.app/api/google/oauth/callback`
-2. Set `GOOGLE_OAUTH_REDIRECT_URI` env var to the callback URL (if not using the default)
-3. Navigate to `/seo/integrations` as admin and click "Connect Google account" per brand
-4. Select the GSC property in the dropdown
-5. Click "Sync now" or wait for 4am UTC nightly cron
+1. ✓ Callback URL registered in GCP
+2. ✓ `GOOGLE_OAUTH_REDIRECT_URI` set in Replit Secrets
+3. ✓ `GOOGLE_OAUTH_ENCRYPTION_KEY` set in Replit Secrets
+4. Navigate to `/seo/integrations` as admin → "Connect Google account" per brand
+5. Select GSC property in the dropdown
+6. Click "Sync now" or wait for 4am UTC nightly cron

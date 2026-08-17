@@ -15,6 +15,7 @@ import { enqueue } from "@workspace/jobs";
 import { requireAuth } from "../../middlewares/auth.js";
 import { guardBrand, requireAdminOrLead } from "./_shared.js";
 import { listGscSites, refreshAccessToken, tokenExpiryDate } from "../google/google-client.js";
+import { decryptToken, encryptToken } from "../google/google-crypto.js";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -34,22 +35,26 @@ async function loadConnection(brandId: string) {
   return (rows[0] ?? null) as Record<string, unknown> | null;
 }
 
-/** Ensure the access token is fresh; refresh + update DB if not. Returns valid token. */
+/** Ensure the access token is fresh; refresh + update DB if not. Returns valid (decrypted) token. */
 async function ensureFreshToken(conn: Record<string, unknown>): Promise<string> {
   const expiry = new Date(conn["token_expiry"] as string);
   const fiveMinBuffer = new Date(Date.now() + 5 * 60 * 1000);
   if (expiry > fiveMinBuffer) {
-    return conn["access_token"] as string;
+    // Decrypt stored access token for use
+    return decryptToken(conn["access_token"] as string);
   }
-  // Refresh
-  const tokens = await refreshAccessToken(conn["refresh_token"] as string);
+  // Refresh — decrypt the stored refresh token first
+  const decryptedRefresh = decryptToken(conn["refresh_token"] as string);
+  const tokens = await refreshAccessToken(decryptedRefresh);
   const newExpiry = tokenExpiryDate(tokens.expires_in);
+  // Re-encrypt the new access token before storing
+  const encAccessToken = encryptToken(tokens.access_token);
   await guardedDb.execute(sql`
     UPDATE google_brand_connections
-    SET access_token = ${tokens.access_token}, token_expiry = ${newExpiry.toISOString()}, updated_at = now()
+    SET access_token = ${encAccessToken}, token_expiry = ${newExpiry.toISOString()}, updated_at = now()
     WHERE id = ${conn["id"] as string}::uuid
   `);
-  return tokens.access_token;
+  return tokens.access_token; // return plaintext for immediate use
 }
 
 /* ─── GET /connection ────────────────────────────────────────────────────── */

@@ -17,6 +17,7 @@ import {
   tokenExpiryDate,
   GOOGLE_SCOPES,
 } from "./google-client.js";
+import { encryptToken } from "./google-crypto.js";
 
 const router: IRouter = Router();
 
@@ -95,12 +96,16 @@ router.get("/callback", (req: Request, res: Response) => {
       const userInfo = await fetchUserInfo(tokens.access_token);
       const expiry = tokenExpiryDate(tokens.expires_in);
 
+      // Encrypt tokens before storing (AES-256-GCM via GOOGLE_OAUTH_ENCRYPTION_KEY)
+      const encAccessToken = encryptToken(tokens.access_token);
+      const encRefreshToken = encryptToken(tokens.refresh_token);
+
       // Upsert into google_brand_connections (one row per brand)
       await guardedDb.execute(sql`
         INSERT INTO google_brand_connections
           (brand_id, google_account_email, access_token, refresh_token, token_expiry, scopes, updated_at)
         VALUES
-          (${brandId}::uuid, ${userInfo.email}, ${tokens.access_token}, ${tokens.refresh_token},
+          (${brandId}::uuid, ${userInfo.email}, ${encAccessToken}, ${encRefreshToken},
            ${expiry.toISOString()}, ${GOOGLE_SCOPES}, now())
         ON CONFLICT (brand_id) DO UPDATE SET
           google_account_email = EXCLUDED.google_account_email,
