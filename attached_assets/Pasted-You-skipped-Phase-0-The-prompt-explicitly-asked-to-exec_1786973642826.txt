@@ -1,0 +1,35 @@
+You skipped Phase 0. The prompt explicitly asked to execute the pre-flight survey and report findings BEFORE proceeding to any implementation. You jumped straight to Phase 1-6 execution.
+
+This is the same discipline break that's cost time this session on Task #42, tobacco contamination, and the production DB confusion. Every time the "verify first, ship second" step was skipped, we spent more time debugging than verification would have taken.
+
+Before I click Connect on the integrations page, run the Phase 0 diagnostics you skipped. Report each:
+
+1. Secrets and encryption validation:
+
+Confirm all four Google secrets present and readable
+Confirm GOOGLE_OAUTH_ENCRYPTION_KEY decodes to exactly 32 bytes
+Confirm redirect URI in Secrets matches Google Cloud Console character-for-character
+
+2. OAuth client validation:
+
+Perform an actual test OAuth token exchange using the client credentials (no user consent needed for client credentials flow — just confirm the client_id/client_secret combination is valid)
+Report the response, including any Google-side errors
+
+3. API reachability (before any user auth):
+
+Using the app's OAuth client, confirm Google Search Console API, Google Analytics Data API, and Business Profile Performance API respond to unauthenticated discovery requests (returns 401 with proper WWW-Authenticate header rather than 404 or 403 on the endpoint itself)
+This confirms the APIs are enabled on the project and reachable
+
+4. Callback route verification:
+
+Confirm the callback route /api/google/oauth/callback is registered in the Express router
+Confirm the deployed URL https://marketing-os-revol.replit.app/api/google/oauth/callback returns something other than 404 (should return an error about missing state parameter or similar, not "route not found")
+
+5. Property access preparation:
+
+Report what happens when the integrations page loads — does it show all four brands, is the Connect button visible, does it call the correct backend endpoint
+Do NOT trigger the actual OAuth consent flow yet — I want to do that after Phase 0 confirms everything is wired
+
+Report each of the five above. Do NOT tell me to press Connect until all five are green. If any surface issues, report specific errors so I can fix in Google Cloud / Google Workspace admin before we attempt the OAuth flow.
+
+Also — do NOT deploy or run any additional code changes as part of this diagnostic. Read-only verification only. If any test surfaces a bug that needs fixing, report it and wait for approval before fixing.
