@@ -1155,6 +1155,78 @@ export type LinkedContentItem = {
   isCanonical: boolean;
 };
 
+/* ── Google Search Console ──────────────────────────────────────────────── */
+
+export const gsc = {
+  /** Connection status + last sync row for a brand. */
+  connection: async (brandId: string) =>
+    jsonOrThrow<{
+      connected: boolean;
+      email: string | null;
+      gscPropertyUrl: string | null;
+      ga4PropertyId: string | null;
+      lastSync: Record<string, unknown> | null;
+    }>(await authedFetch(`/api/seo/gsc/connection?${qs(brandId)}`)),
+
+  /** List verified Search Console properties for the connected Google account. */
+  properties: async (brandId: string) =>
+    jsonOrThrow<{ sites: Array<{ siteUrl: string; permissionLevel: string }> }>(
+      await authedFetch(`/api/seo/gsc/properties?${qs(brandId)}`),
+    ),
+
+  /** Save the selected GSC property URL for a brand. */
+  saveProperty: async (brandId: string, gscPropertyUrl: string) =>
+    jsonOrThrow<{ ok: boolean }>(
+      await authedFetch("/api/seo/gsc/property", {
+        method: "POST",
+        body: JSON.stringify({ brandId, gscPropertyUrl }),
+      }),
+    ),
+
+  /** Aggregated click / impression / CTR / position data. */
+  searchPerformance: async (
+    brandId: string,
+    params?: { dimension?: string; dateFrom?: string; dateTo?: string; limit?: number },
+  ) =>
+    jsonOrThrow<{
+      rows: Array<Record<string, unknown>>;
+      totals: { clicks: number; impressions: number; avgCtr: number; avgPosition: number };
+      dateFrom: string;
+      dateTo: string;
+      dimension: string;
+    }>(
+      await authedFetch(
+        `/api/seo/gsc/search-performance?${qs(brandId, {
+          dimension: params?.dimension,
+          dateFrom: params?.dateFrom,
+          dateTo: params?.dateTo,
+          limit: params?.limit?.toString(),
+        })}`,
+      ),
+    ),
+
+  /** Queue a manual GSC sync job for a brand. */
+  sync: async (brandId: string) =>
+    jsonOrThrow<{ ok: boolean; jobId: string }>(
+      await authedFetch("/api/seo/gsc/sync", {
+        method: "POST",
+        body: JSON.stringify({ brandId }),
+      }),
+    ),
+
+  /** Last 10 GSC sync log records for a brand. */
+  syncLog: async (brandId: string) =>
+    jsonOrThrow<{ logs: Array<Record<string, unknown>> }>(
+      await authedFetch(`/api/seo/gsc/sync-log?${qs(brandId)}`),
+    ),
+
+  /** Disconnect the Google account for a brand (deletes stored tokens). */
+  disconnect: async (brandId: string) =>
+    jsonOrThrow<{ ok: boolean }>(
+      await authedFetch(`/api/google/oauth/${brandId}`, { method: "DELETE" }),
+    ),
+};
+
 export const crossModule = {
   /** Articles (ContentForge) linked to a given SEO keyword. */
   contentForKeyword: async (

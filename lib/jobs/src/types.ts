@@ -205,6 +205,18 @@ export const SeoIngestAhrefsSnapshotPayload = BasePayload.extend({
   snapshotId: z.string().uuid(),
 });
 
+// Google Search Console — pull search analytics for one brand.
+export const SeoSyncGscDataPayload = BasePayload.extend({
+  brandId: z.string().uuid("brandId must be a UUID"),
+  /** Optional override; defaults to 90 days ago in the handler. */
+  dateFrom: z.string().optional(),
+  /** Optional override; defaults to today in the handler. */
+  dateTo: z.string().optional(),
+});
+
+// Google Search Console — nightly fan-out, no brandId (queries all connected brands).
+export const SeoSyncGscNightlyPayload = BasePayload;
+
 export const JOB_REGISTRY = {
   "maintenance.heartbeat-noop": {
     queue: "maintenance" as QueueName,
@@ -283,6 +295,16 @@ export const JOB_REGISTRY = {
   "seo.ingest-ahrefs-snapshot": {
     queue: "integrations" as QueueName,
     schema: SeoIngestAhrefsSnapshotPayload,
+  },
+  // Google Search Console — pull search analytics for one brand.
+  "seo.sync-gsc-data": {
+    queue: "integrations" as QueueName,
+    schema: SeoSyncGscDataPayload,
+  },
+  // Google Search Console — nightly fan-out across all connected brands.
+  "seo.sync-gsc.nightly": {
+    queue: "integrations" as QueueName,
+    schema: SeoSyncGscNightlyPayload,
   },
 } as const;
 

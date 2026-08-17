@@ -20,6 +20,8 @@ import SeoCompetitorCuration from "@/pages/seo/CompetitorCuration";
 import SeoSiteHealth from "@/pages/seo/SiteHealth";
 import SeoBacklinks from "@/pages/seo/Backlinks";
 import SeoContentGap from "@/pages/seo/ContentGap";
+import SeoSearchPerformance from "@/pages/seo/SearchPerformance";
+import GoogleIntegrations from "@/pages/admin/GoogleIntegrations";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -48,6 +50,8 @@ function Routed() {
       <Route path="/seo/site-health" component={SeoSiteHealth} />
       <Route path="/seo/backlinks" component={SeoBacklinks} />
       <Route path="/seo/content-gap" component={SeoContentGap} />
+      <Route path="/seo/search-performance" component={SeoSearchPerformance} />
+      <Route path="/seo/integrations" component={GoogleIntegrations} />
       <Route path="/">{() => <Redirect to="/quality-gate" />}</Route>
       <Route component={NotFound} />
     </Switch>

@@ -25,6 +25,7 @@ import {
 } from "./seo/refresh-content-context";
 import { handleSeoDiscoveryWeekly } from "./seo/discovery-weekly";
 import { handleSeoIngestAhrefsSnapshot } from "./seo/ingest-ahrefs-snapshot";
+import { handleSeoSyncGscData, handleSeoSyncGscNightly } from "./seo/sync-gsc";
 
 type Handler<N extends JobName> = (data: JobData<N>, log: ReturnType<typeof jobLogger>) => Promise<unknown>;
 
@@ -48,6 +49,8 @@ export const HANDLERS: { [N in JobName]: Handler<N> } = {
   "seo.refresh-content-context-nightly": handleSeoRefreshContentContextNightly,
   "seo.discovery.weekly": handleSeoDiscoveryWeekly,
   "seo.ingest-ahrefs-snapshot": handleSeoIngestAhrefsSnapshot,
+  "seo.sync-gsc-data": handleSeoSyncGscData,
+  "seo.sync-gsc.nightly": handleSeoSyncGscNightly,
 };
 
 /**

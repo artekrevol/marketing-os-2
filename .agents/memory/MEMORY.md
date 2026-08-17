@@ -8,3 +8,4 @@
 - [Keyword quality guard](keyword-quality-guard.md) — all worker keyword SELECTs that hit external APIs MUST filter is_active=true AND list_id IS NOT NULL; orphan keywords are not automatically garbage.
 - [Worker log visibility](worker-log-visibility.md) — pino JSON logs invisible in Replit workflow viewer; use shell with 2>&1 to see them; cron-alive probe at */5 * * * * registered 2026-08-10.
 - [authedFetch FormData bug](authed-fetch-formdata-bug.md) — authedFetch must skip Content-Type: application/json when body instanceof FormData or express.json() intercepts the multipart stream → 413/400 before multer sees files.
+- [GSC integration architecture](gsc-integration.md) — OAuth flow, DB tables, worker jobs, API routes, frontend pages; callback URL must be registered in GCP before first use.

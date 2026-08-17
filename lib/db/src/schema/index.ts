@@ -44,3 +44,5 @@ export * from "./ahrefs-intelligence";
 // DataForSEO Labs Discovery — competitor movements + Labs API usage tracking
 export * from "./competitor-movements";
 export * from "./dataforseo-labs-usage";
+// Google platform integrations — OAuth connections, GSC/GA4/GMB data
+export * from "./google-integrations";

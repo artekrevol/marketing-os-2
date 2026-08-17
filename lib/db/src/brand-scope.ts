@@ -76,6 +76,11 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "dataforseo_labs_usage",
   // Ahrefs two-step snapshot upload (GCS-backed)
   "ahrefs_raw_snapshots",
+  // Google integrations — OAuth connections, GSC analytics data
+  "google_brand_connections",
+  "gsc_query_rows",
+  "gsc_page_rows",
+  "gsc_sync_log",
 ]);
 
 /** Brand context attached to a scoped transaction. */

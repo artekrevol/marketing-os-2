@@ -121,6 +121,19 @@ async function main(): Promise<void> {
     logger.error({ err }, "worker: failed to register recovery-snapshot-nightly cron");
   }
 
+  // Google Search Console — nightly fan-out sync for all connected brands (4am UTC).
+  try {
+    await addRepeatable(
+      "integrations",
+      "seo.sync-gsc.nightly",
+      { idempotencyKey: "seo.sync-gsc.nightly:cron" },
+      "0 4 * * *",
+    );
+    logger.info({ name: "seo.sync-gsc.nightly", pattern: "0 4 * * *" }, "worker: repeatable job registered");
+  } catch (err) {
+    logger.error({ err }, "worker: failed to register gsc-nightly cron");
+  }
+
   // Shared Data Layer — nightly refresh of in-flight keyword research
   // briefs whose SEO context snapshot has gone stale (>7 days).
   try {

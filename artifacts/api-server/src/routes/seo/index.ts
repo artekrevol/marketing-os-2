@@ -14,6 +14,7 @@ import competitorCurationRouter from "./competitor-curation.js";
 import ahrefsUploadRouter from "./ahrefs-upload.js";
 import ahrefsSnapshotsRouter from "./ahrefs-snapshots.js";
 import ahrefsIntelligenceRouter from "./ahrefs-intelligence.js";
+import gscRouter from "./gsc.js";
 
 /**
  * SEO Intelligence API — mounted at `/api/seo` behind `requireSeoRole`
@@ -41,6 +42,7 @@ router.use("/discovery-inbox", discoveryInboxRouter);
 router.use("/competitor-curation", competitorCurationRouter);
 
 // Ahrefs Intelligence — upload, snapshots, and intelligence query routes
+router.use("/gsc", gscRouter);                          // Google Search Console data
 router.use("/ahrefs/snapshots", ahrefsSnapshotsRouter); // new two-step (mount FIRST — before /ahrefs prefix swallows it)
 router.use("/ahrefs", ahrefsUploadRouter);               // legacy one-shot upload (kept for compatibility)
 router.use("/", ahrefsIntelligenceRouter);
