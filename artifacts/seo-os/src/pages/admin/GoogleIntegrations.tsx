@@ -7,14 +7,14 @@
  *   3. Sync Now → triggers GSC data pull
  *   4. Disconnect → removes stored tokens
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2, AlertCircle, Link2, Unlink, RefreshCw,
-  Loader2, ChevronDown, ExternalLink,
+  Loader2, ChevronDown, ExternalLink, BarChart3, MapPin, Save,
 } from "lucide-react";
 import { toast } from "sonner";
-import { gsc } from "@/lib/api";
+import { gsc, googleIntegrations } from "@/lib/api";
 import { SeoShell, StateBox } from "../seo/_shell";
 import { useActiveBrand } from "@/lib/brands";
 import { useAuth } from "@/lib/useAuth";
@@ -26,6 +26,8 @@ type ConnectionData = {
   email: string | null;
   gscPropertyUrl: string | null;
   ga4PropertyId: string | null;
+  businessProfileAccountName: string | null;
+  businessProfileLocationNames: string[];
   lastSync: Record<string, unknown> | null;
 };
 
@@ -107,6 +109,304 @@ function PropertySelector({
   );
 }
 
+function IntegrationSection({
+  title,
+  description,
+  icon,
+  configured,
+  children,
+}: {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  configured: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border border-rule rounded-md overflow-visible">
+      <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-rule bg-secondary/20">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 text-accent">{icon}</div>
+          <div>
+            <h3 className="font-medium text-sm">{title}</h3>
+            <p className="text-xs text-ink-muted mt-1">{description}</p>
+          </div>
+        </div>
+        <span className={`shrink-0 inline-flex items-center gap-1.5 text-[11px] font-medium rounded-full px-2.5 py-1 border ${
+          configured
+            ? "text-green-700 bg-green-50 border-green-200"
+            : "text-ink-muted bg-background border-rule"
+        }`}>
+          {configured ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
+          {configured ? "Configured" : "Not configured"}
+        </span>
+      </div>
+      <div className="px-5 py-4">{children}</div>
+    </section>
+  );
+}
+
+function Ga4PropertySelector({
+  brandId,
+  current,
+  onSaved,
+}: {
+  brandId: string;
+  current: string | null;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const propsQ = useQuery({
+    queryKey: ["google", "ga4-properties", brandId],
+    queryFn: () => googleIntegrations.ga4Properties(brandId),
+    enabled: open,
+    staleTime: 60_000,
+  });
+  const saveM = useMutation({
+    mutationFn: (propertyId: string) => googleIntegrations.saveGa4Property(brandId, propertyId),
+    onSuccess: () => {
+      toast.success("GA4 property saved");
+      onSaved();
+      setOpen(false);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const properties = propsQ.data?.properties ?? [];
+  const selected = properties.find((property) => property.propertyId === current);
+
+  return (
+    <div className="relative max-w-xl">
+      <button
+        onClick={() => setOpen((value) => !value)}
+        className="flex items-center gap-2 border border-rule rounded-sm px-3 py-1.5 text-sm hover:bg-secondary min-w-[16rem] text-left"
+      >
+        <span className="flex-1 truncate">
+          {selected ? `${selected.displayName} · ${selected.propertyId}` : current ?? "Select GA4 property…"}
+        </span>
+        {propsQ.isFetching || saveM.isPending ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+        ) : (
+          <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        )}
+      </button>
+      {open && (
+        <div className="absolute left-0 mt-1 w-full bg-background border border-rule rounded-sm shadow-lg z-50 max-h-64 overflow-y-auto">
+          {propsQ.isLoading ? (
+            <div className="p-4 text-center text-sm text-ink-muted">
+              <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1" /> Fetching GA4 properties…
+            </div>
+          ) : propsQ.isError ? (
+            <div className="p-4 text-sm text-red-600">Could not load GA4 properties. Check Analytics access and try again.</div>
+          ) : properties.length === 0 ? (
+            <div className="p-4 text-sm text-ink-muted">No accessible GA4 properties found.</div>
+          ) : (
+            properties.map((property) => (
+              <button
+                key={property.propertyId}
+                onClick={() => saveM.mutate(property.propertyId)}
+                className={`w-full text-left px-3 py-2.5 text-sm hover:bg-secondary transition-colors border-b border-rule last:border-0 ${
+                  current === property.propertyId ? "bg-secondary/60 font-medium" : ""
+                }`}
+              >
+                <div className="truncate">{property.displayName}</div>
+                <div className="text-[10px] text-ink-muted mt-0.5">
+                  Property {property.propertyId}{property.accountName ? ` · ${property.accountName}` : ""}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Ga4Section({
+  brandId,
+  connected,
+  propertyId,
+  onSaved,
+}: {
+  brandId: string;
+  connected: boolean;
+  propertyId: string | null;
+  onSaved: () => void;
+}) {
+  return (
+    <IntegrationSection
+      title="Google Analytics 4"
+      description="Choose the GA4 property used for traffic and engagement reporting."
+      icon={<BarChart3 className="h-4 w-4" />}
+      configured={Boolean(propertyId)}
+    >
+      {!connected ? (
+        <p className="text-sm text-ink-muted">Connect the shared Google account above to configure Analytics.</p>
+      ) : (
+        <>
+          <Ga4PropertySelector brandId={brandId} current={propertyId} onSaved={onSaved} />
+          {propertyId && (
+            <a
+              href={`https://analytics.google.com/analytics/web/#/p${propertyId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 text-[11px] text-accent hover:underline inline-flex items-center gap-1"
+            >
+              Open in Google Analytics <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </>
+      )}
+    </IntegrationSection>
+  );
+}
+
+function BusinessProfileSection({
+  brandId,
+  connected,
+  accountName: currentAccountName,
+  locationNames: currentLocationNames,
+  onSaved,
+}: {
+  brandId: string;
+  connected: boolean;
+  accountName: string | null;
+  locationNames: string[];
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [accountName, setAccountName] = useState(currentAccountName);
+  const [locationNames, setLocationNames] = useState(currentLocationNames);
+  const accountsQ = useQuery({
+    queryKey: ["google", "business-profile-accounts", brandId],
+    queryFn: () => googleIntegrations.businessProfileAccounts(brandId),
+    enabled: open,
+    staleTime: 60_000,
+  });
+  const locationsQ = useQuery({
+    queryKey: ["google", "business-profile-locations", brandId, accountName],
+    queryFn: () => googleIntegrations.businessProfileLocations(brandId, accountName!),
+    enabled: open && Boolean(accountName),
+    staleTime: 60_000,
+  });
+  const saveM = useMutation({
+    mutationFn: () => googleIntegrations.saveBusinessProfileSelection(brandId, accountName, locationNames),
+    onSuccess: () => {
+      toast.success("Business Profile locations saved");
+      onSaved();
+      setOpen(false);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const selectedCount = currentLocationNames.length;
+
+  useEffect(() => {
+    setAccountName(currentAccountName);
+    setLocationNames(currentLocationNames);
+    setOpen(false);
+  }, [brandId, currentAccountName, currentLocationNames.join("|")]);
+
+  return (
+    <IntegrationSection
+      title="Google Business Profile"
+      description="Select the managed profile locations used for local visibility reporting."
+      icon={<MapPin className="h-4 w-4" />}
+      configured={Boolean(currentAccountName && selectedCount > 0)}
+    >
+      {!connected ? (
+        <p className="text-sm text-ink-muted">Connect the shared Google account above to configure Business Profile.</p>
+      ) : (
+        <>
+          <button
+            onClick={() => setOpen((value) => !value)}
+            className="inline-flex items-center gap-2 border border-rule rounded-sm px-3 py-1.5 text-sm hover:bg-secondary"
+          >
+            {currentAccountName ? `Manage ${selectedCount} selected location${selectedCount === 1 ? "" : "s"}` : "Find Business Profile locations"}
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+          </button>
+          {open && (
+            <div className="mt-3 border border-rule rounded-sm p-3 space-y-3 max-w-xl">
+              {accountsQ.isLoading ? (
+                <div className="text-sm text-ink-muted flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Fetching Business Profile accounts…
+                </div>
+              ) : accountsQ.isError ? (
+                <p className="text-sm text-red-600">Could not load Business Profile accounts. Check profile access and try again.</p>
+              ) : (accountsQ.data?.accounts.length ?? 0) === 0 ? (
+                <p className="text-sm text-ink-muted">No Business Profile accounts are accessible to this Google account.</p>
+              ) : (
+                <>
+                  <label className="block text-xs text-ink-muted uppercase tracking-wide">
+                    Business Profile account
+                    <select
+                      value={accountName ?? ""}
+                      onChange={(event) => {
+                        setAccountName(event.target.value || null);
+                        setLocationNames([]);
+                      }}
+                      className="mt-1 block w-full border border-rule rounded-sm px-3 py-2 text-sm bg-background"
+                    >
+                      <option value="">Select an account…</option>
+                      {accountsQ.data?.accounts.map((account) => (
+                        <option key={account.name} value={account.name}>{account.accountName}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {accountName && (
+                    <div>
+                      <p className="text-xs text-ink-muted uppercase tracking-wide mb-1.5">Locations to track</p>
+                      {locationsQ.isLoading ? (
+                        <div className="text-sm text-ink-muted flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" /> Fetching locations…
+                        </div>
+                      ) : locationsQ.isError ? (
+                        <p className="text-sm text-red-600">Could not load locations for this account.</p>
+                      ) : (locationsQ.data?.locations.length ?? 0) === 0 ? (
+                        <p className="text-sm text-ink-muted">No locations found for this account.</p>
+                      ) : (
+                        <div className="max-h-48 overflow-y-auto border border-rule rounded-sm divide-y divide-rule">
+                          {locationsQ.data?.locations.map((location) => (
+                            <label key={location.name} className="flex items-start gap-2 px-3 py-2 text-sm hover:bg-secondary/50">
+                              <input
+                                type="checkbox"
+                                checked={locationNames.includes(location.name)}
+                                onChange={(event) => setLocationNames((current) =>
+                                  event.target.checked
+                                    ? [...current, location.name]
+                                    : current.filter((name) => name !== location.name),
+                                )}
+                                className="mt-0.5"
+                              />
+                              <span>
+                                <span className="block">{location.title}</span>
+                                {location.storeCode && <span className="block text-[11px] text-ink-muted">{location.storeCode}</span>}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => saveM.mutate()}
+                      disabled={saveM.isPending || !accountName || locationNames.length === 0}
+                      className="inline-flex items-center gap-1.5 bg-ink text-paper px-3 py-1.5 rounded-sm text-sm font-medium hover:bg-accent disabled:opacity-40"
+                    >
+                      {saveM.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      Save locations
+                    </button>
+                    <span className="text-[11px] text-ink-muted">{locationNames.length} selected</span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </IntegrationSection>
+  );
+}
+
 function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandName: string }) {
   const qc = useQueryClient();
 
@@ -159,17 +459,25 @@ function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandNam
       </div>
 
       <div className="px-5 py-4 space-y-4">
-        {conn?.connected ? (
-          <>
-            {/* Account info */}
-            <div>
-              <p className="text-xs text-ink-muted uppercase tracking-wide mb-1">Connected account</p>
-              <p className="text-sm font-medium">{conn.email}</p>
-            </div>
+        <div className="rounded-sm border border-rule bg-secondary/20 px-3 py-2.5">
+          <p className="text-xs text-ink-muted uppercase tracking-wide mb-1">Connected account</p>
+          {conn?.connected ? (
+            <p className="text-sm font-medium">{conn.email}</p>
+          ) : (
+            <p className="text-sm text-ink-muted">One Google account powers Search Console, Analytics, and Business Profile for this brand.</p>
+          )}
+        </div>
 
-            {/* GSC property */}
-            <div>
-              <p className="text-xs text-ink-muted uppercase tracking-wide mb-1.5">GSC property</p>
+        <IntegrationSection
+          title="Google Search Console"
+          description="Choose the verified property used for organic search performance data."
+          icon={<Link2 className="h-4 w-4" />}
+          configured={Boolean(conn?.gscPropertyUrl)}
+        >
+          {!conn?.connected ? (
+            <p className="text-sm text-ink-muted">Connect the shared Google account above to configure Search Console.</p>
+          ) : (
+            <>
               <PropertySelector
                 brandId={brandId}
                 current={conn.gscPropertyUrl}
@@ -185,50 +493,62 @@ function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandNam
                   Open in Search Console <ExternalLink className="h-3 w-3" />
                 </a>
               )}
-            </div>
-
-            {/* Last sync */}
-            {lastSync && (
-              <div className="text-[11px] text-ink-muted">
-                Last sync:{" "}
-                <span className={
-                  lastSync.status === "done" ? "text-green-600"
-                  : lastSync.status === "error" ? "text-red-500"
-                  : "text-blue-600"
-                }>
-                  {lastSync.status === "done"
-                    ? `${new Date(lastSync.completed_at as string).toLocaleString()} · ${(lastSync.query_rows_upserted as number ?? 0).toLocaleString()} rows`
-                    : lastSync.status === "error"
-                    ? `Error: ${lastSync.error_message as string}`
-                    : "Syncing…"}
-                </span>
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex items-center gap-2 pt-1">
+              {lastSync && (
+                <div className="text-[11px] text-ink-muted mt-3">
+                  Last sync:{" "}
+                  <span className={
+                    lastSync.status === "done" ? "text-green-600"
+                    : lastSync.status === "error" ? "text-red-500"
+                    : "text-blue-600"
+                  }>
+                    {lastSync.status === "done"
+                      ? `${new Date(lastSync.completed_at as string).toLocaleString()} · ${(lastSync.query_rows_upserted as number ?? 0).toLocaleString()} rows`
+                      : lastSync.status === "error"
+                      ? `Error: ${lastSync.error_message as string}`
+                      : "Syncing…"}
+                  </span>
+                </div>
+              )}
               <button
                 onClick={() => syncM.mutate()}
                 disabled={syncM.isPending || !conn.gscPropertyUrl}
-                className="flex items-center gap-1.5 border border-rule rounded-sm px-3 py-1.5 text-sm hover:bg-secondary disabled:opacity-40"
+                className="mt-3 flex items-center gap-1.5 border border-rule rounded-sm px-3 py-1.5 text-sm hover:bg-secondary disabled:opacity-40"
               >
                 {syncM.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                 Sync now
               </button>
-              <button
-                onClick={() => {
-                  if (confirm(`Disconnect Google account from ${brandName}?`)) {
-                    disconnectM.mutate();
-                  }
-                }}
-                disabled={disconnectM.isPending}
-                className="flex items-center gap-1.5 border border-rule rounded-sm px-3 py-1.5 text-sm text-ink-muted hover:bg-secondary hover:text-red-600 disabled:opacity-40"
-              >
-                <Unlink className="h-3.5 w-3.5" />
-                Disconnect
-              </button>
-            </div>
-          </>
+            </>
+          )}
+        </IntegrationSection>
+
+        <Ga4Section
+          brandId={brandId}
+          connected={Boolean(conn?.connected)}
+          propertyId={conn?.ga4PropertyId ?? null}
+          onSaved={() => qc.invalidateQueries({ queryKey: ["gsc", "connection", brandId] })}
+        />
+
+        <BusinessProfileSection
+          brandId={brandId}
+          connected={Boolean(conn?.connected)}
+          accountName={conn?.businessProfileAccountName ?? null}
+          locationNames={conn?.businessProfileLocationNames ?? []}
+          onSaved={() => qc.invalidateQueries({ queryKey: ["gsc", "connection", brandId] })}
+        />
+
+        {conn?.connected ? (
+          <button
+            onClick={() => {
+              if (confirm(`Disconnect Google account from ${brandName}?`)) {
+                disconnectM.mutate();
+              }
+            }}
+            disabled={disconnectM.isPending}
+            className="flex items-center gap-1.5 border border-rule rounded-sm px-3 py-1.5 text-sm text-ink-muted hover:bg-secondary hover:text-red-600 disabled:opacity-40"
+          >
+            <Unlink className="h-3.5 w-3.5" />
+            Disconnect shared Google account
+          </button>
         ) : (
           <a
             href={`/api/google/oauth/start?brandId=${brandId}`}
@@ -248,6 +568,14 @@ function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandNam
 export default function GoogleIntegrations() {
   const { user } = useAuth();
   const { loading: brandLoading, activeBrand } = useActiveBrand();
+
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = "Google Integrations — SEO OS";
+    return () => {
+      document.title = previousTitle;
+    };
+  }, []);
 
   // Read ?google= param from URL (set by OAuth callback)
   const urlParams = new URLSearchParams(window.location.search);
@@ -280,12 +608,12 @@ export default function GoogleIntegrations() {
   return (
     <SeoShell
       title="Google Integrations"
-      subtitle={`Connect ${activeBrand.name}'s Google account to enable Search Console data`}
+      subtitle={`Manage ${activeBrand.name}'s Search Console, Analytics, and Business Profile connections`}
     >
       {oauthStatus === "connected" && (
         <div className="mb-4 flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-4 py-3">
           <CheckCircle2 className="h-4 w-4 shrink-0" />
-          Google account connected successfully. Select a GSC property below to start syncing.
+          Google account connected successfully. Configure Search Console, Analytics, and Business Profile below.
         </div>
       )}
       {oauthStatus === "error" && (
@@ -302,9 +630,9 @@ export default function GoogleIntegrations() {
       )}
 
       <div className="mb-4 border border-rule rounded-md bg-secondary/20 px-4 py-3 text-sm text-ink-muted">
-        <strong className="text-ink">Setup:</strong> Connect the selected brand's Google account.
-        The Google account must have Search Console access to {activeBrand.name}'s property.
-        Data syncs automatically every night at 4am UTC, or you can trigger a manual sync per brand.
+        <strong className="text-ink">Setup:</strong> Connect the selected brand's Google account once.
+        Then configure its Search Console property, GA4 property, and Business Profile locations below.
+        Each selection is stored separately for {activeBrand.name}; GSC data syncs automatically every night at 4am UTC.
       </div>
 
       <div className="space-y-4 mt-2">

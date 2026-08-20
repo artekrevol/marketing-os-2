@@ -3,7 +3,7 @@
  *
  * Architecture:
  *   google_oauth_states      — short-lived CSRF tokens for the OAuth dance
- *   google_brand_connections — one OAuth token set per brand (covers GSC + GA4 + GMB)
+ *   google_brand_connections — one OAuth token set per brand (covers GSC + GA4 + Business Profile)
  *   gsc_query_rows           — GSC search analytics, query dimension (synced nightly)
  *   gsc_page_rows            — GSC search analytics, page dimension (synced nightly)
  *   gsc_sync_log             — per-brand sync history with row counts
@@ -51,6 +51,10 @@ export const googleBrandConnectionsTable = pgTable("google_brand_connections", {
   gscPropertyUrl: text("gsc_property_url"),
   /** GA4 numeric property ID — populated in Phase 2. */
   ga4PropertyId: text("ga4_property_id"),
+  /** Business Profile account resource name, e.g. "accounts/123". */
+  businessProfileAccountName: text("business_profile_account_name"),
+  /** Selected Business Profile location resource names for this brand. */
+  businessProfileLocationNames: text("business_profile_location_names").array().notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -138,6 +138,155 @@ export async function listGscSites(accessToken: string): Promise<{ siteUrl: stri
   return data.siteEntry ?? [];
 }
 
+async function googleJson<T>(url: string, accessToken: string): Promise<T> {
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Google API request failed (${res.status}): ${body.slice(0, 500)}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export type Ga4Property = {
+  propertyId: string;
+  displayName: string;
+  accountName: string | null;
+};
+
+/** List GA4 properties visible to the connected Google account. */
+export async function listGa4Properties(accessToken: string): Promise<Ga4Property[]> {
+  const properties: Ga4Property[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ pageSize: "200" });
+    if (pageToken) params.set("pageToken", pageToken);
+    const data = await googleJson<{
+      accountSummaries?: Array<{
+        name?: string;
+        displayName?: string;
+        propertySummaries?: Array<{
+          property?: string;
+          displayName?: string;
+        }>;
+      }>;
+      nextPageToken?: string;
+    }>(
+      `https://analyticsadmin.googleapis.com/v1beta/accountSummaries?${params}`,
+      accessToken,
+    );
+
+    for (const account of data.accountSummaries ?? []) {
+      for (const property of account.propertySummaries ?? []) {
+        const propertyId = property.property?.replace(/^properties\//, "");
+        if (propertyId && property.displayName) {
+          properties.push({
+            propertyId,
+            displayName: property.displayName,
+            accountName: account.displayName ?? account.name ?? null,
+          });
+        }
+      }
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return properties.sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export type BusinessProfileAccount = {
+  name: string;
+  accountName: string;
+  type: string | null;
+};
+
+export type BusinessProfileLocation = {
+  name: string;
+  title: string;
+  storeCode: string | null;
+  websiteUri: string | null;
+};
+
+/** List Business Profile accounts visible to the connected Google account. */
+export async function listBusinessProfileAccounts(
+  accessToken: string,
+): Promise<BusinessProfileAccount[]> {
+  const accounts: BusinessProfileAccount[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ pageSize: "100" });
+    if (pageToken) params.set("pageToken", pageToken);
+    const data = await googleJson<{
+      accounts?: Array<{ name?: string; accountName?: string; type?: string }>;
+      nextPageToken?: string;
+    }>(
+      `https://mybusinessaccountmanagement.googleapis.com/v1/accounts?${params}`,
+      accessToken,
+    );
+    for (const account of data.accounts ?? []) {
+      if (account.name && account.accountName) {
+        accounts.push({
+          name: account.name,
+          accountName: account.accountName,
+          type: account.type ?? null,
+        });
+      }
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return accounts.sort((a, b) => a.accountName.localeCompare(b.accountName));
+}
+
+/** List locations belonging to one Business Profile account. */
+export async function listBusinessProfileLocations(
+  accessToken: string,
+  accountName: string,
+): Promise<BusinessProfileLocation[]> {
+  if (!/^accounts\/[A-Za-z0-9_-]+$/.test(accountName)) {
+    throw new Error("Invalid Business Profile account resource name");
+  }
+
+  const locations: BusinessProfileLocation[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({
+      readMask: "name,title,storeCode,websiteUri",
+      pageSize: "100",
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+    const data = await googleJson<{
+      locations?: Array<{
+        name?: string;
+        title?: string;
+        storeCode?: string;
+        websiteUri?: string;
+      }>;
+      nextPageToken?: string;
+    }>(
+      `https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations?${params}`,
+      accessToken,
+    );
+    for (const location of data.locations ?? []) {
+      if (location.name && location.title) {
+        locations.push({
+          name: location.name,
+          title: location.title,
+          storeCode: location.storeCode ?? null,
+          websiteUri: location.websiteUri ?? null,
+        });
+      }
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return locations.sort((a, b) => a.title.localeCompare(b.title));
+}
+
 /** Compute when an access token expires given its `expires_in` seconds value. */
 export function tokenExpiryDate(expiresIn: number): Date {
   return new Date(Date.now() + expiresIn * 1000);

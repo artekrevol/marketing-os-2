@@ -70,10 +70,10 @@ async function gcsUploadBuffer(
   contentType: string,
 ): Promise<void> {
   const url = await gcsSignUrl(objectName, "PUT", 300);
-  // Node 18+ fetch supports Buffer bodies; cast to satisfy TS
+  // Node fetch accepts a typed byte array body across the server's TS lib targets.
   const res = await fetch(url, {
     method: "PUT",
-    body: buffer as unknown as BodyInit,
+    body: new Uint8Array(buffer),
     headers: { "Content-Type": contentType },
   });
   if (!res.ok) {

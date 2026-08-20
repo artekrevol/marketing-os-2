@@ -14,48 +14,16 @@ import { guardedDb, withBrandScope } from "@workspace/db";
 import { enqueue } from "@workspace/jobs";
 import { requireAuth } from "../../middlewares/auth.js";
 import { guardBrand, requireAdminOrLead } from "./_shared.js";
-import { listGscSites, refreshAccessToken, tokenExpiryDate } from "../google/google-client.js";
-import { decryptToken, encryptToken } from "../google/google-crypto.js";
+import { listGscSites } from "../google/google-client.js";
+import {
+  ensureFreshGoogleToken,
+  loadGoogleConnection,
+} from "../google/google-connection.js";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
-
-/** Load the connection row for a brand (returns null if not connected). */
-async function loadConnection(brandId: string) {
-  const r = (await guardedDb.execute(sql`
-    SELECT id::text, google_account_email, access_token, refresh_token,
-           token_expiry, scopes, gsc_property_url, ga4_property_id
-    FROM google_brand_connections
-    WHERE brand_id = ${brandId}::uuid
-    LIMIT 1
-  `)) as unknown as { rows?: unknown[] } | unknown[];
-  const rows = Array.isArray(r) ? r : ((r as { rows?: unknown[] }).rows ?? []);
-  return (rows[0] ?? null) as Record<string, unknown> | null;
-}
-
-/** Ensure the access token is fresh; refresh + update DB if not. Returns valid (decrypted) token. */
-async function ensureFreshToken(conn: Record<string, unknown>): Promise<string> {
-  const expiry = new Date(conn["token_expiry"] as string);
-  const fiveMinBuffer = new Date(Date.now() + 5 * 60 * 1000);
-  if (expiry > fiveMinBuffer) {
-    // Decrypt stored access token for use
-    return decryptToken(conn["access_token"] as string);
-  }
-  // Refresh — decrypt the stored refresh token first
-  const decryptedRefresh = decryptToken(conn["refresh_token"] as string);
-  const tokens = await refreshAccessToken(decryptedRefresh);
-  const newExpiry = tokenExpiryDate(tokens.expires_in);
-  // Re-encrypt the new access token before storing
-  const encAccessToken = encryptToken(tokens.access_token);
-  await guardedDb.execute(sql`
-    UPDATE google_brand_connections
-    SET access_token = ${encAccessToken}, token_expiry = ${newExpiry.toISOString()}, updated_at = now()
-    WHERE id = ${conn["id"] as string}::uuid
-  `);
-  return tokens.access_token; // return plaintext for immediate use
-}
 
 /* ─── GET /connection ────────────────────────────────────────────────────── */
 router.get("/connection", async (req, res) => {
@@ -64,7 +32,7 @@ router.get("/connection", async (req, res) => {
   if (!guard.ok) { res.status(guard.status).json({ error: guard.error }); return; }
 
   try {
-    const conn = await loadConnection(guard.brandId);
+    const conn = await loadGoogleConnection(guard.brandId);
 
     const lastSync = conn ? (await guardedDb.execute(sql`
       SELECT status, date_from, date_to, query_rows_upserted, page_rows_upserted,
@@ -85,6 +53,8 @@ router.get("/connection", async (req, res) => {
       email: conn?.["google_account_email"] ?? null,
       gscPropertyUrl: conn?.["gsc_property_url"] ?? null,
       ga4PropertyId: conn?.["ga4_property_id"] ?? null,
+      businessProfileAccountName: conn?.["business_profile_account_name"] ?? null,
+      businessProfileLocationNames: conn?.["business_profile_location_names"] ?? [],
       lastSync: syncRow,
     });
   } catch (err) {
@@ -99,10 +69,10 @@ router.get("/properties", async (req, res) => {
   if (!guard.ok) { res.status(guard.status).json({ error: guard.error }); return; }
 
   try {
-    const conn = await loadConnection(guard.brandId);
+    const conn = await loadGoogleConnection(guard.brandId);
     if (!conn) { res.status(404).json({ error: "Google account not connected for this brand" }); return; }
 
-    const accessToken = await ensureFreshToken(conn);
+    const accessToken = await ensureFreshGoogleToken(conn);
     const sites = await listGscSites(accessToken);
     res.json({ sites });
   } catch (err) {
@@ -233,7 +203,7 @@ router.post("/sync", async (req, res) => {
   if (!guard.ok) { res.status(guard.status).json({ error: guard.error }); return; }
 
   try {
-    const conn = await loadConnection(guard.brandId);
+    const conn = await loadGoogleConnection(guard.brandId);
     if (!conn) { res.status(404).json({ error: "Google account not connected" }); return; }
     if (!conn["gsc_property_url"]) { res.status(400).json({ error: "No GSC property selected" }); return; }
 

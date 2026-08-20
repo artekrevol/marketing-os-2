@@ -1165,6 +1165,8 @@ export const gsc = {
       email: string | null;
       gscPropertyUrl: string | null;
       ga4PropertyId: string | null;
+      businessProfileAccountName: string | null;
+      businessProfileLocationNames: string[];
       lastSync: Record<string, unknown> | null;
     }>(await authedFetch(`/api/seo/gsc/connection?${qs(brandId)}`)),
 
@@ -1224,6 +1226,74 @@ export const gsc = {
   disconnect: async (brandId: string) =>
     jsonOrThrow<{ ok: boolean }>(
       await authedFetch(`/api/google/oauth/${brandId}`, { method: "DELETE" }),
+    ),
+};
+
+/* ── Google Analytics 4 + Business Profile ──────────────────────────────── */
+
+export const googleIntegrations = {
+  ga4Properties: async (brandId: string) =>
+    jsonOrThrow<{
+      properties: Array<{
+        propertyId: string;
+        displayName: string;
+        accountName: string | null;
+      }>;
+    }>(
+      await authedFetch(
+        `/api/google/integrations/ga4/properties?${qs(brandId)}`,
+      ),
+    ),
+
+  saveGa4Property: async (brandId: string, propertyId: string) =>
+    jsonOrThrow<{ ok: boolean; ga4PropertyId: string }>(
+      await authedFetch("/api/google/integrations/ga4/property", {
+        method: "POST",
+        body: JSON.stringify({ brandId, propertyId }),
+      }),
+    ),
+
+  businessProfileAccounts: async (brandId: string) =>
+    jsonOrThrow<{
+      accounts: Array<{
+        name: string;
+        accountName: string;
+        type: string | null;
+      }>;
+    }>(
+      await authedFetch(
+        `/api/google/integrations/business-profile/accounts?${qs(brandId)}`,
+      ),
+    ),
+
+  businessProfileLocations: async (brandId: string, accountName: string) =>
+    jsonOrThrow<{
+      locations: Array<{
+        name: string;
+        title: string;
+        storeCode: string | null;
+        websiteUri: string | null;
+      }>;
+    }>(
+      await authedFetch(
+        `/api/google/integrations/business-profile/locations?${qs(brandId, { accountName })}`,
+      ),
+    ),
+
+  saveBusinessProfileSelection: async (
+    brandId: string,
+    accountName: string | null,
+    locationNames: string[],
+  ) =>
+    jsonOrThrow<{
+      ok: boolean;
+      businessProfileAccountName: string | null;
+      businessProfileLocationNames: string[];
+    }>(
+      await authedFetch("/api/google/integrations/business-profile/selection", {
+        method: "POST",
+        body: JSON.stringify({ brandId, accountName, locationNames }),
+      }),
     ),
 };
 
