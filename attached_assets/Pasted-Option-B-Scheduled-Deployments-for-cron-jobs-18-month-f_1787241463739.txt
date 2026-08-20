@@ -1,0 +1,24 @@
+Option B — Scheduled Deployments for cron jobs. $18/month for second Reserved VM isn't the right tradeoff at current platform maturity. Revisit when we have measurable value justifying more infrastructure spend.
+
+Before you implement, confirm the architecture:
+
+Nightly GSC/GA4 incremental sync on Scheduled Deployment: what's the timeout limit? Typical incremental pull is small (last 3-7 days of data), should easily fit within any reasonable timeout. Confirm.
+First-sync 16-month backfill: this is the real problem. How do we handle it? Three options I see:
+Break into 16 nightly chunks (1 month per night over 2-3 weeks)
+Run as one-time script from Replit shell, direct DB write, bypasses queue entirely
+Reduce first-sync to 90 days, accept lower historical fidelity
+My preference: one-time script for first-sync. After completion, nightly Scheduled Deployment handles all ongoing sync. Confirm this is doable and describe how it'd be triggered.
+Manual "Sync now" button on integrations page: for Option B, this button either doesn't work or works differently. What's the right UX? Remove the button, replace with "Last synced at X, next sync in Y hours"? Or keep it and have it queue for the next scheduled fire?
+Discovery Engine's Monday 02:00 UTC fire: does this move to Scheduled Deployment same as GSC/GA4? Confirm all currently-scheduled workflows migrate cleanly to this pattern.
+What happens to the "Sync now" 500 error path RIGHT NOW? Fix or disable the button so it doesn't confuse users while the Scheduled Deployment approach is being set up. Simplest: button greys out with tooltip "Automated daily sync active, next fire 4:00 AM."
+
+Report on all five before implementation. Then execute in this order:
+
+Fix the immediate broken button state
+Set up Scheduled Deployment for GSC nightly incremental
+Trigger one-time script for GSC first-sync (16-month backfill)
+Verify data lands in gsc_query_rows and gsc_page_rows
+Set up remaining Scheduled Deployments (GA4, Discovery Engine, Recovery snapshots)
+Extend startup pre-flight to include Scheduled Deployment configuration check
+
+Don't declare complete until real GSC data is queryable in Search Performance page from the first-sync script.
