@@ -247,7 +247,7 @@ function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandNam
 
 export default function GoogleIntegrations() {
   const { user } = useAuth();
-  const { accessible } = useActiveBrand();
+  const { loading: brandLoading, activeBrand } = useActiveBrand();
 
   // Read ?google= param from URL (set by OAuth callback)
   const urlParams = new URLSearchParams(window.location.search);
@@ -261,10 +261,26 @@ export default function GoogleIntegrations() {
     );
   }
 
+  if (brandLoading) {
+    return (
+      <SeoShell title="Google Integrations" subtitle="Loading selected brand…">
+        <StateBox>Loading brand…</StateBox>
+      </SeoShell>
+    );
+  }
+
+  if (!activeBrand) {
+    return (
+      <SeoShell title="Google Integrations" subtitle="No brand selected">
+        <StateBox>Select a brand to manage its Google connection.</StateBox>
+      </SeoShell>
+    );
+  }
+
   return (
     <SeoShell
       title="Google Integrations"
-      subtitle="Connect each brand's Google account to enable Search Console data"
+      subtitle={`Connect ${activeBrand.name}'s Google account to enable Search Console data`}
     >
       {oauthStatus === "connected" && (
         <div className="mb-4 flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-4 py-3">
@@ -286,20 +302,17 @@ export default function GoogleIntegrations() {
       )}
 
       <div className="mb-4 border border-rule rounded-md bg-secondary/20 px-4 py-3 text-sm text-ink-muted">
-        <strong className="text-ink">Setup:</strong> Each brand needs its own Google account connected.
-        The Google account must have Search Console access to the brand's property.
+        <strong className="text-ink">Setup:</strong> Connect the selected brand's Google account.
+        The Google account must have Search Console access to {activeBrand.name}'s property.
         Data syncs automatically every night at 4am UTC, or you can trigger a manual sync per brand.
       </div>
 
-      {accessible.length === 0 ? (
-        <StateBox>No brands accessible.</StateBox>
-      ) : (
-        <div className="space-y-4 mt-2">
-          {accessible.map((brand) => (
-            <BrandConnectionCard key={brand.id} brandId={brand.id} brandName={brand.name} />
-          ))}
-        </div>
-      )}
+      <div className="space-y-4 mt-2">
+        <BrandConnectionCard
+          brandId={activeBrand.id}
+          brandName={activeBrand.name}
+        />
+      </div>
     </SeoShell>
   );
 }
