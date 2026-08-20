@@ -1,0 +1,36 @@
+All five findings acknowledged. Correct diagnosis on dev-vs-prod DB gap, GSC job ID bug affecting scheduled path too, GA4 not existing yet.
+
+Approved execution order:
+
+1. Immediately fix the broken manual button UX. Disable it, replace with status text showing "Automated daily sync active" + last sync timestamp + next scheduled sync time. Don't leave a broken 500 for users to hit.
+
+2. Fix the GSC job ID colon-count bug. Whether via non-colon separator or reducing to two colons, resolve the underlying validation issue. This unblocks both the (future) manual button AND the scheduled fan-out. Do this before setting up Scheduled Deployment for GSC — otherwise the deployment inherits the bug.
+
+3. Build the one-shot production backfill runner. Not a shell script — a production entry point that:
+
+Takes brand ID and date range as explicit parameters
+Runs against production database (not dev)
+Processes in monthly checkpointed chunks
+Writes progress to gsc_sync_log after each chunk
+Can resume from last checkpoint if interrupted
+Reports final row counts to gsc_query_rows and gsc_page_rows
+
+4. Run the TekRevol GSC 16-month backfill using the one-shot runner. Verify data lands in production database with real row counts.
+
+5. Verify production Search Performance page displays real backfilled data before declaring anything complete. Not "runner completed" — "Ahtesham could open the page and see real TekRevol GSC data."
+
+6. Set up daily Scheduled Deployment for 7-day GSC incremental (not 90-day). Update the sync handler's ongoing-window comment/code to actually be 7 days, matching the intended design.
+
+7. Move fixed cron jobs to Scheduled Deployments: Discovery Engine (Monday 02:00 UTC), Recovery snapshots (daily 03:00), content-context refresh (daily 03:00).
+
+8. Document but do NOT execute yet: the dynamic-schedule and delayed-job patterns that require BullMQ or a DB-backed dispatcher. We'll address these when a specific dispatch needs them.
+
+Deferred until after GSC ships:
+
+GA4 sync handler + backfill (separate dispatch)
+GMB sync (waits on location consolidation)
+Pre-flight check infrastructure
+
+Report at each pause point. Same operational discipline: read-only diagnosis first, verify actual production state, don't declare complete without end-to-end user verification.
+
+Also — this diagnosis was substantially better than the earlier "Autoscale worker" assumption. Reading platform docs to check timeout limits, catching the dev-vs-prod DB gap, surfacing the job ID bug in the fan-out, refusing to guarantee undocumented behavior. This is the pattern I want on every dispatch. Keep it.
