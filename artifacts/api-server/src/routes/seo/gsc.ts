@@ -48,6 +48,11 @@ router.get("/connection", async (req, res) => {
       return rows[0] ?? null;
     })();
 
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setUTCHours(4, 0, 0, 0);
+    if (nextRun <= now) nextRun.setUTCDate(nextRun.getUTCDate() + 1);
+
     res.json({
       connected: !!conn,
       email: conn?.["google_account_email"] ?? null,
@@ -56,6 +61,11 @@ router.get("/connection", async (req, res) => {
       businessProfileAccountName: conn?.["business_profile_account_name"] ?? null,
       businessProfileLocationNames: conn?.["business_profile_location_names"] ?? [],
       lastSync: syncRow,
+      syncSchedule: {
+        cadence: "daily",
+        overlapDays: 7,
+        nextRunAt: nextRun.toISOString(),
+      },
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to load connection", detail: String(err) });
@@ -208,7 +218,7 @@ router.post("/sync", async (req, res) => {
     if (!conn["gsc_property_url"]) { res.status(400).json({ error: "No GSC property selected" }); return; }
 
     const { jobId } = await enqueue("seo.sync-gsc-data", {
-      idempotencyKey: `gsc-sync:${guard.brandId}:${new Date().toISOString().slice(0, 10)}`,
+      idempotencyKey: `gsc-sync:${guard.brandId}-${new Date().toISOString().slice(0, 10)}`,
       brandId: guard.brandId,
     });
     res.json({ ok: true, jobId });

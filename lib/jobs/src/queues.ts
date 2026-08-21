@@ -79,6 +79,19 @@ export async function addRepeatable(
   });
 }
 
+/** Remove legacy fixed-calendar repeatables now owned by Scheduled Deployments. */
+export async function removeRepeatablesByName(
+  queueName: QueueName,
+  jobNames: readonly string[],
+): Promise<number> {
+  const queue = getQueue(queueName);
+  const names = new Set(jobNames);
+  const repeatables = await queue.getRepeatableJobs();
+  const stale = repeatables.filter((job) => names.has(job.name));
+  await Promise.all(stale.map((job) => queue.removeRepeatableByKey(job.key)));
+  return stale.length;
+}
+
 /**
  * SEO crawl schedules. A `crawl_schedules` row maps 1:1 to a repeatable
  * `seo.rank-check.scheduled` job on the `integrations` queue, keyed by

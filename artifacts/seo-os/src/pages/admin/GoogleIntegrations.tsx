@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  CheckCircle2, AlertCircle, Link2, Unlink, RefreshCw,
+  CheckCircle2, AlertCircle, Link2, Unlink,
   Loader2, ChevronDown, ExternalLink, BarChart3, MapPin, Save,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -29,6 +29,11 @@ type ConnectionData = {
   businessProfileAccountName: string | null;
   businessProfileLocationNames: string[];
   lastSync: Record<string, unknown> | null;
+  syncSchedule: {
+    cadence: "daily";
+    overlapDays: number;
+    nextRunAt: string;
+  };
 };
 
 function PropertySelector({
@@ -416,15 +421,6 @@ function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandNam
     staleTime: 30_000,
   });
 
-  const syncM = useMutation({
-    mutationFn: () => gsc.sync(brandId),
-    onSuccess: () => {
-      toast.success("Sync queued — data updates in a few minutes");
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["gsc", "connection", brandId] }), 10_000);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
   const disconnectM = useMutation({
     mutationFn: () => gsc.disconnect(brandId),
     onSuccess: () => {
@@ -509,14 +505,13 @@ function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandNam
                   </span>
                 </div>
               )}
-              <button
-                onClick={() => syncM.mutate()}
-                disabled={syncM.isPending || !conn.gscPropertyUrl}
-                className="mt-3 flex items-center gap-1.5 border border-rule rounded-sm px-3 py-1.5 text-sm hover:bg-secondary disabled:opacity-40"
-              >
-                {syncM.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                Sync now
-              </button>
+              {conn.syncSchedule && (
+                <div className="mt-3 rounded-sm border border-rule bg-secondary/20 px-3 py-2 text-[11px] text-ink-muted">
+                  <span className="font-medium text-ink">Automated daily sync</span>
+                  {" · "}re-fetches the last {conn.syncSchedule.overlapDays} days
+                  {" · "}next run {new Date(conn.syncSchedule.nextRunAt).toLocaleString()}
+                </div>
+              )}
             </>
           )}
         </IntegrationSection>

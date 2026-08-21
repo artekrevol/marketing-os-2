@@ -1168,6 +1168,11 @@ export const gsc = {
       businessProfileAccountName: string | null;
       businessProfileLocationNames: string[];
       lastSync: Record<string, unknown> | null;
+      syncSchedule: {
+        cadence: "daily";
+        overlapDays: number;
+        nextRunAt: string;
+      };
     }>(await authedFetch(`/api/seo/gsc/connection?${qs(brandId)}`)),
 
   /** List verified Search Console properties for the connected Google account. */

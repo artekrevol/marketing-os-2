@@ -32,6 +32,8 @@ describe("buildJobId — BullMQ custom-id constraint", () => {
       ],
       ["scoring.recovery-snapshot", `recovery-snapshot:${BRAND_ID}-2026-06-30`],
       ["content.qa-run-checks", `qa:${QA_RUN_ID}`],
+      ["seo.sync-gsc-data", `gsc-sync:${BRAND_ID}-2026-08-20`],
+      ["seo.sync-gsc.nightly", "seo-sync-gsc-nightly:2026-08-20"],
     ];
     for (const [name, key] of cases) {
       const jobId = buildJobId(name, key);

@@ -15,16 +15,14 @@ import {
   type QueueName,
   getRedisConnection,
   closeAllQueues,
-  addRepeatable,
+  removeRepeatablesByName,
 } from "@workspace/jobs";
-import { guardedDb, brandsTable } from "@workspace/db";
 import { logger } from "./logger";
 import { dispatch } from "./jobs";
 import { recordDeadJob } from "./jobs/dead-letter";
 import { recordTerminalIntegrationFailure } from "./jobs/terminal-failure";
 import {
   registerActiveCrawlSchedules,
-  registerDiscoveryWeeklySchedule,
 } from "./jobs/seo/schedules";
 import { captureJobError } from "./sentry";
 
@@ -95,39 +93,20 @@ export async function startEmbeddedWorkers(): Promise<EmbeddedWorkerHandle> {
   });
 
   try {
-    await addRepeatable(
-      "scoring",
-      "scoring.recovery-snapshot-nightly",
-      { idempotencyKey: "scoring.recovery-snapshot-nightly:cron" },
-      "0 3 * * *",
-    );
+    const removed = await Promise.all([
+      removeRepeatablesByName("integrations", [
+        "seo.sync-gsc.nightly",
+        "seo.refresh-content-context-nightly",
+        "seo.discovery.weekly",
+      ]),
+      removeRepeatablesByName("scoring", ["scoring.recovery-snapshot-nightly"]),
+    ]);
     logger.info(
-      { pattern: "0 3 * * *" },
-      "embedded-worker: repeatable job registered",
+      { removed: removed.reduce((sum, count) => sum + count, 0) },
+      "embedded-worker: removed legacy fixed repeatables",
     );
   } catch (err) {
-    logger.error(
-      { err },
-      "embedded-worker: failed to register recovery-snapshot-nightly cron",
-    );
-  }
-
-  try {
-    await addRepeatable(
-      "integrations",
-      "seo.refresh-content-context-nightly",
-      { idempotencyKey: "seo.refresh-content-context-nightly:cron" },
-      "0 3 * * *",
-    );
-    logger.info(
-      { pattern: "0 3 * * *" },
-      "embedded-worker: refresh-content-context-nightly repeatable registered",
-    );
-  } catch (err) {
-    logger.error(
-      { err },
-      "embedded-worker: failed to register refresh-content-context-nightly cron",
-    );
+    logger.error({ err }, "embedded-worker: failed to remove legacy fixed repeatables");
   }
 
   try {
@@ -136,22 +115,6 @@ export async function startEmbeddedWorkers(): Promise<EmbeddedWorkerHandle> {
     logger.error(
       { err },
       "embedded-worker: failed to register active crawl schedules",
-    );
-  }
-
-  // Discovery Engine — register weekly keyword discovery repeatable for
-  // each brand. Safe to call on every boot (addRepeatable is idempotent).
-  try {
-    const brands = await guardedDb
-      .select({ id: brandsTable.id })
-      .from(brandsTable);
-    for (const { id } of brands) {
-      await registerDiscoveryWeeklySchedule(id, logger);
-    }
-  } catch (err) {
-    logger.error(
-      { err },
-      "embedded-worker: failed to register discovery weekly schedules",
     );
   }
 

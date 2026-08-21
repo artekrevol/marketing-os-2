@@ -18,6 +18,8 @@
     "dev": "tsx src/index.ts",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "gsc:backfill": "node --enable-source-maps ./dist/gsc-backfill.cjs",
+    "scheduled:dispatch": "node --enable-source-maps ./dist/scheduled-dispatch.cjs",
     "test:enqueue-heartbeat": "tsx src/test/enqueue-heartbeat.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

@@ -6,8 +6,8 @@ import {
   closeRedisConnection,
   closeAllQueues,
   addRepeatable,
+  removeRepeatablesByName,
 } from "@workspace/jobs";
-import { guardedDb, brandsTable } from "@workspace/db";
 import { loadEnv } from "./env";
 import { logger } from "./logger";
 import { initSentry, captureJobError } from "./sentry";
@@ -16,7 +16,6 @@ import { recordDeadJob } from "./jobs/dead-letter";
 import { recordTerminalIntegrationFailure } from "./jobs/terminal-failure";
 import {
   registerActiveCrawlSchedules,
-  registerDiscoveryWeeklySchedule,
 } from "./jobs/seo/schedules";
 import { startHealthServer } from "./health";
 
@@ -103,76 +102,26 @@ async function main(): Promise<void> {
     logger.error({ err }, "worker: failed to register cron-alive probe");
   }
 
-  // Recovery War Room — register the nightly snapshot fan-out
-  // (amendments §E). BullMQ keys repeatable schedules by
-  // `(name, repeat.pattern)` so re-registering on every boot is safe.
-  try {
-    await addRepeatable(
-      "scoring",
-      "scoring.recovery-snapshot-nightly",
-      { idempotencyKey: "scoring.recovery-snapshot-nightly:cron" },
-      "0 3 * * *",
-    );
-    logger.info(
-      { name: "scoring.recovery-snapshot-nightly", pattern: "0 3 * * *" },
-      "worker: repeatable job registered",
-    );
-  } catch (err) {
-    logger.error({ err }, "worker: failed to register recovery-snapshot-nightly cron");
-  }
-
-  // Google Search Console — nightly fan-out sync for all connected brands (4am UTC).
-  try {
-    await addRepeatable(
-      "integrations",
-      "seo.sync-gsc.nightly",
-      { idempotencyKey: "seo.sync-gsc.nightly:cron" },
-      "0 4 * * *",
-    );
-    logger.info({ name: "seo.sync-gsc.nightly", pattern: "0 4 * * *" }, "worker: repeatable job registered");
-  } catch (err) {
-    logger.error({ err }, "worker: failed to register gsc-nightly cron");
-  }
-
-  // Shared Data Layer — nightly refresh of in-flight keyword research
-  // briefs whose SEO context snapshot has gone stale (>7 days).
-  try {
-    await addRepeatable(
-      "integrations",
-      "seo.refresh-content-context-nightly",
-      { idempotencyKey: "seo.refresh-content-context-nightly:cron" },
-      "0 3 * * *",
-    );
-    logger.info(
-      { name: "seo.refresh-content-context-nightly", pattern: "0 3 * * *" },
-      "worker: repeatable job registered",
-    );
-  } catch (err) {
-    logger.error(
-      { err },
-      "worker: failed to register refresh-content-context-nightly cron",
-    );
-  }
-
   // SEO Intelligence — reconcile repeatable rank-check schedules from
   // active `crawl_schedules` rows on every boot.
+  try {
+    const removed = await Promise.all([
+      removeRepeatablesByName("integrations", [
+        "seo.sync-gsc.nightly",
+        "seo.refresh-content-context-nightly",
+        "seo.discovery.weekly",
+      ]),
+      removeRepeatablesByName("scoring", ["scoring.recovery-snapshot-nightly"]),
+    ]);
+    logger.info({ removed: removed.reduce((sum, count) => sum + count, 0) }, "worker: removed legacy fixed repeatables");
+  } catch (err) {
+    logger.error({ err }, "worker: failed to remove legacy fixed repeatables");
+  }
+
   try {
     await registerActiveCrawlSchedules(logger);
   } catch (err) {
     logger.error({ err }, "worker: failed to register active crawl schedules");
-  }
-
-  // Discovery Engine — register weekly keyword discovery repeatable for
-  // each brand. Safe to call on every boot (addRepeatable is idempotent).
-  try {
-    const brands = await guardedDb
-      .select({ id: brandsTable.id })
-      .from(brandsTable);
-    for (const { id } of brands) {
-      await registerDiscoveryWeeklySchedule(id, logger);
-    }
-  } catch (err) {
-    logger.error({ err }, "worker: failed to register discovery weekly schedules");
   }
 
   const health = startHealthServer(env.PORT, startedAt);

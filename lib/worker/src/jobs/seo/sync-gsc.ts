@@ -143,6 +143,30 @@ async function fetchSearchAnalytics(
   return data.rows ?? [];
 }
 
+async function fetchAllSearchAnalytics(
+  token: string,
+  propertyUrl: string,
+  dimensions: string[],
+  dateFrom: string,
+  dateTo: string,
+): Promise<GscRow[]> {
+  const allRows: GscRow[] = [];
+  let startRow = 0;
+  while (true) {
+    const page = await fetchSearchAnalytics(
+      token,
+      propertyUrl,
+      dimensions,
+      dateFrom,
+      dateTo,
+      startRow,
+    );
+    allRows.push(...page);
+    if (page.length < 25_000) return allRows;
+    startRow += page.length;
+  }
+}
+
 /* ── upsert helpers ───────────────────────────────────────────────────────── */
 
 type DbClient = Parameters<Parameters<typeof withBrandScope>[1]>[0]["db"];
@@ -216,7 +240,7 @@ export async function handleSeoSyncGscData(
   `)) as unknown as { rows?: Array<{ count: number }> } | Array<{ count: number }>;
   const countRows = Array.isArray(countRes) ? countRes : ((countRes as { rows?: Array<{ count: number }> }).rows ?? []);
   const existingRows = countRows[0]?.count ?? 0;
-  const backfillDays = existingRows === 0 ? 490 : 90; // 490 days ≈ 16 months
+  const backfillDays = existingRows === 0 ? 490 : 7; // first sync ≈ 16 months; daily sync keeps a 7-day overlap
 
   const toDate = new Date();
   const fromDate = new Date();
@@ -244,39 +268,20 @@ export async function handleSeoSyncGscData(
     log.info({ brandId, dateFrom, dateTo, property: conn.propertyUrl }, "gsc-sync: fetching query rows");
 
     // Fetch query-level rows (date + query + page + country + device)
-    const queryRows1 = await fetchSearchAnalytics(
+    const allQueryRows = await fetchAllSearchAnalytics(
       conn.token, conn.propertyUrl,
       ["date", "query", "page", "country", "device"],
-      dateFrom, dateTo, 0,
+      dateFrom, dateTo,
     );
-    // Paginate if we hit the 25k row limit
-    let allQueryRows = queryRows1;
-    if (queryRows1.length === 25000) {
-      const queryRows2 = await fetchSearchAnalytics(
-        conn.token, conn.propertyUrl,
-        ["date", "query", "page", "country", "device"],
-        dateFrom, dateTo, 25000,
-      );
-      allQueryRows = [...queryRows1, ...queryRows2];
-    }
 
     log.info({ brandId, count: allQueryRows.length }, "gsc-sync: fetching page rows");
 
     // Fetch page-level rows (date + page + country + device)
-    const pageRows1 = await fetchSearchAnalytics(
+    const allPageRows = await fetchAllSearchAnalytics(
       conn.token, conn.propertyUrl,
       ["date", "page", "country", "device"],
-      dateFrom, dateTo, 0,
+      dateFrom, dateTo,
     );
-    let allPageRows = pageRows1;
-    if (pageRows1.length === 25000) {
-      const pageRows2 = await fetchSearchAnalytics(
-        conn.token, conn.propertyUrl,
-        ["date", "page", "country", "device"],
-        dateFrom, dateTo, 25000,
-      );
-      allPageRows = [...pageRows1, ...pageRows2];
-    }
 
     // Upsert into DB inside brand scope
     let queryRowsUpserted = 0;
@@ -337,7 +342,7 @@ export async function handleSeoSyncGscNightly(
   for (const { brand_id } of rows) {
     try {
       await enqueue("seo.sync-gsc-data", {
-        idempotencyKey: `gsc-sync:${brand_id}:${today}`,
+        idempotencyKey: `gsc-sync:${brand_id}-${today}`,
         brandId: brand_id,
       });
       enqueued++;

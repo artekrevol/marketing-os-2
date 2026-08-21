@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   TrendingUp, MousePointerClick, Eye, Percent, Trophy,
-  RefreshCw, ExternalLink, Search, AlertCircle, Loader2,
+  ExternalLink, Search, AlertCircle, Loader2,
 } from "lucide-react";
-import { toast } from "sonner";
 import { gsc } from "@/lib/api";
 import { SeoShell, withBrand, StateBox } from "./_shell";
 
@@ -115,7 +114,6 @@ function TrendChart({ rows }: { rows: DateRow[] }) {
 /* ── main page ───────────────────────────────────────────────────────────── */
 
 function SearchPerformanceInner({ brandId }: { brandId: string }) {
-  const qc = useQueryClient();
   const [preset, setPreset] = useState(90);
   const [dimension, setDimension] = useState<"query" | "page">("query");
   const [filter, setFilter] = useState("");
@@ -139,15 +137,6 @@ function SearchPerformanceInner({ brandId }: { brandId: string }) {
     queryFn: () => gsc.searchPerformance(brandId, { dimension: "date", dateFrom, dateTo }),
     enabled: !!connQ.data?.connected && !!connQ.data?.gscPropertyUrl,
     staleTime: 300_000,
-  });
-
-  const syncM = useMutation({
-    mutationFn: () => gsc.sync(brandId),
-    onSuccess: () => {
-      toast.success("GSC sync queued — data will update in a few minutes");
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["gsc"] }), 5_000);
-    },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   const conn = connQ.data;
@@ -210,18 +199,11 @@ function SearchPerformanceInner({ brandId }: { brandId: string }) {
       title="Search Performance"
       subtitle={`${conn.gscPropertyUrl} · as ${conn.email}`}
       actions={
-        <button
-          onClick={() => syncM.mutate()}
-          disabled={syncM.isPending}
-          className="flex items-center gap-2 border border-rule rounded-sm px-3 py-1.5 text-sm hover:bg-secondary disabled:opacity-50"
-        >
-          {syncM.isPending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-          Sync now
-        </button>
+        conn.syncSchedule ? (
+          <span className="text-xs text-ink-muted">
+            Daily sync · next {new Date(conn.syncSchedule.nextRunAt).toLocaleString()}
+          </span>
+        ) : undefined
       }
     >
       {/* Stat cards */}
