@@ -18,6 +18,127 @@ function brandToSnake(b: typeof brandsTable.$inferSelect) {
   };
 }
 
+function isUniqueViolation(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (
+      typeof current === "object" &&
+      "code" in current &&
+      (current as { code?: unknown }).code === "23505"
+    ) {
+      return true;
+    }
+    current =
+      typeof current === "object" && "cause" in current
+        ? (current as { cause?: unknown }).cause
+        : undefined;
+  }
+  return false;
+}
+
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+function normalizeDomain(value: string): string | null {
+  const candidate = value.trim().toLowerCase().replace(/\/+$/, "");
+  if (!candidate || candidate.includes("/") || candidate.includes("@")) return null;
+
+  const hostname = candidate.replace(/^https?:\/\//, "");
+  if (
+    hostname.length > 253 ||
+    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(hostname)
+  ) {
+    return null;
+  }
+  return hostname;
+}
+
+/**
+ * POST /api/brands
+ *
+ * Admin-only. Creates a brand with the database's default voice profile and
+ * thresholds. The endpoint validates independently of the form because it is
+ * also a production security boundary.
+ */
+router.post("/", requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const body = req.body as {
+      name?: unknown;
+      slug?: unknown;
+      primary_domain?: unknown;
+    };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const rawSlug = typeof body.slug === "string" ? body.slug.trim().toLowerCase() : "";
+    const slug = rawSlug || slugify(name);
+    const rawDomain = typeof body.primary_domain === "string" ? body.primary_domain : "";
+    const primaryDomain = normalizeDomain(rawDomain);
+    const fieldErrors: Record<string, string> = {};
+
+    if (name.length < 2) fieldErrors.name = "Enter a brand name.";
+    else if (name.length > 120) fieldErrors.name = "Brand name must be 120 characters or fewer.";
+
+    if (!slug) fieldErrors.slug = "Enter a brand slug.";
+    else if (slug.length > 60) fieldErrors.slug = "Slug must be 60 characters or fewer.";
+    else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      fieldErrors.slug = "Use lowercase letters, numbers, and single hyphens only.";
+    }
+
+    if (!primaryDomain) {
+      fieldErrors.primary_domain = "Enter a valid domain such as example.com.";
+    }
+
+    if (Object.keys(fieldErrors).length > 0) {
+      res.status(400).json({
+        error: "validation_failed",
+        message: "Check the highlighted brand fields.",
+        fields: fieldErrors,
+      });
+      return;
+    }
+
+    const existing = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .where(eq(brandsTable.slug, slug))
+      .limit(1);
+    if (existing.length > 0) {
+      res.status(409).json({
+        error: "duplicate_slug",
+        message: "A brand with that slug already exists.",
+        fields: { slug: "Choose a different slug." },
+      });
+      return;
+    }
+
+    const [created] = await db
+      .insert(brandsTable)
+      .values({
+        name,
+        slug,
+        primaryDomain,
+      })
+      .returning();
+
+    res.status(201).json(brandToSnake(created!));
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      res.status(409).json({
+        error: "duplicate_slug",
+        message: "A brand with that slug already exists.",
+        fields: { slug: "Choose a different slug." },
+      });
+      return;
+    }
+    next(err);
+  }
+});
+
 /**
  * GET /api/brands
  *

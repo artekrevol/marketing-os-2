@@ -29,6 +29,27 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+export type CreatedBrand = {
+  id: string;
+  slug: string;
+  name: string;
+  primary_domain: string | null;
+};
+
+export const brands = {
+  create: async (input: {
+    name: string;
+    slug: string;
+    primary_domain: string;
+  }): Promise<CreatedBrand> =>
+    jsonOrThrow<CreatedBrand>(
+      await authedFetch("/api/brands", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    ),
+};
+
 // ---- Quality Gate ----
 
 export type QueueItem = {

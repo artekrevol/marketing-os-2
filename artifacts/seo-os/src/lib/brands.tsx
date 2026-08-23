@@ -29,6 +29,7 @@ type Ctx = {
   accessible: Brand[];
   activeBrand: Brand | null;
   setActiveBrand: (b: Brand) => void;
+  refreshBrands: () => Promise<Brand[]>;
   isAdmin: boolean;
   /** Raw role string from /api/me: "admin" | "lead" | "reviewer" | "member" */
   role: string;
@@ -39,6 +40,7 @@ const BrandCtx = createContext<Ctx>({
   accessible: [],
   activeBrand: null,
   setActiveBrand: () => {},
+  refreshBrands: async () => [],
   isAdmin: false,
   role: "member",
 });
@@ -59,52 +61,55 @@ export function BrandProvider({
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<string>("member");
 
-  useEffect(() => {
-    let cancelled = false;
+  const refreshBrands = useCallback(async (): Promise<Brand[]> => {
     if (!userId) {
       setBrands([]);
       setActiveId(null);
       setLoading(false);
-      return;
+      return [];
     }
+
     setLoading(true);
-    fetch("/api/me", { credentials: "include" })
-      .then((r) => r.json() as Promise<MeResponse>)
-      .then((data) => {
-        if (cancelled) return;
-        const allBrands = data.brands;
-        setBrands(allBrands);
-        setRole(data.role ?? "member");
+    try {
+      const response = await fetch("/api/me", { credentials: "include" });
+      if (!response.ok) throw new Error("Could not load brands");
+      const data = (await response.json()) as MeResponse;
+      const allBrands = data.brands;
+      setBrands(allBrands);
+      setRole(data.role ?? "member");
 
-        let nextActive: string | null = null;
-        try {
-          const slug = localStorage.getItem(STORAGE_KEY);
-          if (slug) {
-            const m = allBrands.find((b) => b.slug === slug);
-            if (m) nextActive = m.id;
-          }
-        } catch {}
-        if (!nextActive) {
-          const tek = allBrands.find((b) => b.slug === "tekrevol");
-          if (tek) nextActive = tek.id;
+      let nextActive: string | null = null;
+      try {
+        const slug = localStorage.getItem(STORAGE_KEY);
+        if (slug) {
+          const m = allBrands.find((b) => b.slug === slug);
+          if (m) nextActive = m.id;
         }
-        if (!nextActive && allBrands.length > 0) nextActive = allBrands[0]!.id;
-        setActiveId(nextActive);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [userId, isAdmin]);
+      } catch {}
+      if (!nextActive) {
+        const tek = allBrands.find((b) => b.slug === "tekrevol");
+        if (tek) nextActive = tek.id;
+      }
+      if (!nextActive && allBrands.length > 0) nextActive = allBrands[0]!.id;
+      setActiveId(nextActive);
+      return allBrands;
+    } catch {
+      setBrands([]);
+      setActiveId(null);
+      return [];
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
 
-  const activeBrand = useMemo(
-    () => brands.find((b) => b.id === activeId) ?? null,
-    [brands, activeId],
-  );
+  useEffect(() => {
+    void refreshBrands();
+  }, [refreshBrands]);
 
+  /*
+   * Keep the selected brand in local storage so a newly created brand can be
+   * selected immediately and remains selected after a page refresh.
+   */
   const setActiveBrand = useCallback((b: Brand) => {
     setActiveId(b.id);
     try {
@@ -112,9 +117,14 @@ export function BrandProvider({
     } catch {}
   }, []);
 
+  const activeBrand = useMemo(
+    () => brands.find((b) => b.id === activeId) ?? null,
+    [brands, activeId],
+  );
+
   const value = useMemo<Ctx>(
-    () => ({ loading, accessible: brands, activeBrand, setActiveBrand, isAdmin, role }),
-    [loading, brands, activeBrand, setActiveBrand, isAdmin, role],
+    () => ({ loading, accessible: brands, activeBrand, setActiveBrand, refreshBrands, isAdmin, role }),
+    [loading, brands, activeBrand, setActiveBrand, refreshBrands, isAdmin, role],
   );
 
   return <BrandCtx.Provider value={value}>{children}</BrandCtx.Provider>;
