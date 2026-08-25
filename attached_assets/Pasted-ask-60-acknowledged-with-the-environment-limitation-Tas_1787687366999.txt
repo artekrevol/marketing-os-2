@@ -1,0 +1,32 @@
+ask #60 acknowledged with the environment limitation. Task #62 solid execution — real 409 duplicate testing caught the Drizzle wrapping bug that generic error checking would have missed. This is the pattern I want on every dispatch.
+
+Before we move to anything new, walk me through Task #60's production handoff. I need step-by-step Replit UI instructions, not command syntax alone:
+
+1. Publishing current build to Reserved VM.
+
+Where exactly in the Replit UI do I click
+Does this update Reserved VM only, or the frontend Autoscale too
+Any risk to in-flight state during republish
+How to confirm the new code is actually live post-publish (specific endpoint or version marker I can check)
+
+2. Creating the four Scheduled Deployments.
+
+Exact Replit UI navigation for creating a Scheduled Deployment
+For each of the four (GSC nightly, Recovery snapshot, content-context, Discovery weekly): entry point command, schedule expression, which secrets to configure, which database it writes to
+How to verify each fires correctly after creation (does Replit show a "last run" timestamp?)
+Do I need to test-fire manually first, or wait for scheduled time
+
+3. Triggering TekRevol GSC 16-month backfill in production.
+
+Exact command syntax
+Where I run this — is it a Scheduled Deployment I trigger once, a Shell command in production context, or something else
+How to monitor progress mid-backfill (checkpoint rows appearing in gsc_sync_log?)
+Expected duration
+How to verify success — specific database query I can run, or specific page state on Search Performance
+Recovery instructions if it fails partway
+
+4. Sequencing question. Does the daily Scheduled Deployment need to wait for backfill completion, or can it run in parallel without conflict? If I create the schedule tonight and the backfill runs tomorrow morning, will 4am UTC fire cleanly or hit lock contention?
+
+Give me the walkthrough. Do NOT execute steps 2-3 for me — those are production writes I need to authorize by hand. Do step 1 (publish) yourself if that's a straightforward push, but confirm before doing it.
+
+When I've completed all three, I'll verify Search Performance page shows real TekRevol data and confirm Task #60 fully closed.
