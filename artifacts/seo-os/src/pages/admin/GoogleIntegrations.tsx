@@ -10,11 +10,11 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  CheckCircle2, AlertCircle, Link2, Unlink, Plus, X,
-  Loader2, ChevronDown, ExternalLink, BarChart3, MapPin, Save,
+  CheckCircle2, AlertCircle, Link2, Unlink,
+  Loader2, ChevronDown, ExternalLink, BarChart3, MapPin, Save, Building2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { brands, gsc, googleIntegrations } from "@/lib/api";
+import { gsc, googleIntegrations } from "@/lib/api";
 import { SeoShell, StateBox } from "../seo/_shell";
 import { useActiveBrand } from "@/lib/brands";
 import { useAuth } from "@/lib/useAuth";
@@ -558,204 +558,6 @@ function BrandConnectionCard({ brandId, brandName }: { brandId: string; brandNam
   );
 }
 
-function slugFromName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
-}
-
-function AddBrandForm() {
-  const { refreshBrands, setActiveBrand } = useActiveBrand();
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [domain, setDomain] = useState("");
-  const [slugTouched, setSlugTouched] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [errorMessage, setErrorMessage] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const reset = () => {
-    setName("");
-    setSlug("");
-    setDomain("");
-    setSlugTouched(false);
-    setErrors({});
-    setErrorMessage("");
-  };
-
-  const close = () => {
-    if (saving) return;
-    setOpen(false);
-    reset();
-  };
-
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const nextErrors: Record<string, string> = {};
-    const trimmedName = name.trim();
-    const normalizedSlug = slug.trim().toLowerCase();
-    const normalizedDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
-
-    if (trimmedName.length < 2) nextErrors.name = "Enter a brand name.";
-    else if (trimmedName.length > 120) nextErrors.name = "Brand name must be 120 characters or fewer.";
-    if (!normalizedSlug) nextErrors.slug = "Enter a brand slug.";
-    else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedSlug)) {
-      nextErrors.slug = "Use lowercase letters, numbers, and single hyphens only.";
-    }
-    if (
-      !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalizedDomain)
-    ) {
-      nextErrors.primary_domain = "Enter a valid domain such as example.com.";
-    }
-
-    setErrors(nextErrors);
-    setErrorMessage("");
-    setSuccessMessage("");
-    if (Object.keys(nextErrors).length > 0) return;
-
-    setSaving(true);
-    try {
-      const created = await brands.create({
-        name: trimmedName,
-        slug: normalizedSlug,
-        primary_domain: normalizedDomain,
-      });
-      const refreshed = await refreshBrands();
-      const createdBrand = refreshed.find((brand) => brand.id === created.id) ?? {
-        id: created.id,
-        slug: created.slug,
-        name: created.name,
-        primary_domain: created.primary_domain,
-      };
-      setActiveBrand(createdBrand);
-      setOpen(false);
-      reset();
-      setSuccessMessage(`${created.name} was added and is now selected.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not add this brand.";
-      setErrorMessage(message.replace(/^\d+\s+/, ""));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <section className="mb-5 border border-rule rounded-md bg-background overflow-hidden">
-      <div className="flex items-center justify-between gap-4 px-5 py-4">
-        <div>
-          <h2 className="font-medium text-sm">Brand management</h2>
-          <p className="text-xs text-ink-muted mt-1">Add a new brand without database access.</p>
-        </div>
-        {!open && (
-          <button
-            type="button"
-            onClick={() => {
-              setSuccessMessage("");
-              setOpen(true);
-            }}
-            className="inline-flex items-center gap-1.5 bg-ink text-paper px-3 py-1.5 rounded-sm text-sm font-medium hover:bg-accent"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add brand
-          </button>
-        )}
-      </div>
-
-      {successMessage && (
-        <div role="status" className="mx-5 mb-4 flex items-center gap-2 rounded-sm border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-700">
-          <CheckCircle2 className="h-4 w-4 shrink-0" /> {successMessage}
-        </div>
-      )}
-
-      {open && (
-        <form onSubmit={submit} noValidate className="border-t border-rule px-5 py-4 space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="font-medium text-sm">Add a brand</h3>
-              <p className="text-xs text-ink-muted mt-1">Defaults are applied automatically. You can configure integrations after creation.</p>
-            </div>
-            <button type="button" onClick={close} aria-label="Cancel adding brand" className="text-ink-muted hover:text-ink">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          {errorMessage && (
-            <div role="alert" className="flex items-start gap-2 rounded-sm border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
-              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" /> <span>{errorMessage}</span>
-            </div>
-          )}
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="block text-xs text-ink-muted uppercase tracking-wide">
-              Brand name <span className="text-red-600">*</span>
-              <input
-                value={name}
-                onChange={(event) => {
-                  const nextName = event.target.value;
-                  setName(nextName);
-                  if (!slugTouched) setSlug(slugFromName(nextName));
-                }}
-                aria-invalid={Boolean(errors.name)}
-                aria-describedby={errors.name ? "add-brand-name-error" : undefined}
-                placeholder="Example Company"
-                className="mt-1 block w-full border border-rule rounded-sm px-3 py-2 text-sm bg-background normal-case tracking-normal text-ink"
-              />
-              {errors.name && <span id="add-brand-name-error" className="block mt-1 text-red-600 normal-case tracking-normal">{errors.name}</span>}
-            </label>
-
-            <label className="block text-xs text-ink-muted uppercase tracking-wide">
-              Slug <span className="text-red-600">*</span>
-              <input
-                value={slug}
-                onChange={(event) => {
-                  setSlugTouched(true);
-                  setSlug(event.target.value.toLowerCase());
-                }}
-                aria-invalid={Boolean(errors.slug)}
-                aria-describedby={errors.slug ? "add-brand-slug-error" : undefined}
-                placeholder="example-company"
-                className="mt-1 block w-full border border-rule rounded-sm px-3 py-2 text-sm bg-background normal-case tracking-normal text-ink"
-              />
-              {errors.slug && <span id="add-brand-slug-error" className="block mt-1 text-red-600 normal-case tracking-normal">{errors.slug}</span>}
-            </label>
-          </div>
-
-          <label className="block text-xs text-ink-muted uppercase tracking-wide">
-            Primary domain <span className="text-red-600">*</span>
-            <input
-              value={domain}
-              onChange={(event) => setDomain(event.target.value)}
-              aria-invalid={Boolean(errors.primary_domain)}
-              aria-describedby={errors.primary_domain ? "add-brand-domain-error" : undefined}
-              placeholder="example.com"
-              className="mt-1 block w-full border border-rule rounded-sm px-3 py-2 text-sm bg-background normal-case tracking-normal text-ink"
-            />
-            {errors.primary_domain && <span id="add-brand-domain-error" className="block mt-1 text-red-600 normal-case tracking-normal">{errors.primary_domain}</span>}
-          </label>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="inline-flex items-center gap-1.5 bg-ink text-paper px-4 py-2 rounded-sm text-sm font-medium hover:bg-accent disabled:opacity-40"
-            >
-              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {saving ? "Adding brand…" : "Add brand"}
-            </button>
-            <button type="button" onClick={close} disabled={saving} className="border border-rule px-4 py-2 rounded-sm text-sm hover:bg-secondary disabled:opacity-40">
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-    </section>
-  );
-}
-
 /* ── main page ───────────────────────────────────────────────────────────── */
 
 export default function GoogleIntegrations() {
@@ -803,7 +605,22 @@ export default function GoogleIntegrations() {
       title="Google Integrations"
       subtitle={`Manage ${activeBrand.name}'s Search Console, Analytics, and Business Profile connections`}
     >
-      <AddBrandForm />
+      {/* Brand management lives on the canonical Brands page, shared across all modules */}
+      <div className="mb-5 flex items-center gap-3 border border-rule rounded-md bg-background px-5 py-4">
+        <Building2 className="h-4 w-4 text-ink-muted shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">Add or manage brands</p>
+          <p className="text-xs text-ink-muted mt-0.5">
+            Brands are shared across SEO OS, ContentForge, and all future modules.
+          </p>
+        </div>
+        <a
+          href="/admin/brands"
+          className="inline-flex items-center gap-1.5 bg-ink text-paper px-3 py-1.5 rounded-sm text-sm font-medium hover:bg-accent shrink-0"
+        >
+          Manage brands
+        </a>
+      </div>
       {oauthStatus === "connected" && (
         <div className="mb-4 flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-4 py-3">
           <CheckCircle2 className="h-4 w-4 shrink-0" />

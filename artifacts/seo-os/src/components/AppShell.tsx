@@ -1,9 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { ShieldCheck, Building2, ChevronDown, LogOut, LayoutDashboard, Settings } from "lucide-react";
+import { ShieldCheck, Building2, ChevronDown, LogOut, LayoutDashboard, Plus, X, AlertCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/useAuth";
-import { BrandProvider, useActiveBrand } from "@/lib/brands";
+import { BrandProvider, useActiveBrand, type Brand } from "@/lib/brands";
 
 type AuthState = "loading" | "in" | "out" | "blocked" | "member";
 
@@ -215,53 +215,196 @@ function NavItem({
   );
 }
 
+function slugFromName(text: string): string {
+  return text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+}
+
 function BrandSwitcher() {
-  const { loading, accessible, activeBrand, setActiveBrand } = useActiveBrand();
+  const { loading, accessible, activeBrand, setActiveBrand, isAdmin, refreshBrands } = useActiveBrand();
   const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createSlug, setCreateSlug] = useState("");
+  const [createDomain, setCreateDomain] = useState("");
+  const [createSlugTouched, setCreateSlugTouched] = useState(false);
+  const [createErrors, setCreateErrors] = useState<Record<string, string>>({});
+  const [createErrorMsg, setCreateErrorMsg] = useState("");
+  const [createSaving, setCreateSaving] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (createOpen) setTimeout(() => nameRef.current?.focus(), 50);
+  }, [createOpen]);
+
+  const resetCreate = () => {
+    setCreateName(""); setCreateSlug(""); setCreateDomain("");
+    setCreateSlugTouched(false); setCreateErrors({}); setCreateErrorMsg("");
+  };
+
+  const openCreate = () => { setOpen(false); resetCreate(); setCreateOpen(true); };
+  const closeCreate = () => { if (createSaving) return; setCreateOpen(false); resetCreate(); };
+
+  const submitCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimName = createName.trim();
+    const trimSlug = createSlug.trim().toLowerCase();
+    const trimDomain = createDomain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    const next: Record<string, string> = {};
+    if (trimName.length < 2) next.name = "Enter a brand name.";
+    else if (trimName.length > 120) next.name = "Too long.";
+    if (!trimSlug) next.slug = "Enter a slug.";
+    else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(trimSlug)) next.slug = "Lowercase, numbers, single hyphens only.";
+    if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(trimDomain)) {
+      next.primary_domain = "Enter a valid domain, e.g. example.com.";
+    }
+    setCreateErrors(next); setCreateErrorMsg("");
+    if (Object.keys(next).length > 0) return;
+
+    setCreateSaving(true);
+    try {
+      const resp = await fetch("/api/brands", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: trimName, slug: trimSlug, primary_domain: trimDomain }),
+      });
+      const data = await resp.json() as Brand & { error?: string; message?: string; fields?: Record<string, string> };
+      if (!resp.ok) {
+        if (data.fields && Object.keys(data.fields).length > 0) setCreateErrors(data.fields);
+        setCreateErrorMsg(data.message ?? `HTTP ${resp.status}`);
+        return;
+      }
+      const newBrand: Brand = { id: data.id, slug: data.slug, name: data.name, primary_domain: data.primary_domain };
+      setActiveBrand(newBrand);
+      await refreshBrands();
+      closeCreate();
+      toast.success(`${data.name} added and selected.`);
+    } catch (err) {
+      setCreateErrorMsg(err instanceof Error ? err.message : "Could not add brand.");
+    } finally {
+      setCreateSaving(false);
+    }
+  };
 
   if (loading || accessible.length === 0) return null;
 
-  if (accessible.length === 1) {
-    return (
-      <div className="px-5 py-3 border-b border-rule flex items-center gap-2">
-        <Building2 className="h-3.5 w-3.5 text-ink-muted" />
-        <span className="text-xs font-medium">{accessible[0]!.name}</span>
-      </div>
-    );
-  }
-
   return (
-    <div className="px-3 py-3 border-b border-rule relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary transition-colors"
-      >
-        <span className="flex items-center gap-2 min-w-0">
-          <Building2 className="h-3.5 w-3.5 text-ink-muted shrink-0" />
-          <span className="truncate font-medium">{activeBrand?.name ?? "Select brand"}</span>
-        </span>
-        <ChevronDown
-          className={`h-3.5 w-3.5 text-ink-muted transition-transform ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      {open && (
-        <div className="absolute left-3 right-3 mt-1 bg-background border border-rule rounded-sm shadow-md z-50 max-h-64 overflow-y-auto">
-          {accessible.map((b) => (
+    <div className="px-3 py-3 border-b border-rule">
+      {/* Brand picker */}
+      {accessible.length === 1 && !createOpen ? (
+        <div className="flex items-center gap-2 px-2 py-1.5">
+          <Building2 className="h-3.5 w-3.5 text-ink-muted" />
+          <span className="text-xs font-medium flex-1 truncate">{accessible[0]!.name}</span>
+          {isAdmin && (
             <button
-              key={b.id}
-              onClick={() => {
-                setActiveBrand(b);
-                setOpen(false);
-              }}
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-secondary ${
-                activeBrand?.id === b.id ? "bg-secondary/60 font-medium" : ""
-              }`}
+              onClick={openCreate}
+              className="text-ink-muted hover:text-accent p-0.5 rounded"
+              title="Add brand"
+              aria-label="Add brand"
             >
-              {b.name}
-              <span className="ml-2 text-[10px] font-mono text-ink-muted">{b.slug}</span>
+              <Plus className="h-3.5 w-3.5" />
             </button>
-          ))}
+          )}
         </div>
+      ) : !createOpen ? (
+        <div className="relative">
+          <button
+            onClick={() => setOpen((o) => !o)}
+            className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary transition-colors"
+          >
+            <span className="flex items-center gap-2 min-w-0">
+              <Building2 className="h-3.5 w-3.5 text-ink-muted shrink-0" />
+              <span className="truncate font-medium">{activeBrand?.name ?? "Select brand"}</span>
+            </span>
+            <ChevronDown
+              className={`h-3.5 w-3.5 text-ink-muted transition-transform ${open ? "rotate-180" : ""}`}
+            />
+          </button>
+          {open && (
+            <div className="absolute left-0 right-0 mt-1 bg-background border border-rule rounded-sm shadow-md z-50 max-h-64 overflow-y-auto">
+              {accessible.map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => { setActiveBrand(b); setOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-secondary ${
+                    activeBrand?.id === b.id ? "bg-secondary/60 font-medium" : ""
+                  }`}
+                >
+                  {b.name}
+                  <span className="ml-2 text-[10px] font-mono text-ink-muted">{b.slug}</span>
+                </button>
+              ))}
+              {isAdmin && (
+                <button
+                  onClick={openCreate}
+                  className="w-full text-left px-3 py-2 text-sm text-accent hover:bg-secondary border-t border-rule flex items-center gap-1.5"
+                >
+                  <Plus className="h-3.5 w-3.5" /> New brand
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* Inline create form */}
+      {createOpen && (
+        <form onSubmit={submitCreate} noValidate className="space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs font-medium text-ink">New brand</p>
+            <button type="button" onClick={closeCreate} className="text-ink-muted hover:text-ink" aria-label="Cancel">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {createErrorMsg && (
+            <div role="alert" className="flex items-start gap-1.5 rounded-sm border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> {createErrorMsg}
+            </div>
+          )}
+
+          <div>
+            <input
+              ref={nameRef}
+              value={createName}
+              onChange={(e) => { setCreateName(e.target.value); if (!createSlugTouched) setCreateSlug(slugFromName(e.target.value)); }}
+              placeholder="Brand name *"
+              className={`w-full border rounded-sm px-2 py-1.5 text-xs bg-background text-ink ${createErrors.name ? "border-red-400" : "border-rule"}`}
+            />
+            {createErrors.name && <p className="text-[11px] text-red-600 mt-0.5">{createErrors.name}</p>}
+          </div>
+          <div>
+            <input
+              value={createSlug}
+              onChange={(e) => { setCreateSlugTouched(true); setCreateSlug(e.target.value.toLowerCase()); }}
+              placeholder="slug *"
+              className={`w-full border rounded-sm px-2 py-1.5 text-xs bg-background text-ink font-mono ${createErrors.slug ? "border-red-400" : "border-rule"}`}
+            />
+            {createErrors.slug && <p className="text-[11px] text-red-600 mt-0.5">{createErrors.slug}</p>}
+          </div>
+          <div>
+            <input
+              value={createDomain}
+              onChange={(e) => setCreateDomain(e.target.value)}
+              placeholder="example.com *"
+              className={`w-full border rounded-sm px-2 py-1.5 text-xs bg-background text-ink ${createErrors.primary_domain ? "border-red-400" : "border-rule"}`}
+            />
+            {createErrors.primary_domain && <p className="text-[11px] text-red-600 mt-0.5">{createErrors.primary_domain}</p>}
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button
+              type="submit"
+              disabled={createSaving}
+              className="flex-1 inline-flex items-center justify-center gap-1 bg-ink text-paper px-2 py-1.5 rounded-sm text-xs font-medium hover:bg-accent disabled:opacity-40"
+            >
+              {createSaving && <Loader2 className="h-3 w-3 animate-spin" />}
+              {createSaving ? "Adding…" : "Add brand"}
+            </button>
+            <button type="button" onClick={closeCreate} disabled={createSaving} className="border border-rule px-3 py-1.5 rounded-sm text-xs hover:bg-secondary disabled:opacity-40">
+              Cancel
+            </button>
+          </div>
+        </form>
       )}
     </div>
   );

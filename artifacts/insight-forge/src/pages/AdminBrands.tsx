@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Loader2, Building2, Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Loader2, Building2, Save, Plus, X, AlertCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { recordAudit } from "@/lib/audit";
 import { useActiveBrand, type Brand } from "@/lib/brands";
@@ -10,6 +10,182 @@ type Editing = {
   thresholds: string;
   domain: string;
 };
+
+function slugFromName(text: string): string {
+  return text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+}
+
+function CreateBrandForm({ onCreated }: { onCreated: (b: Brand) => void }) {
+  const { refresh, setActiveBrand } = useActiveBrand();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [domain, setDomain] = useState("");
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errorMsg, setErrorMsg] = useState("");
+  const [saving, setSaving] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  const reset = () => {
+    setName(""); setSlug(""); setDomain("");
+    setSlugTouched(false); setErrors({}); setErrorMsg("");
+  };
+
+  const close = () => { if (saving) return; setOpen(false); reset(); };
+
+  useEffect(() => {
+    if (open) setTimeout(() => nameRef.current?.focus(), 50);
+  }, [open]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimName = name.trim();
+    const trimSlug = slug.trim().toLowerCase();
+    const trimDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    const next: Record<string, string> = {};
+    if (trimName.length < 2) next.name = "Enter a brand name.";
+    else if (trimName.length > 120) next.name = "Brand name must be 120 characters or fewer.";
+    if (!trimSlug) next.slug = "Enter a brand slug.";
+    else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(trimSlug)) next.slug = "Use lowercase letters, numbers, and single hyphens only.";
+    if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(trimDomain)) {
+      next.primary_domain = "Enter a valid domain such as example.com.";
+    }
+    setErrors(next); setErrorMsg("");
+    if (Object.keys(next).length > 0) return;
+
+    setSaving(true);
+    try {
+      const resp = await fetch("/api/brands", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: trimName, slug: trimSlug, primary_domain: trimDomain }),
+      });
+      const data = await resp.json() as Brand & { error?: string; message?: string; fields?: Record<string, string> };
+      if (!resp.ok) {
+        if (resp.status === 409 || (data.fields && Object.keys(data.fields).length > 0)) {
+          setErrors(data.fields ?? {});
+          setErrorMsg(data.message ?? "A brand with that slug already exists.");
+        } else {
+          setErrorMsg(data.message ?? `HTTP ${resp.status}`);
+        }
+        return;
+      }
+      // Select the new brand before refresh so localStorage slug is set first
+      setActiveBrand({ id: data.id, slug: data.slug, name: data.name, primary_domain: data.primary_domain, voice_profile: {}, thresholds: {} });
+      await refresh();
+      onCreated(data);
+      setOpen(false);
+      reset();
+      toast.success(`${data.name} added and selected.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Could not add brand.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mb-8 border border-rule rounded-md bg-background overflow-hidden">
+      <div className="flex items-center justify-between gap-4 px-5 py-4">
+        <div>
+          <p className="text-xs font-medium">Create brand</p>
+          <p className="text-xs text-ink-muted mt-0.5">
+            A new brand is immediately available in SEO OS, ContentForge, and all future modules.
+          </p>
+        </div>
+        {!open && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="inline-flex items-center gap-1.5 bg-ink text-paper px-3 py-1.5 rounded-sm text-sm font-medium hover:bg-accent"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add brand
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <form onSubmit={submit} noValidate className="border-t border-rule px-5 py-4 space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">Add a brand</p>
+              <p className="text-xs text-ink-muted mt-0.5">
+                Keywords, locations, and integrations can be configured after creation.
+              </p>
+            </div>
+            <button type="button" onClick={close} aria-label="Cancel" className="text-ink-muted hover:text-ink">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {errorMsg && (
+            <div role="alert" className="flex items-start gap-2 rounded-sm border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" /> <span>{errorMsg}</span>
+            </div>
+          )}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block text-xs text-ink-muted uppercase tracking-wide">
+              Brand name <span className="text-red-600">*</span>
+              <input
+                ref={nameRef}
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (!slugTouched) setSlug(slugFromName(e.target.value));
+                }}
+                aria-invalid={!!errors.name}
+                placeholder="Example Company"
+                className="mt-1 block w-full border border-rule rounded-sm px-3 py-2 text-sm bg-background normal-case tracking-normal text-ink"
+              />
+              {errors.name && <span className="block mt-1 text-red-600 normal-case tracking-normal">{errors.name}</span>}
+            </label>
+
+            <label className="block text-xs text-ink-muted uppercase tracking-wide">
+              Slug <span className="text-red-600">*</span>
+              <input
+                value={slug}
+                onChange={(e) => { setSlugTouched(true); setSlug(e.target.value.toLowerCase()); }}
+                aria-invalid={!!errors.slug}
+                placeholder="example-company"
+                className="mt-1 block w-full border border-rule rounded-sm px-3 py-2 text-sm bg-background normal-case tracking-normal text-ink font-mono"
+              />
+              {errors.slug && <span className="block mt-1 text-red-600 normal-case tracking-normal">{errors.slug}</span>}
+            </label>
+          </div>
+
+          <label className="block text-xs text-ink-muted uppercase tracking-wide">
+            Primary domain <span className="text-red-600">*</span>
+            <input
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              aria-invalid={!!errors.primary_domain}
+              placeholder="example.com"
+              className="mt-1 block w-full border border-rule rounded-sm px-3 py-2 text-sm bg-background normal-case tracking-normal text-ink"
+            />
+            {errors.primary_domain && <span className="block mt-1 text-red-600 normal-case tracking-normal">{errors.primary_domain}</span>}
+          </label>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 bg-ink text-paper px-4 py-2 rounded-sm text-sm font-medium hover:bg-accent disabled:opacity-40"
+            >
+              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {saving ? "Adding…" : "Add brand"}
+            </button>
+            <button type="button" onClick={close} disabled={saving} className="border border-rule px-4 py-2 rounded-sm text-sm hover:bg-secondary disabled:opacity-40">
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
 
 export default function AdminBrands() {
   const { isAdmin, refresh } = useActiveBrand();
@@ -68,8 +244,6 @@ export default function AdminBrands() {
       return;
     }
     setSaving(b.id);
-    // Audit-first: if the audit write fails, abort the mutation so we never have
-    // a sensitive change without a corresponding audit row.
     const audit = await recordAudit(
       "brand.update",
       "brand",
@@ -110,8 +284,8 @@ export default function AdminBrands() {
           <Building2 className="h-6 w-6 text-accent" /> Brands
         </h1>
         <p className="text-sm text-ink-muted mt-2 max-w-2xl">
-          Four brand tenants. Voice profile and per-brand thresholds (originality cutoff, reading
-          grade target) drive Stage-3 scoring and the Quality Gate later in Wave 1.
+          Brands are shared across SEO OS, ContentForge, and all future modules. Each brand has its
+          own keywords, locations, rankings, and integrations that can be configured after creation.
         </p>
         {!isAdmin && (
           <p className="text-[11px] uppercase tracking-widest text-ink-muted mt-3">
@@ -119,6 +293,12 @@ export default function AdminBrands() {
           </p>
         )}
       </div>
+
+      {isAdmin && (
+        <CreateBrandForm
+          onCreated={() => load()}
+        />
+      )}
 
       {loading ? (
         <div className="flex items-center gap-2 text-ink-muted text-sm">
@@ -231,7 +411,7 @@ export default function AdminBrands() {
             );
           })}
           {brands.length === 0 && (
-            <p className="text-sm text-ink-muted italic">No brands seeded yet — run migration 0001.</p>
+            <p className="text-sm text-ink-muted italic">No brands yet — add one above.</p>
           )}
         </div>
       )}
