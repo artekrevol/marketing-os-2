@@ -1,0 +1,380 @@
+2026-08-25 14:50:00.34
+e773a2ba
+User
+{"level":30,"time":1787687400339,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787687400000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"result":{"inserted":false,"eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc"},"msg":"job: completed"}
+2026-08-25 14:50:00.34
+e773a2ba
+User
+{"level":30,"time":1787687400339,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787687400000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"idempotencyKey":"cron-alive-probe","eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc","successEventType":"system.heartbeat","msg":"idempotency: duplicate detected, short-circuit"}
+2026-08-25 14:55:00.06
+e773a2ba
+User
+{"level":30,"time":1787687700065,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787687700000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"msg":"job: started"}
+2026-08-25 14:55:01.42
+e773a2ba
+User
+{"level":30,"time":1787687701426,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787687700000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"idempotencyKey":"cron-alive-probe","eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc","successEventType":"system.heartbeat","msg":"idempotency: duplicate detected, short-circuit"}
+2026-08-25 14:55:01.42
+e773a2ba
+User
+{"level":30,"time":1787687701427,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787687700000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"result":{"inserted":false,"eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc"},"msg":"job: completed"}
+2026-08-25 14:59:29.38
+e773a2ba
+User
+{"level":30,"time":1787687969380,"pid":17,"hostname":"nixos","req":{"id":125,"method":"GET","url":"/api/healthz"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+2026-08-25 15:00:00.06
+e773a2ba
+User
+{"level":30,"time":1787688000061,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688000000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"msg":"job: started"}
+2026-08-25 15:00:00.35
+e773a2ba
+User
+{"level":30,"time":1787688000354,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688000000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"idempotencyKey":"cron-alive-probe","eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc","successEventType":"system.heartbeat","msg":"idempotency: duplicate detected, short-circuit"}
+2026-08-25 15:00:00.35
+e773a2ba
+User
+{"level":30,"time":1787688000354,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688000000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"result":{"inserted":false,"eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc"},"msg":"job: completed"}
+2026-08-25 15:05:00.06
+e773a2ba
+User
+{"level":30,"time":1787688300060,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688300000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"msg":"job: started"}
+2026-08-25 15:05:00.30
+e773a2ba
+User
+{"level":30,"time":1787688300299,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688300000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"result":{"inserted":false,"eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc"},"msg":"job: completed"}
+2026-08-25 15:05:00.30
+e773a2ba
+User
+{"level":30,"time":1787688300299,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688300000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"idempotencyKey":"cron-alive-probe","eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc","successEventType":"system.heartbeat","msg":"idempotency: duplicate detected, short-circuit"}
+2026-08-25 15:10:00.05
+e773a2ba
+User
+{"level":30,"time":1787688600059,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688600000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"msg":"job: started"}
+2026-08-25 15:10:01.00
+e773a2ba
+User
+{"level":30,"time":1787688601009,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688600000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"idempotencyKey":"cron-alive-probe","eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc","successEventType":"system.heartbeat","msg":"idempotency: duplicate detected, short-circuit"}
+2026-08-25 15:10:01.01
+e773a2ba
+User
+{"level":30,"time":1787688601009,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688600000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"result":{"inserted":false,"eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc"},"msg":"job: completed"}
+2026-08-25 15:12:31.66
+e0ecbb72
+System
+artifact mode enabled runnable=1 static=2
+2026-08-25 15:12:31.66
+e0ecbb72
+System
+starting up user application
+2026-08-25 15:12:31.66
+e0ecbb72
+System
+metasidecar: loaded enterprise status from environment is_enterprise=false
+2026-08-25 15:12:31.66
+e0ecbb72
+System
+starting artifact processes for monorepo deployment
+2026-08-25 15:12:31.66
+e0ecbb72
+System
+registered static handler for artifact path=/seo-os/ publicDir=artifacts/seo-os/dist/public
+2026-08-25 15:12:31.66
+e0ecbb72
+System
+registered static handler for artifact path=/ publicDir=artifacts/insight-forge/dist/public
+2026-08-25 15:12:31.66
+e0ecbb72
+System
+forwarding local port 0 to external port 80 (mapped as 1104)
+2026-08-25 15:12:31.67
+e0ecbb72
+System
+waiting for runnable artifact ports ports=[8080]
+2026-08-25 15:12:31.67
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api: Get "http://127.0.0.1:1104/api": dial tcp 127.0.0.1:1104: connect: connection refused
+2026-08-25 15:12:31.67
+e0ecbb72
+System
+baseline ports snapshot before artifact start ports=[1104 20201 22 20202 1105 1106 43199]
+2026-08-25 15:12:31.67
+e0ecbb72
+System
+starting artifact processes count=1
+2026-08-25 15:12:31.67
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:31.68
+e0ecbb72
+System
+starting artifact process artifact=artifacts/api-server args=[node --enable-source-maps artifacts/api-server/dist/index.mjs] port=8080
+2026-08-25 15:12:31.69
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:31.70
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:32.42
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api: Get "http://127.0.0.1:1104/api": context deadline exceeded
+2026-08-25 15:12:32.42
+e0ecbb72
+System
+artifact process started artifact=artifacts/api-server pid=18
+2026-08-25 15:12:32.56
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:32.70
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:33.27
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:33.34
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:34.46
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:36.33
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:36.86
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:37.49
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:38.61
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:38.82
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:40.73
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:41.07
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:41.42
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:43.41
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:43.61
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:44.54
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:46.41
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:47.34
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:47.61
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:49.29
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:49.84
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:50.44
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:51.00
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:52.80
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:54.57
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:55.00
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:55.11
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:56.32
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:56.88
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:57.12
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:58.92
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:12:59.51
+e0ecbb72
+User
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+2026-08-25 15:12:59.51
+e0ecbb72
+User
+To prepare for this change:
+2026-08-25 15:12:59.51
+e0ecbb72
+User
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+2026-08-25 15:12:59.51
+e0ecbb72
+User
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+2026-08-25 15:12:59.51
+e0ecbb72
+User
+(Use `node --trace-warnings ...` to show where the warning was created)
+2026-08-25 15:12:59.51
+e0ecbb72
+User
+(node:18) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+2026-08-25 15:12:59.51
+e0ecbb72
+User
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+2026-08-25 15:12:59.55
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:13:00.01
+e0ecbb72
+User
+{"level":30,"time":1787688780018,"pid":18,"hostname":"nixos","msg":"boot-schema: session table + password_hash column ensured"}
+2026-08-25 15:13:00.27
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:13:00.46
+e0ecbb72
+User
+{"level":30,"time":1787688780462,"pid":18,"hostname":"nixos","msg":"boot-migrations: all pending migrations applied"}
+2026-08-25 15:13:00.94
+e0ecbb72
+System
+healthcheck failed error=healthcheck /api returned status 500
+2026-08-25 15:13:01.09
+e0ecbb72
+User
+{"level":30,"time":1787688781095,"pid":18,"hostname":"nixos","msg":"boot-migration: seeded admin password for abeer@tekrevol.com (existing user)"}
+2026-08-25 15:13:01.12
+e0ecbb72
+User
+{"level":30,"time":1787688781125,"pid":18,"hostname":"nixos","msg":"boot-migration: seeded admin password for rabia.mahmood@tekrevol.com (existing user)"}
+2026-08-25 15:13:01.19
+e0ecbb72
+User
+{"level":30,"time":1787688781191,"pid":18,"hostname":"nixos","msg":"boot-migration: all seed brands already present"}
+2026-08-25 15:13:01.26
+e0ecbb72
+System
+artifact port detected expected=1 detected=1 port=8080
+2026-08-25 15:13:01.26
+e0ecbb72
+System
+all artifact ports detected
+2026-08-25 15:13:01.26
+e0ecbb72
+System
+artifact processes running, waiting for signal or process exit
+2026-08-25 15:13:01.73
+e0ecbb72
+User
+{"level":30,"time":1787688781736,"service":"seo-os-worker","msg":"embedded-worker: starting"}
+2026-08-25 15:13:01.74
+e0ecbb72
+User
+(node:18) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-08-25 15:13:01.74
+e0ecbb72
+User
+{"level":30,"time":1787688781746,"pid":18,"hostname":"nixos","port":8080,"msg":"Server listening"}
+2026-08-25 15:13:01.97
+e0ecbb72
+User
+{"level":30,"time":1787688781972,"service":"seo-os-worker","removed":0,"msg":"embedded-worker: removed legacy fixed repeatables"}
+2026-08-25 15:13:01.98
+e0ecbb72
+User
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+2026-08-25 15:13:01.98
+e0ecbb72
+User
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+2026-08-25 15:13:01.98
+e0ecbb72
+User
+(node:18) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+2026-08-25 15:13:01.98
+e0ecbb72
+User
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+2026-08-25 15:13:02.27
+e0ecbb72
+User
+{"level":30,"time":1787688782278,"pid":18,"hostname":"nixos","req":{"id":1,"method":"GET","url":"/api/healthz"},"res":{"statusCode":200},"responseTime":244,"msg":"request completed"}
+2026-08-25 15:13:03.28
+e0ecbb72
+User
+{"level":30,"time":1787688783287,"service":"seo-os-worker","registered":2,"msg":"seo: active crawl schedules registered"}
+2026-08-25 15:13:03.28
+e0ecbb72
+User
+{"level":30,"time":1787688783287,"service":"seo-os-worker","queues":6,"workers":6,"msg":"embedded-worker: ready"}
+2026-08-25 15:15:00.08
+e0ecbb72
+User
+{"level":30,"time":1787688900081,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688900000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"msg":"job: started"}
+2026-08-25 15:15:00.33
+e0ecbb72
+User
+{"level":30,"time":1787688900335,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688900000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"idempotencyKey":"cron-alive-probe","eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc","successEventType":"system.heartbeat","msg":"idempotency: duplicate detected, short-circuit"}
+2026-08-25 15:15:00.33
+e0ecbb72
+User
+{"level":30,"time":1787688900336,"service":"seo-os-worker","jobId":"repeat:8b08288ea9f33742ae3610d52eb54c99:1787688900000","jobName":"maintenance.heartbeat-noop","queueName":"maintenance","attempt":0,"brandId":null,"result":{"inserted":false,"eventId":"c6c5e60e-509e-4588-a0e4-24d3458fbdfc"},"msg":"job: completed"}
