@@ -1,5 +1,5 @@
 import { db, playbookTable, playbookSectionsTable } from "@workspace/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 /** Fetch the latest playbook markdown. Returns empty string if none uploaded. */
 export async function getActivePlaybook(
@@ -20,6 +20,65 @@ export async function getActivePlaybook(
   }
   if (!rows.length) return { content: "", version: null };
   return { content: rows[0]!.contentMarkdown || "", version: rows[0]!.version ?? null };
+}
+
+/**
+ * Persist a new playbook version and its parsed sections.
+ *
+ * Version numbers are allocated while holding a transaction-scoped advisory
+ * lock for the owning brand. The composite database constraints remain the
+ * backstop for callers outside this module.
+ */
+export async function createPlaybookVersion(args: {
+  brandId: string;
+  markdown: string;
+  sourceFilename?: string | null;
+  uploadedBy?: string | null;
+}): Promise<{ playbookRow: typeof playbookTable.$inferSelect; sections: PlaybookSection[] }> {
+  const markdown = args.markdown.trim();
+  if (!markdown) throw new Error("playbook content is empty");
+
+  const sections = parsePlaybookSections(markdown);
+  const { playbookRow } = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`playbook:${args.brandId}`}))`);
+
+    const latestRows = await tx
+      .select({ version: playbookTable.version })
+      .from(playbookTable)
+      .where(eq(playbookTable.brandId, args.brandId))
+      .orderBy(desc(playbookTable.version))
+      .limit(1);
+    const nextVersion = (latestRows[0]?.version ?? 0) + 1;
+
+    const [row] = await tx
+      .insert(playbookTable)
+      .values({
+        brandId: args.brandId,
+        contentMarkdown: markdown,
+        version: nextVersion,
+        sourceFilename: args.sourceFilename ?? null,
+        uploadedBy: args.uploadedBy ?? null,
+      })
+      .returning();
+    if (!row) throw new Error("playbook upload failed");
+
+    if (sections.length > 0) {
+      await tx.insert(playbookSectionsTable).values(
+        sections.map((section) => ({
+          version: nextVersion,
+          brandId: args.brandId,
+          sectionNumber: section.section_number,
+          sectionTitle: section.section_title,
+          sectionContent: section.section_content,
+          sectionTokenEstimate: section.section_token_estimate,
+          alwaysInclude: ALWAYS_INCLUDE.includes(section.section_number) || section.always_include,
+        })),
+      );
+    }
+    return { playbookRow: row };
+  });
+
+  return { playbookRow, sections };
 }
 
 /* ───────────────────────────────────────────────────────────────────

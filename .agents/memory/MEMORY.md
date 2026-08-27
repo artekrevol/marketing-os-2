@@ -11,3 +11,4 @@
 - [GSC integration architecture](gsc-integration.md) — OAuth flow, DB tables, worker jobs, API routes, frontend pages; callback URL must be registered in GCP before first use.
 - [Fixed Scheduled Deployment migration](fixed-scheduled-deployments.md) — remove boot registration and persisted Redis repeatables when fixed calendars move to Scheduled Deployments.
 - [Brand playbook isolation](brand-playbook-isolation.md) — brand-neutral fallbacks and fail-closed pinned versions prevent cross-brand instruction leakage.
+- [Playbook live-schema compatibility](playbook-live-schema.md) — real DB tests must explicitly clean playbook children before fixture brands when live FKs lag Drizzle.

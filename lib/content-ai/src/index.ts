@@ -2,6 +2,7 @@ export { buildAnthropicUserId, buildAnthropicMetadata } from "./anthropic-meta.j
 export { estimateCost, logUsage } from "./usage.js";
 export {
   parsePlaybookSections,
+  createPlaybookVersion,
   getActivePlaybook,
   getBannedPhrases,
   getPlaybookSections,

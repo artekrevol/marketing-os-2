@@ -4,6 +4,7 @@ import { getQueue } from "@workspace/jobs";
 import {
   buildRoutedSystem,
   buildRoutedSystemWithProject,
+  createPlaybookVersion,
   getActivePlaybook,
   getBannedPhrases,
   logUsage,
@@ -2308,36 +2309,11 @@ router.post("/playbook-upload", requireAdmin, async (req, res) => {
     markdown = (markdown || "").trim();
     if (!markdown) { res.status(400).json({ error: "Extracted playbook is empty." }); return; }
 
-    const sections = parsePlaybookSections(markdown);
-    const { playbookRow } = await db.transaction(async (tx) => {
-      // Serialize version allocation per brand. The unique constraint remains
-      // the database-level backstop for writers outside this application.
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`playbook:${brandId}`}))`);
-      const latestRows = await tx
-        .select({ version: playbookTable.version })
-        .from(playbookTable)
-        .where(eq(playbookTable.brandId, brandId))
-        .orderBy(desc(playbookTable.version))
-        .limit(1);
-      const nextVersion = (latestRows[0]?.version ?? 0) + 1;
-      const [playbookRow] = await tx
-        .insert(playbookTable)
-        .values({ brandId, contentMarkdown: markdown, version: nextVersion, sourceFilename: filename, uploadedBy: uploaded_by || null })
-        .returning();
-      if (!playbookRow) throw new Error("playbook upload failed");
-
-      if (sections.length > 0) {
-        await tx.insert(playbookSectionsTable).values(sections.map((s) => ({
-          version: nextVersion,
-          brandId,
-          sectionNumber: s.section_number,
-          sectionTitle: s.section_title,
-          sectionContent: s.section_content,
-          sectionTokenEstimate: s.section_token_estimate,
-          alwaysInclude: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
-        })));
-      }
-      return { playbookRow };
+    const { playbookRow, sections } = await createPlaybookVersion({
+      brandId,
+      markdown,
+      sourceFilename: filename,
+      uploadedBy: uploaded_by || null,
     });
     if (sections.length === 0) {
       req.log.warn("playbook-upload: no sections detected — routing will fall back to full doc");
