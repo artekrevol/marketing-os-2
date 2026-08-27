@@ -1,27 +1,36 @@
-import { pgTable, uuid, text, timestamp, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { brandsTable } from "./brands";
 
-export const playbookTable = pgTable("playbook", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  version: integer("version").notNull().default(1),
-  contentMarkdown: text("content_markdown").notNull().default(""),
-  sourceFilename: text("source_filename"),
-  uploadedBy: text("uploaded_by"),
-  brandId: uuid("brand_id"),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const playbookTable = pgTable(
+  "playbook",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    version: integer("version").notNull().default(1),
+    contentMarkdown: text("content_markdown").notNull().default(""),
+    sourceFilename: text("source_filename"),
+    uploadedBy: text("uploaded_by"),
+    brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "cascade" }),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("playbook_brand_version_uq").on(t.brandId, t.version)],
+);
 
-export const playbookSectionsTable = pgTable("playbook_sections", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  version: integer("version").notNull().default(1),
-  sectionNumber: integer("section_number").notNull(),
-  sectionTitle: text("section_title").notNull(),
-  sectionContent: text("section_content").notNull(),
-  sectionTokenEstimate: integer("section_token_estimate").notNull().default(0),
-  alwaysInclude: boolean("always_include").notNull().default(false),
-  brandId: uuid("brand_id"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const playbookSectionsTable = pgTable(
+  "playbook_sections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    version: integer("version").notNull().default(1),
+    sectionNumber: integer("section_number").notNull(),
+    sectionTitle: text("section_title").notNull(),
+    sectionContent: text("section_content").notNull(),
+    sectionTokenEstimate: integer("section_token_estimate").notNull().default(0),
+    alwaysInclude: boolean("always_include").notNull().default(false),
+    brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("playbook_sections_brand_version_number_uq").on(t.brandId, t.version, t.sectionNumber)],
+);
 
 export type PlaybookRow = typeof playbookTable.$inferSelect;
 export type PlaybookSectionRow = typeof playbookSectionsTable.$inferSelect;

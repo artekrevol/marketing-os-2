@@ -1,13 +1,23 @@
 import { db, playbookTable, playbookSectionsTable } from "@workspace/db";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 /** Fetch the latest playbook markdown. Returns empty string if none uploaded. */
-export async function getActivePlaybook(): Promise<{ content: string; version: number | null }> {
+export async function getActivePlaybook(
+  brandId: string,
+  selectedVersion?: number | null,
+): Promise<{ content: string; version: number | null }> {
+  const where = selectedVersion == null
+    ? eq(playbookTable.brandId, brandId)
+    : and(eq(playbookTable.brandId, brandId), eq(playbookTable.version, selectedVersion));
   const rows = await db
     .select({ contentMarkdown: playbookTable.contentMarkdown, version: playbookTable.version })
     .from(playbookTable)
+    .where(where)
     .orderBy(desc(playbookTable.version))
     .limit(1);
+  if (selectedVersion != null && !rows[0]) {
+    throw new Error(`playbook version ${selectedVersion} is not available for brand ${brandId}`);
+  }
   if (!rows.length) return { content: "", version: null };
   return { content: rows[0]!.contentMarkdown || "", version: rows[0]!.version ?? null };
 }
@@ -218,11 +228,19 @@ export function parsePlaybookSections(markdown: string): PlaybookSection[] {
   return Array.from(byNum.values()).sort((a, b) => a.section_number - b.section_number);
 }
 
-/** Fetch all sections for the latest playbook version. */
-export async function getPlaybookSections(): Promise<{ sections: PlaybookSection[]; version: number | null }> {
+/** Fetch all sections for a brand's selected version, or its latest version. */
+export async function getPlaybookSections(
+  brandId: string,
+  selectedVersion?: number | null,
+): Promise<{ sections: PlaybookSection[]; version: number | null }> {
   const latestRows = await db
     .select({ version: playbookTable.version })
     .from(playbookTable)
+    .where(
+      selectedVersion == null
+        ? eq(playbookTable.brandId, brandId)
+        : and(eq(playbookTable.brandId, brandId), eq(playbookTable.version, selectedVersion)),
+    )
     .orderBy(desc(playbookTable.version))
     .limit(1);
   const version = latestRows[0]?.version ?? null;
@@ -237,7 +255,12 @@ export async function getPlaybookSections(): Promise<{ sections: PlaybookSection
       alwaysInclude: playbookSectionsTable.alwaysInclude,
     })
     .from(playbookSectionsTable)
-    .where(eq(playbookSectionsTable.version, version))
+    .where(
+      and(
+        eq(playbookSectionsTable.brandId, brandId),
+        eq(playbookSectionsTable.version, version),
+      ),
+    )
     .orderBy(playbookSectionsTable.sectionNumber);
   const sections = rows.map((r) => ({
     section_number: r.sectionNumber,
@@ -255,10 +278,15 @@ export async function getPlaybookSections(): Promise<{ sections: PlaybookSection
  */
 export async function getRoutedPlaybook(
   stage: RouteKey,
+  brandId: string,
+  selectedVersion?: number | null,
 ): Promise<{ content: string; version: number | null; included: number[] }> {
-  const { sections, version } = await getPlaybookSections();
+  const { sections, version } = await getPlaybookSections(brandId, selectedVersion);
+  if (selectedVersion != null && version !== selectedVersion) {
+    throw new Error(`playbook version ${selectedVersion} is not available for brand ${brandId}`);
+  }
   if (sections.length === 0) {
-    const full = await getActivePlaybook();
+    const full = await getActivePlaybook(brandId, selectedVersion);
     return { content: full.content, version: full.version, included: [] };
   }
 
@@ -305,9 +333,10 @@ export function buildCachedSystem(
   playbookVersion: number | null,
   stageInstructions: string,
   routeKey?: string,
+  brandId?: string,
 ): SystemBlock[] {
   const groupKey = routeKey ? cacheGroupFor(routeKey as RouteKey) : undefined;
-  const versionTag = `PLAYBOOK_VERSION: ${playbookVersion ?? "none"}${groupKey ? ` | ROUTE: ${groupKey}` : ""}`;
+  const versionTag = `BRAND_ID: ${brandId ?? "unknown"} | PLAYBOOK_VERSION: ${playbookVersion ?? "none"}${groupKey ? ` | ROUTE: ${groupKey}` : ""}`;
   const cachedText = `${versionTag}\n\n${playbookBlock(playbookContent)}`;
   return [
     { type: "text", text: cachedText, cache_control: { type: "ephemeral", ttl: "1h" } },
@@ -328,9 +357,10 @@ export function buildCachedSystemWithProject(
   projectCacheTag: string,
   stageInstructions: string,
   routeKey?: string,
+  brandId?: string,
 ): SystemBlock[] {
   const groupKey = routeKey ? cacheGroupFor(routeKey as RouteKey) : undefined;
-  const versionTag = `PLAYBOOK_VERSION: ${playbookVersion ?? "none"}${groupKey ? ` | ROUTE: ${groupKey}` : ""}`;
+  const versionTag = `BRAND_ID: ${brandId ?? "unknown"} | PLAYBOOK_VERSION: ${playbookVersion ?? "none"}${groupKey ? ` | ROUTE: ${groupKey}` : ""}`;
   const cachedPlaybook = `${versionTag}\n\n${playbookBlock(playbookContent)}`;
   const cachedProject = `PROJECT_CONTEXT_TAG: ${projectCacheTag}\n\n${projectContext}`;
   return [
@@ -343,11 +373,13 @@ export function buildCachedSystemWithProject(
 /** Routed variant of buildCachedSystemWithProject. */
 export async function buildRoutedSystemWithProject(
   stage: RouteKey,
+  brandId: string,
   projectContext: string,
   projectCacheTag: string,
   stageInstructions: string,
+  selectedVersion?: number | null,
 ): Promise<{ system: SystemBlock[]; version: number | null; included: number[] }> {
-  const routed = await getRoutedPlaybook(stage);
+  const routed = await getRoutedPlaybook(stage, brandId, selectedVersion);
   const system = buildCachedSystemWithProject(
     routed.content,
     routed.version,
@@ -355,6 +387,7 @@ export async function buildRoutedSystemWithProject(
     projectCacheTag,
     stageInstructions,
     stage,
+    brandId,
   );
   return { system, version: routed.version, included: routed.included };
 }
@@ -365,10 +398,12 @@ export async function buildRoutedSystemWithProject(
  */
 export async function buildRoutedSystem(
   stage: RouteKey,
+  brandId: string,
   stageInstructions: string,
+  selectedVersion?: number | null,
 ): Promise<{ system: SystemBlock[]; version: number | null; included: number[] }> {
-  const routed = await getRoutedPlaybook(stage);
-  const system = buildCachedSystem(routed.content, routed.version, stageInstructions, stage);
+  const routed = await getRoutedPlaybook(stage, brandId, selectedVersion);
+  const system = buildCachedSystem(routed.content, routed.version, stageInstructions, stage, brandId);
   return { system, version: routed.version, included: routed.included };
 }
 
@@ -382,10 +417,7 @@ export async function buildRoutedSystem(
  * So these live here, beside parsePlaybookSections; the asset-corpus queries
  * (reviews / links / rules) live in lib/db/src/queries/assets.ts.
  *
- * The playbook table is currently GLOBAL (one active version, not brand-scoped
- * — see admin GET /api/admin/playbook). The optional `brandId` parameter is
- * accepted for signature parity with the dispatch and forward-compatibility,
- * but does not filter yet. Section-header matching is intentionally tolerant;
+ * Playbooks are brand-scoped and versioned independently. Section-header matching is intentionally tolerant;
  * the exact headers are validated against playbook v2.5 when the Phase 5/6
  * validators that consume these are wired.
  * ─────────────────────────────────────────────────────────────────── */
@@ -425,15 +457,16 @@ function extractListItems(body: string): string[] {
 
 /** Latest playbook markdown as a plain string (null when none uploaded). */
 export async function getActivePlaybookContent(
-  _brandId?: string,
+  brandId: string,
+  selectedVersion?: number | null,
 ): Promise<string | null> {
-  const { content } = await getActivePlaybook();
+  const { content } = await getActivePlaybook(brandId, selectedVersion);
   return content && content.trim() ? content : null;
 }
 
 /** Banned/forbidden phrases from the playbook (empty if none/section absent). */
-export async function getBannedPhrases(_brandId?: string): Promise<string[]> {
-  const content = await getActivePlaybookContent();
+export async function getBannedPhrases(brandId: string, selectedVersion?: number | null): Promise<string[]> {
+  const content = await getActivePlaybookContent(brandId, selectedVersion);
   if (!content) return [];
   const sections = parsePlaybookSections(content);
   const body = findSectionBody(
@@ -444,8 +477,8 @@ export async function getBannedPhrases(_brandId?: string): Promise<string[]> {
 }
 
 /** The discard list (words/clichés to strip) from the playbook. */
-export async function getDiscardList(_brandId?: string): Promise<string[]> {
-  const content = await getActivePlaybookContent();
+export async function getDiscardList(brandId: string, selectedVersion?: number | null): Promise<string[]> {
+  const content = await getActivePlaybookContent(brandId, selectedVersion);
   if (!content) return [];
   const sections = parsePlaybookSections(content);
   const body = findSectionBody(
@@ -461,11 +494,11 @@ export async function getDiscardList(_brandId?: string): Promise<string[]> {
  * (matrix #5), so this function never returns an empty string.
  */
 export const CREDENTIAL_FALLBACK =
-  "TekRevol has delivered 280+ engagements across mobile, AI, and enterprise software since 2018.";
+  "The owning brand's team has relevant experience delivering successful client engagements.";
 
 /** The credential / proof-point block (raw section text; generic fallback if absent — never empty). */
-export async function getCredentialBlock(_brandId?: string): Promise<string> {
-  const content = await getActivePlaybookContent();
+export async function getCredentialBlock(brandId: string, selectedVersion?: number | null): Promise<string> {
+  const content = await getActivePlaybookContent(brandId, selectedVersion);
   if (!content) return CREDENTIAL_FALLBACK;
   const sections = parsePlaybookSections(content);
   const body = findSectionBody(
@@ -482,9 +515,10 @@ export async function getCredentialBlock(_brandId?: string): Promise<string> {
  * list of project names (deduped, [] if no portfolio section). Fails closed.
  */
 export async function getPlaybookProjectNames(
-  _brandId?: string,
+  brandId: string,
+  selectedVersion?: number | null,
 ): Promise<string[]> {
-  const content = await getActivePlaybookContent();
+  const content = await getActivePlaybookContent(brandId, selectedVersion);
   if (!content) return [];
   const sections = parsePlaybookSections(content);
   const body = findSectionBody(

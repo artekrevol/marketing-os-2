@@ -182,7 +182,7 @@ export async function handleAiProposeBrief(
   data: JobData<"ai.propose-brief">,
   log: Logger,
 ): Promise<void> {
-  const { project_id } = data;
+  const { project_id, brandId, playbookVersion } = data;
   const apiKey = process.env["ANTHROPIC_API_KEY"];
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -193,6 +193,9 @@ export async function handleAiProposeBrief(
     .limit(1);
   const project = projectRows[0];
   if (!project) throw new Error(`project not found: ${project_id}`);
+  if (project.brandId !== brandId) {
+    throw new Error(`brand mismatch for project ${project_id}`);
+  }
 
   const topicTrimmed = String(project.topic || "").trim();
   if (topicTrimmed.length === 0) {
@@ -235,7 +238,12 @@ Authority publishers for citation purposes include: Statista, Pew Research, Gart
 
 Then call submit_brief_proposal with the complete structured output including ai_citation_landscape, atomic_question_map, and entity_data_requirements.`;
 
-  const { system, version: playbookVersion, included } = await buildRoutedSystem("propose_brief", stageInstructions);
+  const { system, version: resolvedPlaybookVersion, included } = await buildRoutedSystem(
+    "propose_brief",
+    brandId,
+    stageInstructions,
+    playbookVersion,
+  );
   log.info({ sections: included }, "routed playbook sections");
 
   const metadataUserId = buildAnthropicUserId({
@@ -350,7 +358,7 @@ Then call submit_brief_proposal with the complete structured output including ai
     competitorUrl: competitorTop?.url || project.competitorUrl,
     contentType: proposal.content_type || project.contentType,
     mode: proposal.mode || project.mode,
-    playbookVersion,
+    playbookVersion: resolvedPlaybookVersion,
     status: "brief_proposed",
   }).where(eq(projectsTable.id, project_id));
 

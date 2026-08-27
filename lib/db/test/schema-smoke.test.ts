@@ -82,7 +82,6 @@ type _UserProfileUserIdRequired = AssertRequiredField<typeof userProfilesTable, 
 // ── projects ─────────────────────────────────────────────────────────────────
 type _ProjectBrandIdRequired     = AssertRequiredField<typeof projectsTable, "brandId">;
 type _ProjectTopicRequired       = AssertRequiredField<typeof projectsTable, "topic">;
-type _ProjectContentTypeRequired = AssertRequiredField<typeof projectsTable, "contentType">;
 
 // ── drafts ───────────────────────────────────────────────────────────────────
 type _DraftBrandIdRequired   = AssertRequiredField<typeof draftsTable, "brandId">;
@@ -171,12 +170,11 @@ type _RecoverySnapshotTop3Required        = AssertRequiredField<typeof recoveryS
 type _FetchedPageUrlRequired     = AssertRequiredField<typeof fetchedPagesTable, "url">;
 type _FetchedPageContentRequired = AssertRequiredField<typeof fetchedPagesTable, "content">;
 
-// ── playbook (nullable brand_id — global playbook, not brand-scoped) ──────────
-// All fields have defaults or are nullable; nothing is required in insert.
-// The compile-time check is represented by the _min*Insert constant below.
+// ── playbook (brand-scoped) ───────────────────────────────────────────────────
+type _PlaybookBrandIdRequired = AssertRequiredField<typeof playbookTable, "brandId">;
 
-// ── playbook_sections (nullable brand_id — global sections) ──────────────────
-// brand_id nullable; sectionNumber, sectionTitle, sectionContent are required.
+// ── playbook_sections (brand-scoped) ──────────────────────────────────────────
+type _PlaybookSectionBrandIdRequired = AssertRequiredField<typeof playbookSectionsTable, "brandId">;
 type _PlaybookSectionNumberRequired  = AssertRequiredField<typeof playbookSectionsTable, "sectionNumber">;
 type _PlaybookSectionTitleRequired   = AssertRequiredField<typeof playbookSectionsTable, "sectionTitle">;
 type _PlaybookSectionContentRequired = AssertRequiredField<typeof playbookSectionsTable, "sectionContent">;
@@ -321,13 +319,14 @@ const _minFetchedPageInsert: typeof fetchedPagesTable.$inferInsert = {
 };
 
 const _minPlaybookInsert: typeof playbookTable.$inferInsert = {
-  // All columns nullable or have defaults — nothing required
+  brandId: BRAND_UUID,
 };
 
 const _minPlaybookSectionInsert: typeof playbookSectionsTable.$inferInsert = {
   sectionNumber: 1,
   sectionTitle: "Introduction",
   sectionContent: "This is the introduction section of the playbook.",
+  brandId: BRAND_UUID,
 };
 
 const _minVoiceLibraryInsert: typeof voiceLibraryTable.$inferInsert = {
@@ -531,15 +530,18 @@ describe("schema smoke — nullable brand_id tables correctly allow omitting bra
     }
   });
 
-  it("playbook.brandId is optional; minimal insert requires no fields (all have defaults)", () => {
+  it("playbook.brandId is required; minimal insert includes the owning brand", () => {
     const zodSchema = createInsertSchema(playbookTable);
     const result = zodSchema.safeParse(_minPlaybookInsert);
     expect(result.success).toBe(true);
     const emptyResult = zodSchema.safeParse({});
-    expect(emptyResult.success).toBe(true);
+    expect(emptyResult.success).toBe(false);
+    if (!emptyResult.success) {
+      expect(emptyResult.error.issues.map((e) => e.path.join("."))).toContain("brandId");
+    }
   });
 
-  it("playbook_sections.brandId is optional; sectionNumber + sectionTitle + sectionContent required", () => {
+  it("playbook_sections.brandId is required alongside section content", () => {
     const zodSchema = createInsertSchema(playbookSectionsTable);
     const result = zodSchema.safeParse(_minPlaybookSectionInsert);
     expect(result.success).toBe(true);
@@ -550,7 +552,7 @@ describe("schema smoke — nullable brand_id tables correctly allow omitting bra
       expect(paths).toContain("sectionNumber");
       expect(paths).toContain("sectionTitle");
       expect(paths).toContain("sectionContent");
-      expect(paths).not.toContain("brandId");
+      expect(paths).toContain("brandId");
     }
   });
 

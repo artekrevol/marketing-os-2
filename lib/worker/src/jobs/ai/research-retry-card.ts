@@ -14,7 +14,7 @@ export async function handleAiResearchRetryCard(
   data: JobData<"ai.research-retry-card">,
   log: Logger,
 ): Promise<void> {
-  const { project_id, stage } = data;
+  const { project_id, stage, brandId, playbookVersion } = data;
 
   if (!(STAGE_KEYS as readonly string[]).includes(stage)) {
     throw new Error(`invalid stage: ${stage}`);
@@ -27,6 +27,7 @@ export async function handleAiResearchRetryCard(
     .limit(1);
   const project = projectRows[0];
   if (!project) throw new Error(`project not found: ${project_id}`);
+  if (project.brandId !== brandId) throw new Error(`brand mismatch for project ${project_id}`);
 
   // Normalize Drizzle camelCase to snake_case for content-ai functions.
   const proj = {
@@ -46,7 +47,7 @@ export async function handleAiResearchRetryCard(
 
   const pages = await prefetchPages(proj);
   await recordPrefetchStatus(project_id, pages);
-  const result = await runStage({ project: proj, stage: stage as StageKey, pages });
+  const result = await runStage({ project: proj, stage: stage as StageKey, pages, playbookVersion });
 
   if (!result.ok) {
     throw new Error(result.error ?? `stage ${stage} failed`);

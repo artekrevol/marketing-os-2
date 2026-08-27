@@ -546,18 +546,24 @@ async function mergeSubStatus(project_id: string, patch: Record<string, any>): P
 export async function runStage(args: {
   project: any;
   stage: StageKey;
+  playbookVersion?: number | null;
   pages: {
     benchmark: PageFetchResult | null;
     competitor: PageFetchResult | null;
     company: PageFetchResult | null;
   };
 }): Promise<{ ok: boolean; output?: any; error?: string }> {
-  const { project, stage, pages } = args;
+  const { project, stage, pages, playbookVersion } = args;
 
   await mergeSubStatus(project.id, { [stage]: { status: "running", error: null, updated_at: new Date().toISOString() } });
 
   const instructions = buildStageInstructions(stage, project, pages);
-  const { system: systemBlocks, included } = await buildRoutedSystem(stage, instructions);
+  const { system: systemBlocks, included } = await buildRoutedSystem(
+    stage,
+    project.brand_id ?? project.brandId,
+    instructions,
+    playbookVersion,
+  );
   console.log(`[stage:${stage}] routed playbook sections: [${included.join(",")}]`);
 
   const metadataUserId = buildAnthropicUserId({

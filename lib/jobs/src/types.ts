@@ -85,15 +85,21 @@ const AI_STAGE_KEY = z.enum([
 
 export const AiProposeBriefPayload = BasePayload.extend({
   project_id: z.string().uuid(),
+  brandId: z.string().uuid(),
+  playbookVersion: z.number().int().nullable(),
 });
 
 export const AiResearchGeneratePayload = BasePayload.extend({
   project_id: z.string().uuid(),
+  brandId: z.string().uuid(),
+  playbookVersion: z.number().int().nullable(),
 });
 
 export const AiResearchRetryCardPayload = BasePayload.extend({
   project_id: z.string().uuid(),
   stage: AI_STAGE_KEY,
+  brandId: z.string().uuid(),
+  playbookVersion: z.number().int().nullable(),
 });
 
 /* -------------------------------------------------------------------------- */

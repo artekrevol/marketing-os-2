@@ -39,7 +39,7 @@ export async function handleAiResearchGenerate(
   data: JobData<"ai.research-generate">,
   log: Logger,
 ): Promise<void> {
-  const { project_id } = data;
+  const { project_id, brandId, playbookVersion } = data;
 
   const projectRows = await db
     .select()
@@ -48,6 +48,7 @@ export async function handleAiResearchGenerate(
     .limit(1);
   const project = projectRows[0];
   if (!project) throw new Error(`project not found: ${project_id}`);
+  if (project.brandId !== brandId) throw new Error(`brand mismatch for project ${project_id}`);
 
   const proj = normalizeProject(project);
 
@@ -113,7 +114,7 @@ export async function handleAiResearchGenerate(
   await recordPrefetchStatus(project_id, pages);
 
   const results = await Promise.allSettled(
-    STAGE_KEYS.map((stage) => runStage({ project: proj, stage, pages })),
+    STAGE_KEYS.map((stage) => runStage({ project: proj, stage, pages, playbookVersion })),
   );
 
   const okCount = results.filter((r) => r.status === "fulfilled" && (r.value as any).ok).length;

@@ -11,6 +11,7 @@ import {
   usageLogsTable,
   playbookTable,
   playbookSectionsTable,
+  brandsTable,
   ahrefsMcpUsageTable,
   USER_ROLES,
   USER_DEPARTMENTS,
@@ -293,11 +294,16 @@ router.get("/dashboard", async (_req, res, next) => {
 });
 
 /** GET /api/admin/playbook */
-router.get("/playbook", async (_req, res, next) => {
+router.get("/playbook", async (req, res, next) => {
   try {
+    const brandId = typeof req.query["brandId"] === "string" ? req.query["brandId"] : "";
+    if (!brandId) return void res.status(400).json({ error: "brandId is required" });
+    const brand = await db.select({ id: brandsTable.id }).from(brandsTable).where(eq(brandsTable.id, brandId)).limit(1);
+    if (!brand.length) return void res.status(404).json({ error: "brand not found" });
     const pb = await db
       .select()
       .from(playbookTable)
+      .where(eq(playbookTable.brandId, brandId))
       .orderBy(desc(playbookTable.version))
       .limit(1);
 
@@ -308,7 +314,7 @@ router.get("/playbook", async (_req, res, next) => {
     const sections = await db
       .select()
       .from(playbookSectionsTable)
-      .where(eq(playbookSectionsTable.version, row.version))
+      .where(and(eq(playbookSectionsTable.brandId, brandId), eq(playbookSectionsTable.version, row.version)))
       .orderBy(asc(playbookSectionsTable.sectionNumber));
 
     // Serialize to snake_case so the frontend (which predates OpenAPI codegen

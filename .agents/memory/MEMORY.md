@@ -10,3 +10,4 @@
 - [authedFetch FormData bug](authed-fetch-formdata-bug.md) — authedFetch must skip Content-Type: application/json when body instanceof FormData or express.json() intercepts the multipart stream → 413/400 before multer sees files.
 - [GSC integration architecture](gsc-integration.md) — OAuth flow, DB tables, worker jobs, API routes, frontend pages; callback URL must be registered in GCP before first use.
 - [Fixed Scheduled Deployment migration](fixed-scheduled-deployments.md) — remove boot registration and persisted Redis repeatables when fixed calendars move to Scheduled Deployments.
+- [Brand playbook isolation](brand-playbook-isolation.md) — brand-neutral fallbacks and fail-closed pinned versions prevent cross-brand instruction leakage.

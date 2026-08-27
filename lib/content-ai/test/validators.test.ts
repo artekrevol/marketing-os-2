@@ -42,6 +42,7 @@ function ctx(article: ArticleSchema, overrides: Partial<ValidatorContext> = {}):
     article,
     fullText: overrides.fullText ?? "",
     primaryKeyword: overrides.primaryKeyword ?? "mobile app cost",
+    brandName: overrides.brandName,
     funnelStage: overrides.funnelStage ?? "MOFU",
     contentType: overrides.contentType ?? "guide",
     serpSignals: overrides.serpSignals ?? {},
@@ -127,7 +128,7 @@ describe("aggregate financial (5.10 / 6.5)", () => {
 
 describe("structural gates", () => {
   it("brand mention ratio fails when over-branded", () => {
-    const r = brandMention(ctx({}, { funnelStage: "TOFU", fullText: "We did this. We did that. TekRevol is great. Our team rocks. Our clients love us." }));
+    const r = brandMention(ctx({}, { brandName: "CensusFlow", funnelStage: "TOFU", fullText: "We did this. We did that. CensusFlow is great. Our team rocks. Our clients love us." }));
     expect(r.passes).toBe(false);
   });
 
@@ -173,8 +174,9 @@ describe("structural gates", () => {
     expect(r.passes).toBe(false);
   });
 
-  it("author byline requires the TekRevol team byline", () => {
-    expect(authorByline(ctx({ author_byline: { name: "By the TekRevol team", credentials: "10y", bio_link: "/about" } })).passes).toBe(true);
+  it("author byline matches the owning brand", () => {
+    expect(authorByline(ctx({ author_byline: { name: "By the CensusFlow team", credentials: "10y", bio_link: "/about" } }, { brandName: "CensusFlow" })).passes).toBe(true);
+    expect(authorByline(ctx({ author_byline: { name: "By the TekRevol team", credentials: "10y", bio_link: "/about" } }, { brandName: "CensusFlow" })).passes).toBe(false);
     expect(authorByline(ctx({ author_byline: { name: "Jane Doe", credentials: "", bio_link: "/x" } })).passes).toBe(false);
   });
 

@@ -57,9 +57,9 @@ export const aiClient = {
   finalStitch: (project_id: string) =>
     callAi("final-stitch", { project_id }),
 
-  playbookUpload: (filename: string, mime_type: string, content_base64: string, uploaded_by: string | null) =>
-    callAi("playbook-upload", { filename, mime_type, content_base64, uploaded_by }),
+  playbookUpload: (brandId: string, filename: string, mime_type: string, content_base64: string, uploaded_by: string | null) =>
+    callAi("playbook-upload", { brandId, filename, mime_type, content_base64, uploaded_by }),
 
-  playbookReparse: () =>
-    callAi("playbook-reparse", {}),
+  playbookReparse: (brandId: string) =>
+    callAi("playbook-reparse", { brandId }),
 };

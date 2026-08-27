@@ -4,9 +4,11 @@ import { Download, ArrowRight, Upload, BookOpen, Loader2, CheckCircle2, RefreshC
 import { toast } from "sonner";
 import { aiClient } from "@/lib/ai-client";
 import { useAuth } from "@/lib/useAuth";
+import { useActiveBrand } from "@/lib/brands";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
+  const { activeBrand, loading: brandsLoading } = useActiveBrand();
   const [rows, setRows] = useState<any[]>([]);
   const [voice, setVoice] = useState<any[]>([]);
   const [playbook, setPlaybook] = useState<any>(null);
@@ -17,10 +19,17 @@ export default function AdminDashboard() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [filter, setFilter] = useState({ pod: "", stage: "", status: "" });
   const [ahrefsUsage, setAhrefsUsage] = useState<any>(null);
+  const brandId = activeBrand?.id ?? null;
+  const activeBrandId = useRef<string | null>(brandId);
+  const playbookRequest = useRef(0);
+  activeBrandId.current = brandId;
 
-  const loadPlaybook = async () => {
-    const resp = await fetch("/api/admin/playbook", { credentials: "include" });
+  const loadPlaybook = async (targetBrandId: string) => {
+    const request = ++playbookRequest.current;
+    const params = new URLSearchParams({ brandId: targetBrandId });
+    const resp = await fetch(`/api/admin/playbook?${params}`, { credentials: "include" });
     const data = resp.ok ? await resp.json() : null;
+    if (activeBrandId.current !== targetBrandId || request !== playbookRequest.current) return;
     setPlaybook(data);
     setSections(data?.sections || []);
   };
@@ -39,13 +48,27 @@ export default function AdminDashboard() {
       if (resp.ok) setAhrefsUsage(await resp.json());
     };
     void load();
-    void loadPlaybook();
     void loadAhrefs();
   }, []);
+
+  useEffect(() => {
+    // Do this before fetching so content from the previously selected brand
+    // cannot remain visible while the next brand's playbook loads.
+    playbookRequest.current += 1;
+    setPlaybook(null);
+    setSections([]);
+    setShowPlaybook(false);
+    if (brandId) void loadPlaybook(brandId);
+  }, [brandId]);
 
   const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!brandId) {
+      toast.error("Select an active brand before uploading a playbook.");
+      if (fileInput.current) fileInput.current.value = "";
+      return;
+    }
     if (file.size > 10 * 1024 * 1024) {
       toast.error("File too large (max 10MB).");
       return;
@@ -64,7 +87,7 @@ export default function AdminDashboard() {
       // Capture who uploaded (email — durable identifier; auth.user().id would also work
       // but email is what the admin card surfaces and what writers will recognise).
       const uploaded_by = user?.email || null;
-      const { data, error } = await aiClient.playbookUpload(file.name, file.type, content_base64, uploaded_by);
+      const { data, error } = await aiClient.playbookUpload(brandId, file.name, file.type, content_base64, uploaded_by);
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
       const version = (data as any).playbook.version;
@@ -81,7 +104,7 @@ export default function AdminDashboard() {
       } else {
         toast.success(`Playbook v${version} uploaded — ${count} sections detected.`);
       }
-      await loadPlaybook();
+      await loadPlaybook(brandId);
     } catch (err: any) {
       toast.error(err.message || "Upload failed");
     } finally {
@@ -91,9 +114,13 @@ export default function AdminDashboard() {
   };
 
   const onReparse = async () => {
+    if (!brandId) {
+      toast.error("Select an active brand before re-parsing a playbook.");
+      return;
+    }
     setReparsing(true);
     try {
-      const { data, error } = await aiClient.playbookReparse();
+      const { data, error } = await aiClient.playbookReparse(brandId);
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
       const count = (data as any).sections_count ?? 0;
@@ -105,7 +132,7 @@ export default function AdminDashboard() {
       } else {
         toast.success(`Parsed ${count} sections.`);
       }
-      await loadPlaybook();
+      await loadPlaybook(brandId);
     } catch (e: any) {
       toast.error(e.message || "Re-parse failed");
     } finally {
@@ -166,7 +193,7 @@ export default function AdminDashboard() {
             />
             <button
               onClick={() => fileInput.current?.click()}
-              disabled={uploading}
+              disabled={uploading || !brandId}
               className="text-xs px-3 py-2 border border-rule rounded-sm hover:bg-secondary inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               {uploading ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Uploading…</> : <><Upload className="h-3.5 w-3.5" /> {playbook ? "Upload new version" : "Upload playbook"}</>}
@@ -178,7 +205,13 @@ export default function AdminDashboard() {
           anchors, client roster, geographic priorities, and content pillars. Every AI call injects this as system context.
         </p>
 
-        {playbook ? (
+        {!brandId ? (
+          <div className="notebook-card p-6 text-center">
+            <p className="text-sm text-ink-muted italic">
+              {brandsLoading ? "Loading available brands…" : "No active brand selected. Select a brand to manage its playbook."}
+            </p>
+          </div>
+        ) : playbook ? (
           <div className="notebook-card p-5">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
@@ -221,7 +254,7 @@ export default function AdminDashboard() {
                 </div>
                 <button
                   onClick={onReparse}
-                  disabled={reparsing}
+                  disabled={reparsing || !brandId}
                   className="text-xs px-3 py-1.5 border border-rule rounded-sm hover:bg-secondary inline-flex items-center gap-1.5 disabled:opacity-50"
                 >
                   {reparsing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}

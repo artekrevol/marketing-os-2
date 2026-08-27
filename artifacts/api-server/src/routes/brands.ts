@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, brandsTable, userProfilesTable } from "@workspace/db";
+import { db, brandsTable, userProfilesTable, playbookTable } from "@workspace/db";
 import { eq, asc, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "../middlewares/auth.js";
 
@@ -116,16 +116,30 @@ router.post("/", requireAuth, requireAdmin, async (req, res, next) => {
       return;
     }
 
-    const [created] = await db
-      .insert(brandsTable)
-      .values({
-        name,
-        slug,
-        primaryDomain,
-      })
-      .returning();
+    const created = await db.transaction(async (tx) => {
+      const [brand] = await tx
+        .insert(brandsTable)
+        .values({
+          name,
+          slug,
+          primaryDomain,
+        })
+        .returning();
+      if (!brand) throw new Error("brand creation failed");
 
-    res.status(201).json(brandToSnake(created!));
+      // Every brand starts with its own empty draft. Never inherit the
+      // latest playbook from another tenant.
+      await tx.insert(playbookTable).values({
+        brandId: brand.id,
+        version: 1,
+        contentMarkdown: "",
+        sourceFilename: "initial-draft",
+        uploadedBy: req.auth?.userId ?? null,
+      });
+      return brand;
+    });
+
+    res.status(201).json(brandToSnake(created));
   } catch (err) {
     if (isUniqueViolation(err)) {
       res.status(409).json({

@@ -3,6 +3,7 @@ export { estimateCost, logUsage } from "./usage.js";
 export {
   parsePlaybookSections,
   getActivePlaybook,
+  getBannedPhrases,
   getPlaybookSections,
   getPlaybookProjectNames,
   getCredentialBlock,

@@ -27,7 +27,6 @@ export function normalizeFunnel(stage: string | null): "TOFU" | "MOFU" | "BOFU" 
 
 /* 5.1 Brand-mention ratio (funnel-differentiated) — HARD */
 const BRAND_PATTERNS = [
-  /\btekrevol\b/gi,
   /\bour team\b/gi,
   /\bour work\b/gi,
   /\bour clients?\b/gi,
@@ -37,11 +36,14 @@ export function brandMention(ctx: ValidatorContext): CheckResult {
   const maxByFunnel = { TOFU: 12, MOFU: 8, BOFU: 5 } as const;
   const N = maxByFunnel[normalizeFunnel(ctx.funnelStage)];
   const text = stripMarkdown(ctx.fullText);
+  const brandPatterns = ctx.brandName?.trim()
+    ? [...BRAND_PATTERNS, new RegExp(`\\b${ctx.brandName.trim().replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\b`, "gi")]
+    : BRAND_PATTERNS;
   let branded = 0;
-  for (const re of BRAND_PATTERNS) branded += (text.match(re) || []).length;
+  for (const re of brandPatterns) branded += (text.match(re) || []).length;
   const sentences = splitSentences(ctx.fullText);
   const brandedSentences = sentences.filter((s) =>
-    BRAND_PATTERNS.some((re) => new RegExp(re.source, "i").test(s)),
+    brandPatterns.some((re) => new RegExp(re.source, "i").test(s)),
   ).length;
   const nonBranded = Math.max(sentences.length - brandedSentences, 1);
   const ratio = branded / nonBranded;
@@ -196,7 +198,9 @@ export function authorByline(ctx: ValidatorContext): CheckResult {
   const k = "author_byline_passes";
   const b = ctx.article.author_byline;
   if (!b) return fail(k, "hard", "Missing author_byline.");
-  const okName = (b.name || "").trim().toLowerCase() === "by the tekrevol team";
+  const expectedName = ctx.brandName?.trim() ? `by the ${ctx.brandName.trim()} team`.toLowerCase() : null;
+  const actualName = (b.name || "").trim().toLowerCase();
+  const okName = expectedName ? actualName === expectedName : actualName.length > 0;
   const okBio = (b.bio_link || "").trim() === "/about";
   const okCreds = !!(b.credentials || "").trim();
   return okName && okBio && okCreds

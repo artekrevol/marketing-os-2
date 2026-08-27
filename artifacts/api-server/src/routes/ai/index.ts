@@ -4,6 +4,8 @@ import { getQueue } from "@workspace/jobs";
 import {
   buildRoutedSystem,
   buildRoutedSystemWithProject,
+  getActivePlaybook,
+  getBannedPhrases,
   logUsage,
   buildAnthropicUserId,
   STAGE_KEYS,
@@ -24,6 +26,7 @@ import {
 } from "@workspace/content-ai";
 import {
   db,
+  brandsTable,
   projectsTable,
   researchBriefsTable,
   proofPointsTable,
@@ -43,7 +46,7 @@ import {
   findTestimonials,
   findLinkTargets,
 } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
 
@@ -229,7 +232,7 @@ router.post("/propose-brief", requireAuth, requireProjectAccess, async (req, res
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
-    const rows = await db.select({ id: projectsTable.id, topic: projectsTable.topic }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
+    const rows = await db.select({ id: projectsTable.id, topic: projectsTable.topic, brandId: projectsTable.brandId }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
     const project = rows[0];
     if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
@@ -240,11 +243,14 @@ router.post("/propose-brief", requireAuth, requireProjectAccess, async (req, res
       return;
     }
 
+    const playbook = await getActivePlaybook(project.brandId);
     await db.update(projectsTable).set({ status: "brief_proposing" }).where(eq(projectsTable.id, project_id));
 
     await getQueue("ai").add("ai.propose-brief", {
       idempotencyKey: `propose-brief:${project_id}`,
       project_id,
+      brandId: project.brandId,
+      playbookVersion: playbook.version,
     });
 
     res.status(202).json({ ok: true, status: "queued" });
@@ -263,9 +269,15 @@ router.post("/research-generate", requireAuth, requireProjectAccess, async (req,
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
+    const projectRows = await db.select({ brandId: projectsTable.brandId, playbookVersion: projectsTable.playbookVersion }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
+    const project = projectRows[0];
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+    const playbook = await getActivePlaybook(project.brandId, project.playbookVersion);
     await getQueue("ai").add("ai.research-generate", {
       idempotencyKey: `research-generate:${project_id}-${Date.now()}`,
       project_id,
+      brandId: project.brandId,
+      playbookVersion: playbook.version,
     });
 
     res.json({ ok: true, started: STAGE_KEYS });
@@ -288,10 +300,16 @@ router.post("/research-retry-card", requireAuth, requireProjectAccess, async (re
       return;
     }
 
+    const projectRows = await db.select({ brandId: projectsTable.brandId, playbookVersion: projectsTable.playbookVersion }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
+    const project = projectRows[0];
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+    const playbook = await getActivePlaybook(project.brandId, project.playbookVersion);
     await getQueue("ai").add("ai.research-retry-card", {
       idempotencyKey: `research-retry-card:${project_id}-${stage}-${Date.now()}`,
       project_id,
       stage: stage as StageKey,
+      brandId: project.brandId,
+      playbookVersion: playbook.version,
     });
 
     res.json({ ok: true, stage });
@@ -432,8 +450,13 @@ router.post("/outline-generate", requireAuth, requireProjectAccess, async (req, 
 
 You must also distribute the brief's atomic_question_map across sections — every atomic question with liftable_paragraph=true must be assigned to exactly one section as a standalone, citation-ready paragraph. Distribute the entity_data_requirements proportionally across sections so the article hits its minimums. Estimate ai_citation_likelihood for each section based on entity density, atomic-question coverage, and citation plan.`;
 
-    const { system: routedSystem, included } = await buildRoutedSystem("outline", outlineInstructions);
-    req.log.info({ sections: included }, "outline-generate: routed playbook sections");
+    const { system: routedSystem, version: playbookVersion, included } = await buildRoutedSystem(
+      "outline",
+      project.brandId,
+      outlineInstructions,
+      project.playbookVersion,
+    );
+    req.log.info({ brandId: project.brandId, playbookVersion, sections: included }, "outline-generate: routed playbook sections");
 
     const metadataUserId = buildAnthropicUserId({
       pod: project.pod,
@@ -964,13 +987,13 @@ STATISTIC DENSITY RULE (validator-enforced, blocking):
 At most ONE digit-based figure per paragraph AND per list item. A digit-based figure is: any dollar amount ("$45,000"), any percentage ("30%"), or any bare number of 100 or more ("1,200"). A range written with two digit figures ("$15,000–$50,000", "150–300%") counts as TWO and fails. To express a range: give ONE bound in digits and the other in words ("from $15,000 up to fifty thousand dollars"), or use a single anchor ("around $30,000", "under 25%"), or split the bounds across separate paragraphs / separate list items with a BLANK LINE between them. Small two-digit numbers ("15", "40 hours") and bare years ("2026") do not count.
 Prose narrative should carry the paragraph. A statistic is punctuation, not the sentence.
 
-BRAND VOICE — TekRevol identity:
-This article is written from TekRevol's perspective. You may use "we," "our team," "our clients" — but EVERY occurrence of the words "we", "our", or "TekRevol" counts as a brand mention against the funnel-stage cap:
+BRAND VOICE — owning brand identity:
+This article is written from the owning brand's perspective. You may use "we," "our team," and "our clients" — but EVERY occurrence of the words "we" or "our" counts as a brand mention against the funnel-stage cap:
 - TOFU: max 1 brand mention per 12 sentences
 - MOFU: max 1 brand mention per 8 sentences
 - BOFU: max 1 brand mention per 5 sentences
 This article's funnel stage: ${project.funnelStage || "unknown"}.
-HARD BUDGET for this section: at most TWO sentences that use "we"/"our"/"TekRevol" — write everything else in third person or passive-free neutral voice. Exceeding the cap blocks ship. But do not go to zero: at least one brand mention somewhere in the article is required, so if this section is the natural place for a client story or CTA, spend the budget here.
+HARD BUDGET for this section: at most TWO sentences that use "we" or "our" — write everything else in third person or passive-free neutral voice. Exceeding the cap blocks ship. But do not go to zero: at least one brand mention somewhere in the article is required, so if this section is the natural place for a client story or CTA, spend the budget here.
 
 ${draftAssetBlock}
 ${ahrefsPrePass ? `=== AHREFS RESEARCH CONTEXT (pre-verified, cache-fresh) ===
@@ -1036,7 +1059,7 @@ RULES:
 4. If a schema_markup_type is FAQPage, format the relevant Q&A as a clear question heading + answer paragraph and emit the JSON-LD in schema_markup_recommendations. If HowTo, emit ordered steps + JSON-LD.
 5. HARD LIMIT — at most ONE numeric value per paragraph AND per list item. Numeric values are: dollar figures, percentages, and any number of 100 or more. A range like "$15,000 to $50,000" counts as TWO numeric values — give a single representative figure instead ("around $30,000") or split the endpoints across separate list items with a BLANK LINE between each item. Before returning, re-read every paragraph and bullet: if it carries more than one numeric value, cut or relocate. This is a blocking ship gate.
 6. Any list of 3 or more parallel items (features, cost factors, steps, options) MUST be formatted as a markdown bullet or numbered list — never as a comma-separated run-on sentence. Leave a blank line between list items that contain numbers.
-7. Never introduce a statistic from memory. Every statistic you state MUST carry an inline [Publisher](url) citation whose URL is copied EXACTLY from the whitelist or starred proof points — never a bare domain like "https://clutch.co" and never a constructed/invented path. If a number has no such source, CUT the number and make the point qualitatively. NEVER attribute a number to "industry standard", "internal data", "internal TekRevol project data", or an unnamed analysis — those are automatically stripped and block ship. Spelling a number out in words does not exempt it from needing a verifiable source.
+7. Never introduce a statistic from memory. Every statistic you state MUST carry an inline [Publisher](url) citation whose URL is copied EXACTLY from the whitelist or starred proof points — never a bare domain like "https://clutch.co" and never a constructed/invented path. If a number has no such source, CUT the number and make the point qualitatively. NEVER attribute a number to "industry standard", "internal data", "internal project data", or an unnamed analysis — those are automatically stripped and block ship. Spelling a number out in words does not exempt it from needing a verifiable source.
 8. Internal links: only ever link to URLs that appear VERBATIM in the INTERNAL LINK TARGETS list in the project context. The anchor text MUST be copied WORD-FOR-WORD from one of the listed anchor variations for that URL — never paraphrase, shorten, or reword an anchor. Never link to a company-site URL from memory, and never link the same target URL twice in one section.
 
 Produce real prose. Do not produce a brief. Then call submit_draft with:
@@ -1049,8 +1072,15 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
     const draftSubstage = revision_instruction ? `revise_section_${sectionIndex}` : `draft_section_${sectionIndex}`;
     const metadataUserId = buildAnthropicUserId({ pod: project.pod, stage: "stage3", substage: draftSubstage, writer_id: project.writerId });
 
-    const { system, included } = await buildRoutedSystemWithProject("draft", projectContext, projectCacheTag, stageInstructions);
-    req.log.info({ sections: included, cacheTag: projectCacheTag }, "draft-section: routed playbook sections");
+    const { system, version: playbookVersion, included } = await buildRoutedSystemWithProject(
+      "draft",
+      project.brandId,
+      projectContext,
+      projectCacheTag,
+      stageInstructions,
+      project.playbookVersion,
+    );
+    req.log.info({ brandId: project.brandId, playbookVersion, sections: included, cacheTag: projectCacheTag }, "draft-section: routed playbook sections");
 
     const t0 = Date.now();
     const draftData = await callAnthropicRaw({
@@ -1170,8 +1200,13 @@ router.post("/interview-step", requireAuth, requireProjectAccess, async (req, re
     const section = (outline?.sections as any[])?.find((s: any) => s.id === section_id);
 
     const interviewInstructions = `You are interviewing the writer to extract their voice and POV for the section "${section?.heading}" (job: ${section?.job}) of "${outline?.h1}". Ask ONE question at a time. Reactive, conversational. Build on prior answers. Use playbook ICP/voice context to ask sharper questions.`;
-    const { system: routedSystem, included } = await buildRoutedSystem("interview", interviewInstructions);
-    req.log.info({ sections: included }, "interview-step: routed playbook sections");
+    const { system: routedSystem, version: playbookVersion, included } = await buildRoutedSystem(
+      "interview",
+      project.brandId,
+      interviewInstructions,
+      project.playbookVersion,
+    );
+    req.log.info({ brandId: project.brandId, playbookVersion, sections: included }, "interview-step: routed playbook sections");
 
     const metadataUserId = buildAnthropicUserId({
       pod: project.pod,
@@ -1487,13 +1522,13 @@ function sanitizeArticleSchema(raw: any): ArticleSchema {
 }
 
 /** Build brand-bound validator deps. Confidentiality loads FRESH per call (§6.4). */
-function buildValidatorDeps(brandId: string): ValidatorDeps {
+function buildValidatorDeps(brandId: string, playbookVersion?: number | null): ValidatorDeps {
   return {
     isReviewInBank: (reviewer, company, quote) => isReviewInBank(brandId, reviewer, company, quote),
     getConfidentialCompanies: () => getConfidentialCompanies(brandId),
     isUrlInLinkTargets: (url) => isUrlInLinkTargets(brandId, url),
     getAnchorVariations: (url) => getAnchorVariations(brandId, url),
-    getPlaybookProjectNames: () => getPlaybookProjectNames(brandId),
+    getPlaybookProjectNames: () => getPlaybookProjectNames(brandId, playbookVersion),
     getReviewsBankProjectNames: () => getReviewsBankProjectNames(brandId),
     fetchUrl: async (url: string) => {
       // SSRF guard: validate every hop (manual redirects) against the public-IP
@@ -1529,7 +1564,7 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
 
     const [projectRows, outlineRows, draftRows, briefRows] = await Promise.all([
-      db.select({ id: projectsTable.id, brandId: projectsTable.brandId, keyword: projectsTable.keyword, contentType: projectsTable.contentType, funnelStage: projectsTable.funnelStage, icps: projectsTable.icps, serpSignals: projectsTable.serpSignals, lsiRetrieved: projectsTable.lsiRetrieved }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
+      db.select({ id: projectsTable.id, brandId: projectsTable.brandId, brandName: brandsTable.name, playbookVersion: projectsTable.playbookVersion, keyword: projectsTable.keyword, contentType: projectsTable.contentType, funnelStage: projectsTable.funnelStage, icps: projectsTable.icps, serpSignals: projectsTable.serpSignals, lsiRetrieved: projectsTable.lsiRetrieved }).from(projectsTable).innerJoin(brandsTable, eq(projectsTable.brandId, brandsTable.id)).where(eq(projectsTable.id, project_id)).limit(1),
       db.select().from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
       db.select().from(draftsTable).where(eq(draftsTable.projectId, project_id)),
       db.select({ atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, aiCitationLandscape: researchBriefsTable.aiCitationLandscape }).from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
@@ -1877,7 +1912,9 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
 
     const word_count = stitched.split(/\s+/).filter(Boolean).length;
     const lower = stitched.toLowerCase();
-    const banned_phrase_count = BANNED_PHRASES.reduce((n, p) => n + (lower.split(p).length - 1), 0);
+    const configuredBannedPhrases = await getBannedPhrases(project.brandId, project.playbookVersion);
+    const bannedPhrases: string[] = configuredBannedPhrases.length > 0 ? configuredBannedPhrases : BANNED_PHRASES;
+    const banned_phrase_count = bannedPhrases.reduce((n, p) => n + (lower.split(p.toLowerCase()).length - 1), 0);
     const withCites = ordered.filter((d) => (d.citationCount || 0) > 0).length;
     const citation_completeness = ordered.length ? Math.round((withCites / ordered.length) * 100) : 0;
     const voice_match_score = ordered.length
@@ -1940,7 +1977,7 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
         icp: fsIcp,
         funnelStage: String((project as any).funnelStage || "") || undefined,
       });
-      const credentialsFromPlaybook = (await getCredentialBlock(project.brandId)).replace(/\s+/g, " ").trim().slice(0, 300);
+      const credentialsFromPlaybook = (await getCredentialBlock(project.brandId, project.playbookVersion)).replace(/\s+/g, " ").trim().slice(0, 300);
       const extractSystem = `You extract a structured publishing schema from a finished article. Return ONLY a submit_article_schema tool call. Use the exact primary keyword "${primaryKeyword}" where required. Never invent dollar amounts. When populating testimonials_used, internal_links, and external_authority_citations, copy values VERBATIM from the APPROVED ASSET CANDIDATES below — never invent a reviewer, company, quote, URL, or citation domain; omit any asset that is not present both in the article and in the candidate lists.
 
 CASE STUDY RULE: case_studies_cited may ONLY contain case studies whose project/client name appears VERBATIM in the APPROVED ASSET CANDIDATES below (a testimonial's company or project name counts). NEVER invent, generalize, or anonymize a project name (e.g. "Healthcare Telehealth Platform") — an unrecognized name is stripped and BLOCKS SHIP, while an EMPTY case_studies_cited array PASSES. If the article's case narratives don't use an approved name, return an empty array. Never include a contract value or any dollar figure in a case study; rewrite the text without the number.
@@ -1962,7 +1999,7 @@ OPENING BLOCK RULE: opening_block.first_100_words must be the VERBATIM first 100
 DIRECT ANSWER RULE: opening_block.direct_answer must be EXACTLY 2 to 3 complete sentences (never a single sentence, never more than 3) that directly answer the primary keyword's question with the article's headline figures.
 
 AUTHOR BYLINE RULE: author_byline is REQUIRED. Emit exactly:
-{"name": "By the TekRevol team", "credentials": ${JSON.stringify(credentialsFromPlaybook)}, "bio_link": "/about"}
+{"name": ${JSON.stringify(`By the ${project.brandName} team`)}, "credentials": ${JSON.stringify(credentialsFromPlaybook)}, "bio_link": "/about"}
 Do not omit any field. Do not modify the name.`;
       const extractUser = `PRIMARY KEYWORD: ${primaryKeyword}\n\n${stitchAssetBlock}\n\nARTICLE (Markdown):\n${stitched.slice(0, 60000)}`;
       const exData = await callAnthropicRaw({
@@ -2133,7 +2170,7 @@ Do not omit any field. Do not modify the name.`;
         sanitized.lsi_used_in_body = lsiCov.used;
         sanitized.lsi_coverage_ratio = lsiCov.ratio;
 
-        const deps = buildValidatorDeps(project.brandId);
+        const deps = buildValidatorDeps(project.brandId, project.playbookVersion);
         const result = await runAllValidators({
           article: sanitized,
           fullText: stitched,
@@ -2143,6 +2180,7 @@ Do not omit any field. Do not modify the name.`;
           serpSignals: ((project as any).serpSignals as any) || null,
           lsiRetrieved,
           currentYear: new Date().getFullYear(),
+          brandName: project.brandName,
           deps,
         });
         // Persist the validator-sanitized copy (HARD-stripped items removed,
@@ -2238,9 +2276,12 @@ Do not omit any field. Do not modify the name.`;
  * ───────────────────────────────────────────────────────────── */
 router.post("/playbook-upload", requireAdmin, async (req, res) => {
   try {
-    const { filename, mime_type, content_base64, uploaded_by } = req.body as {
-      filename?: string; mime_type?: string; content_base64?: string; uploaded_by?: string;
+    const { brandId, filename, mime_type, content_base64, uploaded_by } = req.body as {
+      brandId?: string; filename?: string; mime_type?: string; content_base64?: string; uploaded_by?: string;
     };
+    if (!brandId) { res.status(400).json({ error: "brandId is required" }); return; }
+    const brand = await db.select({ id: brandsTable.id }).from(brandsTable).where(eq(brandsTable.id, brandId)).limit(1);
+    if (!brand.length) { res.status(404).json({ error: "brand not found" }); return; }
     if (!filename || !content_base64) { res.status(400).json({ error: "filename and content_base64 are required" }); return; }
 
     const bytes = Buffer.from(content_base64, "base64");
@@ -2267,30 +2308,38 @@ router.post("/playbook-upload", requireAdmin, async (req, res) => {
     markdown = (markdown || "").trim();
     if (!markdown) { res.status(400).json({ error: "Extracted playbook is empty." }); return; }
 
-    const latestRows = await db.select({ version: playbookTable.version }).from(playbookTable).orderBy(desc(playbookTable.version)).limit(1);
-    const nextVersion = (latestRows[0]?.version ?? 0) + 1;
-
-    const [playbookRow] = await db
-      .insert(playbookTable)
-      .values({ contentMarkdown: markdown, version: nextVersion, sourceFilename: filename, uploadedBy: uploaded_by || null })
-      .returning();
-
     const sections = parsePlaybookSections(markdown);
-    if (sections.length > 0) {
-      const rows = sections.map((s) => ({
-        version: nextVersion,
-        sectionNumber: s.section_number,
-        sectionTitle: s.section_title,
-        sectionContent: s.section_content,
-        sectionTokenEstimate: s.section_token_estimate,
-        alwaysInclude: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
-      }));
-      try {
-        await db.insert(playbookSectionsTable).values(rows);
-      } catch (e) {
-        req.log.warn({ err: e }, "playbook-upload: section insert error (non-fatal)");
+    const { playbookRow } = await db.transaction(async (tx) => {
+      // Serialize version allocation per brand. The unique constraint remains
+      // the database-level backstop for writers outside this application.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`playbook:${brandId}`}))`);
+      const latestRows = await tx
+        .select({ version: playbookTable.version })
+        .from(playbookTable)
+        .where(eq(playbookTable.brandId, brandId))
+        .orderBy(desc(playbookTable.version))
+        .limit(1);
+      const nextVersion = (latestRows[0]?.version ?? 0) + 1;
+      const [playbookRow] = await tx
+        .insert(playbookTable)
+        .values({ brandId, contentMarkdown: markdown, version: nextVersion, sourceFilename: filename, uploadedBy: uploaded_by || null })
+        .returning();
+      if (!playbookRow) throw new Error("playbook upload failed");
+
+      if (sections.length > 0) {
+        await tx.insert(playbookSectionsTable).values(sections.map((s) => ({
+          version: nextVersion,
+          brandId,
+          sectionNumber: s.section_number,
+          sectionTitle: s.section_title,
+          sectionContent: s.section_content,
+          sectionTokenEstimate: s.section_token_estimate,
+          alwaysInclude: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
+        })));
       }
-    } else {
+      return { playbookRow };
+    });
+    if (sections.length === 0) {
       req.log.warn("playbook-upload: no sections detected — routing will fall back to full doc");
     }
 
@@ -2306,9 +2355,14 @@ router.post("/playbook-upload", requireAdmin, async (req, res) => {
  * ───────────────────────────────────────────────────────────── */
 router.post("/playbook-reparse", requireAdmin, async (req, res) => {
   try {
+    const { brandId } = req.body as { brandId?: string };
+    if (!brandId) { res.status(400).json({ error: "brandId is required" }); return; }
+    const brand = await db.select({ id: brandsTable.id }).from(brandsTable).where(eq(brandsTable.id, brandId)).limit(1);
+    if (!brand.length) { res.status(404).json({ error: "brand not found" }); return; }
     const latestRows = await db
       .select({ version: playbookTable.version, contentMarkdown: playbookTable.contentMarkdown })
       .from(playbookTable)
+      .where(eq(playbookTable.brandId, brandId))
       .orderBy(desc(playbookTable.version))
       .limit(1);
     const latest = latestRows[0];
@@ -2323,16 +2377,19 @@ router.post("/playbook-reparse", requireAdmin, async (req, res) => {
       return;
     }
 
-    await db.delete(playbookSectionsTable).where(eq(playbookSectionsTable.version, version));
-    const rows = sections.map((s) => ({
-      version,
-      sectionNumber: s.section_number,
-      sectionTitle: s.section_title,
-      sectionContent: s.section_content,
-      sectionTokenEstimate: s.section_token_estimate,
-      alwaysInclude: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
-    }));
-    await db.insert(playbookSectionsTable).values(rows);
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`playbook:${brandId}`}))`);
+      await tx.delete(playbookSectionsTable).where(and(eq(playbookSectionsTable.brandId, brandId), eq(playbookSectionsTable.version, version)));
+      await tx.insert(playbookSectionsTable).values(sections.map((s) => ({
+        version,
+        brandId,
+        sectionNumber: s.section_number,
+        sectionTitle: s.section_title,
+        sectionContent: s.section_content,
+        sectionTokenEstimate: s.section_token_estimate,
+        alwaysInclude: ALWAYS_INCLUDE.includes(s.section_number) || s.always_include,
+      })));
+    });
 
     res.json({ ok: true, version, sections_count: sections.length, sections: sections.map((s) => ({ n: s.section_number, title: s.section_title, tokens: s.section_token_estimate })) });
   } catch (e) {
