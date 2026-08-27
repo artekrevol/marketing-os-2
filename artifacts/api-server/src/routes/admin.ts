@@ -17,7 +17,7 @@ import {
   USER_DEPARTMENTS,
   type UserDepartment,
 } from "@workspace/db";
-import { requireAdmin } from "../middlewares/auth.js";
+import { requireAdmin, assertBrandAccess, BrandAccessError } from "../middlewares/auth.js";
 import { eq, desc, gte, sql, and, count, sum, inArray, asc } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
@@ -346,15 +346,24 @@ router.get("/playbook", async (req, res, next) => {
 /** GET /api/admin/activity?since=ISO */
 router.get("/activity", async (req, res, next) => {
   try {
+    const brandId = typeof req.query.brandId === "string" ? req.query.brandId : null;
+    if (brandId) await assertBrandAccess(req, brandId);
     const since =
       typeof req.query.since === "string"
         ? req.query.since
         : new Date(Date.now() - 24 * 3600_000).toISOString();
 
+    const activityWhere = brandId
+      ? and(
+          gte(eventsTable.createdAt, new Date(since)),
+          eq(eventsTable.brandId, brandId),
+          eq(eventsTable.scope, "brand"),
+        )
+      : gte(eventsTable.createdAt, new Date(since));
     const recent = await db
       .select()
       .from(eventsTable)
-      .where(gte(eventsTable.createdAt, new Date(since)))
+      .where(activityWhere)
       .orderBy(desc(eventsTable.createdAt))
       .limit(100);
 
@@ -380,6 +389,8 @@ router.get("/activity", async (req, res, next) => {
     }
 
     res.json({
+      scope: brandId ? "brand" : "all-brands-and-system",
+      brand_id: brandId,
       aggregate: Object.values(byUser).map((u) => ({
         ...u,
         total_seconds: 0,
@@ -397,6 +408,10 @@ router.get("/activity", async (req, res, next) => {
       })),
     });
   } catch (err) {
+    if (err instanceof BrandAccessError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -404,12 +419,17 @@ router.get("/activity", async (req, res, next) => {
 /** GET /api/admin/usage?since=ISO */
 router.get("/usage", async (req, res, next) => {
   try {
+    const brandId = typeof req.query.brandId === "string" ? req.query.brandId : null;
+    if (brandId) await assertBrandAccess(req, brandId);
     const since =
       typeof req.query.since === "string"
         ? req.query.since
         : new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
     const sinceDate = new Date(since);
+    const usageSince = brandId
+      ? and(gte(usageLogsTable.createdAt, sinceDate), eq(usageLogsTable.brandId, brandId))
+      : gte(usageLogsTable.createdAt, sinceDate);
 
     const [byStageRows, totalsRow, byProjectRows] = await Promise.all([
       db
@@ -423,7 +443,7 @@ router.get("/usage", async (req, res, next) => {
           costUsd: sum(usageLogsTable.estimatedCostUsd),
         })
         .from(usageLogsTable)
-        .where(gte(usageLogsTable.createdAt, sinceDate))
+        .where(usageSince)
         .groupBy(usageLogsTable.stage),
 
       db
@@ -437,7 +457,7 @@ router.get("/usage", async (req, res, next) => {
           errors: sql<number>`SUM(CASE WHEN ok = false THEN 1 ELSE 0 END)`,
         })
         .from(usageLogsTable)
-        .where(gte(usageLogsTable.createdAt, sinceDate)),
+        .where(usageSince),
 
       db
         .select({
@@ -449,7 +469,7 @@ router.get("/usage", async (req, res, next) => {
         .from(usageLogsTable)
         .where(
           and(
-            gte(usageLogsTable.createdAt, sinceDate),
+            usageSince,
             sql`project_id IS NOT NULL`,
           ),
         )
@@ -465,6 +485,8 @@ router.get("/usage", async (req, res, next) => {
 
     res.json({
       since,
+      scope: brandId ? "brand" : "all-brands",
+      brand_id: brandId,
       totals: {
         calls: totalCalls,
         input_tokens: totalInput,
@@ -493,6 +515,10 @@ router.get("/usage", async (req, res, next) => {
       })),
     });
   } catch (err) {
+    if (err instanceof BrandAccessError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -574,6 +600,8 @@ router.get("/ahrefs-usage", async (req, res, next) => {
     const totalUnitsInMonth = USED_BEFORE_INTEGRATION + estimatedUnitsConsumed;
 
     res.json({
+      scope: brandId ? "brand" : "all-brands",
+      brand_id: brandId ?? null,
       period_start: since.toISOString().slice(0, 10),
       period_end: new Date().toISOString().slice(0, 10),
       total_calls: totalCalls,

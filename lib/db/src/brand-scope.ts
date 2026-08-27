@@ -11,8 +11,9 @@ export type DbClient = NodePgDatabase<typeof schema>;
  * role), so we enforce tenancy in code via withBrandScope's middleware.
  *
  * Keep this list in sync with the Sprint 1 NOT-NULL brand_id tables.
- * Telemetry tables with nullable brand_id (events, integration_call_log)
- * are intentionally NOT in this list — they can be written cross-brand.
+ * Telemetry tables (events, audit_log, integration_call_log) are intentionally
+ * NOT in this list — explicitly global platform writes use the raw tx, while
+ * brand rows still carry their own brand_id.
  */
 export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   "projects",

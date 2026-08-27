@@ -14,7 +14,7 @@
  * 2. RUNTIME (Zod via drizzle-zod):
  *    `createInsertSchema` generates a Zod schema from the Drizzle table
  *    definition. Tests assert that:
- *      - brand_id is REQUIRED (missing → ZodError)
+ *      - brand_id is REQUIRED for brand-scoped tables (missing → ZodError)
  *      - the minimal valid object parses without error
  *      - accidentally nullable brand_id is caught by Zod (it would become
  *        optional in the generated schema)
@@ -487,34 +487,35 @@ describe("schema smoke — minimal valid inserts parse successfully", () => {
   });
 });
 
-describe("schema smoke — nullable brand_id tables correctly allow omitting brand_id", () => {
-  it("events.brandId is optional (system-level events are cross-brand)", () => {
+describe("schema smoke — telemetry scope is explicit", () => {
+  it("events accepts a brand event or an explicitly global event", () => {
     const zodSchema = createInsertSchema(eventsTable);
-    const result = zodSchema.safeParse({ eventType: "test.event" });
-    expect(result.success).toBe(true);
+    expect(zodSchema.safeParse({ eventType: "test.event", brandId: BRAND_UUID }).success).toBe(true);
+    expect(zodSchema.safeParse({ eventType: "system.heartbeat", scope: "global" }).success).toBe(true);
   });
 
-  it("audit_log.brandId is optional (admin actions may be cross-brand)", () => {
+  it("audit_log accepts a brand action or an explicitly global action", () => {
     const zodSchema = createInsertSchema(auditLogTable);
-    const result = zodSchema.safeParse({ action: "admin.test", justification: "test run" });
-    expect(result.success).toBe(true);
+    expect(zodSchema.safeParse({ action: "qa.test", brandId: BRAND_UUID, justification: "test run" }).success).toBe(true);
+    expect(zodSchema.safeParse({ action: "admin.test", justification: "test run", scope: "global" }).success).toBe(true);
   });
 
-  it("usage_logs.brandId is optional (cross-brand telemetry)", () => {
+  it("usage_logs.brandId is required", () => {
     const zodSchema = createInsertSchema(usageLogsTable);
-    const result = zodSchema.safeParse({ model: "claude-3-5-sonnet" });
-    expect(result.success).toBe(true);
+    expect(zodSchema.safeParse({ model: "claude-3-5-sonnet" }).success).toBe(false);
+    expect(zodSchema.safeParse({ model: "claude-3-5-sonnet", brandId: BRAND_UUID }).success).toBe(true);
   });
 
-  it("integration_call_log.brandId is optional (system health pings)", () => {
+  it("integration_call_log accepts a brand call or an explicitly global call", () => {
     const zodSchema = createInsertSchema(integrationCallLogTable);
-    const result = zodSchema.safeParse({
+    const base = {
       vendor: "dataforseo",
       endpoint: "/v3/serp",
       status: "ok",
       durationMs: 250,
-    });
-    expect(result.success).toBe(true);
+    };
+    expect(zodSchema.safeParse({ ...base, brandId: BRAND_UUID }).success).toBe(true);
+    expect(zodSchema.safeParse({ ...base, scope: "global" }).success).toBe(true);
   });
 
   it("fetched_pages.brandId is required; url and content are required", () => {

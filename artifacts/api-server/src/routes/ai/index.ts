@@ -241,7 +241,7 @@ router.post("/propose-brief", requireAuth, requireProjectAccess, async (req, res
     const brandId = resolvedRequestBrand(req);
 
     const rows = await db.select({ id: projectsTable.id, topic: projectsTable.topic, brandId: projectsTable.brandId }).from(projectsTable).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1);
-    const project = rows[0];
+    const project = projectRows[0];
     if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
     const topicTrimmed = String(project.topic || "").trim();
@@ -251,7 +251,7 @@ router.post("/propose-brief", requireAuth, requireProjectAccess, async (req, res
       return;
     }
 
-    const playbook = await getActivePlaybook(project.brandId);
+    const playbook = await getActivePlaybook(project.brandId, project.playbookVersion);
     await db.update(projectsTable).set({ status: "brief_proposing" }).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId)));
 
     await getQueue("ai").add("ai.propose-brief", {
@@ -462,65 +462,26 @@ router.post("/outline-generate", requireAuth, requireProjectAccess, async (req, 
 You must also distribute the brief's atomic_question_map across sections — every atomic question with liftable_paragraph=true must be assigned to exactly one section as a standalone, citation-ready paragraph. Distribute the entity_data_requirements proportionally across sections so the article hits its minimums. Estimate ai_citation_likelihood for each section based on entity density, atomic-question coverage, and citation plan.`;
 
     const { system: routedSystem, version: playbookVersion, included } = await buildRoutedSystem(
-      "outline",
+      "interview",
       project.brandId,
-      outlineInstructions,
+      interviewInstructions,
       project.playbookVersion,
     );
-    req.log.info({ brandId: project.brandId, playbookVersion, sections: included }, "outline-generate: routed playbook sections");
+    req.log.info({ brandId: project.brandId, playbookVersion, sections: included }, "interview-step: routed playbook sections");
 
     const metadataUserId = buildAnthropicUserId({
       pod: project.pod,
-      stage: "stage2",
-      substage: "outline",
+      stage: "stage3",
+      substage: `interview_${section_id}`,
       writer_id: project.writerId,
     });
 
-    const t0 = Date.now();
-    const data = await callAnthropicRaw({
-      model: SONNET,
-      max_tokens: 4000,
-      metadata: { user_id: metadataUserId },
-      tools: [OUTLINE_TOOL],
-      tool_choice: { type: "tool", name: "submit_outline" },
-      system: routedSystem,
-      messages: [
-        {
-          role: "user",
-          content: `Build an outline for a ${project.contentType} on "${project.topic}" (${project.funnelStage}, keyword: ${project.keyword}).
-
-Approved research:
-${JSON.stringify(brief, null, 2).slice(0, 8000)}
-
-Starred proof points:
-${JSON.stringify(proofs, null, 2).slice(0, 4000)}
-
-Produce 6-9 sections. Each section gets:
-- unique id (e.g. "s1"), heading, level (H2/H3), one-sentence job, target word count
-- proof_points: ids the section should deploy
-- internal_links
-- why_it_converts: one line
-- atomic_questions: verbatim questions from the brief's atomic_question_map this section must answer (each as a liftable paragraph)
-- required_entities: which named entities (specific clients, dollar amounts, dates, locations, processes, people) this section must include — pull from synergy_map and entity_data_requirements
-- required_citations: which authority publishers / URLs this section must inline-cite — pull from suggested_authority_sources and proof_points
-- ai_citation_likelihood: high/medium/low
-- schema_markup_types: JSON-LD types this section supports (FAQPage for Q&A blocks, HowTo for stepwise content, etc.)
-
-KEYWORD PLACEMENT RULE — NON-NEGOTIABLE: Section s1's H2 heading MUST contain the primary keyword "${project.keyword}" EXACTLY, verbatim, as a contiguous phrase (capitalization may differ; wording may not). Example of a valid s1 heading: "${String(project.keyword || "").replace(/\b\w/g, (c) => c.toUpperCase())}? The Quick Answer". A paraphrase or close variant does NOT count and will block ship. Every other H2 should vary naturally — do not stuff.
-
-${buildTopicChecklistBlock(project.contentType, project.keyword)}
-
-Cover EVERY atomic question with liftable_paragraph=true at least once. Distribute entities and citations so the article hits the entity_data_requirements minimums. Also produce H1, meta description (BETWEEN 150 AND 155 characters — count them; include the primary keyword), tone reminder, and CTA placement notes.
-
-${outlineAssetBlock}
-
-When assigning internal_links to sections, use ONLY the INTERNAL LINK TARGETS above, and note in each section where a selected testimonial should be placed.`,
-        },
-      ],
-    });
+      const t0 = Date.now();
+    const data = await resp.json() as any;
 
     await logUsage({
       project_id,
+      brand_id: project.brandId,
       stage: "outline",
       model: SONNET,
       metadata_user_id: metadataUserId,
@@ -531,7 +492,7 @@ When assigning internal_links to sections, use ONLY the INTERNAL LINK TARGETS ab
 
     const toolUse = (data.content || []).find((b: any) => b.type === "tool_use");
     if (!toolUse) throw new Error("No outline returned");
-    const out = toolUse.input;
+          const out = (md.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
 
     await db
       .insert(outlinesTable)
@@ -1082,7 +1043,12 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
 
     const userMessage = revision_instruction ? "Revise per the instruction above. Call submit_draft." : "Draft this section now. Call submit_draft.";
     const draftSubstage = revision_instruction ? `revise_section_${sectionIndex}` : `draft_section_${sectionIndex}`;
-    const metadataUserId = buildAnthropicUserId({ pod: project.pod, stage: "stage3", substage: draftSubstage, writer_id: project.writerId });
+    const metadataUserId = buildAnthropicUserId({
+      pod: project.pod,
+      stage: "stage3",
+      substage: `interview_${section_id}`,
+      writer_id: project.writerId,
+    });
 
     const { system, version: playbookVersion, included } = await buildRoutedSystemWithProject(
       "draft",
@@ -1094,7 +1060,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
     );
     req.log.info({ brandId: project.brandId, playbookVersion, sections: included, cacheTag: projectCacheTag }, "draft-section: routed playbook sections");
 
-    const t0 = Date.now();
+      const t0 = Date.now();
     const draftData = await callAnthropicRaw({
       model: SONNET,
       max_tokens: 4000,
@@ -1106,11 +1072,11 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
     }, {
       toolContext: { brandId: project.brandId, projectId: project_id },
     });
-    await logUsage({ project_id, stage: "draft", sub_stage: section_id, model: SONNET, metadata_user_id: metadataUserId, usage: draftData.usage, duration_ms: Date.now() - t0, ok: true });
+    await logUsage({ project_id, brand_id: project.brandId, stage: "draft", sub_stage: section_id, model: SONNET, metadata_user_id: metadataUserId, usage: draftData.usage, duration_ms: Date.now() - t0, ok: true });
 
     const draftToolUse = (draftData.content || []).find((b: any) => b.type === "tool_use");
     if (!draftToolUse) throw new Error("No draft returned");
-    const out = draftToolUse.input;
+          const out = (md.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
 
     const enforced = enforceCitationWhitelist(out.content || "", whitelist.hosts);
     if (enforced.stripped > 0) req.log.info({ stripped: enforced.stripped, section_id }, "draft-section: stripped non-whitelisted citations");
@@ -1125,7 +1091,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
     let review: any = null;
     try {
       const reviewData = await callAnthropicRaw({ model: HAIKU, max_tokens: 1500, metadata: { user_id: reviewMetaUserId }, system: reviewSystem, tools: [REVIEW_TOOL], tool_choice: { type: "tool", name: "submit_review" }, messages: [{ role: "user", content: reviewUser }] });
-      await logUsage({ project_id, stage: "draft", sub_stage: `${section_id}:review`, model: HAIKU, metadata_user_id: reviewMetaUserId, usage: reviewData.usage, duration_ms: Date.now() - t1, ok: true });
+      await logUsage({ project_id, brand_id: project.brandId, stage: "draft", sub_stage: `${section_id}:review`, model: HAIKU, metadata_user_id: reviewMetaUserId, usage: reviewData.usage, duration_ms: Date.now() - t1, ok: true });
       const reviewToolUse = (reviewData.content || []).find((b: any) => b.type === "tool_use");
       review = reviewToolUse?.input ?? null;
     } catch (e) {
@@ -1228,7 +1194,7 @@ router.post("/interview-step", requireAuth, requireProjectAccess, async (req, re
       writer_id: project.writerId,
     });
 
-    const t0 = Date.now();
+      const t0 = Date.now();
     const resp = await fetch(ANTHROPIC_URL, {
       method: "POST",
       headers: { "x-api-key": apiKey(), "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -1248,6 +1214,7 @@ router.post("/interview-step", requireAuth, requireProjectAccess, async (req, re
     const data = await resp.json() as any;
     await logUsage({
       project_id,
+      brand_id: project.brandId,
       stage: "interview",
       sub_stage: section_id,
       model: SONNET,
@@ -1670,17 +1637,24 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
         }, {
           toolContext: { brandId: (project as any).brandId, projectId: project_id },
         });
-        await logUsage({ project_id, stage: "final-stitch", sub_stage: `repetition-rewrite-${rwPass}`, model: SONNET, metadata_user_id: rwMetaUserId, usage: rwData.usage, duration_ms: Date.now() - tRw, ok: true });
+        await logUsage({ project_id, brand_id: project.brandId, stage: "final-stitch", sub_stage: `repetition-rewrite-${rwPass}`, model: SONNET, metadata_user_id: rwMetaUserId, usage: rwData.usage, duration_ms: Date.now() - tRw, ok: true });
         const rwText = (rwData.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
         const countH2 = (s: string) => (s.match(/^## /gm) || []).length;
         /* Invariant guards: the rewrite must not break keyword placement or
          * alter/drop any markdown link URL — reject the pass otherwise. */
         const kwNorm = String((project as any).keyword || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
         const normText = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ");
-        const first100 = (md: string) => {
-          const body = md.replace(/^#\s.*$/m, "");
-          return normText(body.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^#{2,6}\s+/gm, "")).split(" ").filter(Boolean).slice(0, 100).join(" ");
-        };
+          const first100 = stitched
+            .replace(/^#\s.*$/m, "")
+            .replace(/\[([^\]]+)\]\((?:https?:\/\/[^)]+)\)/g, "$1")
+            .replace(/^#{1,6}\s+/gm, "")
+            .replace(/^[-*+]\s+/gm, "")
+            .replace(/^\d+\.\s+/gm, "")
+            .replace(/[*_`>|]/g, "")
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(0, 100)
+            .join(" ");
         const kwInFirst100 = (md: string) => !kwNorm || first100(md).includes(kwNorm);
         const kwInH2 = (md: string) => !kwNorm || (md.match(/^##\s+.*$/gm) || []).some((h) => normText(h).includes(kwNorm));
         const linkUrlSet = (md: string) =>
@@ -1691,8 +1665,8 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
           );
         const origUrls = linkUrlSet(stitched);
         const newUrls = linkUrlSet(rwText);
-        const invented = [...newUrls].filter((u) => !origUrls.has(u));
-        const dropped = [...origUrls].filter((u) => !newUrls.has(u));
+          const invented = [...paraLinkSet(out)].filter((u) => !origLinks.has(u));
+          const dropped = [...origLinks].filter((u) => !newLinks.has(u));
         const urlsOk = invented.length === 0 && dropped.length <= 2;
         const kw100Ok = kwInFirst100(rwText) || !kwInFirst100(stitched);
         const kwH2Ok = kwInH2(rwText) || !kwInH2(stitched);
@@ -1766,7 +1740,7 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
         const bodyOf = (part: string, idx: number) => (idx === 0 ? part : part.split("\n").slice(1).join("\n"));
         const firstIdx = new Map<string, number>();
         parts.forEach((part, idx) => {
-          const norm = normWords(bodyOf(part, idx));
+            const norm = normWords(para);
           for (const ph of remaining) if (!firstIdx.has(ph) && norm.includes(ph)) firstIdx.set(ph, idx);
         });
         const seen = new Set<string>();
@@ -1802,23 +1776,23 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
         if (!stitched.includes(mf.para)) continue;
         try {
           const tMicro = Date.now();
-          const microUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: `surgical-rewrite-${i + 1}`, writer_id: (project as any).writerId });
+          const microUserId = buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: `density-repair-${round}`, writer_id: (project as any).writerId });
           const md = await callAnthropicRaw({
             model: SONNET,
             max_tokens: 2000,
             metadata: { user_id: microUserId },
             system: "You are surgically revising ONE paragraph of a finished article. Return ONLY the revised paragraph in Markdown — no preamble, no quotes, no commentary.",
-            messages: [{ role: "user", content: `${mf.instructions}\n\nPARAGRAPH:\n${mf.para}` }],
+            messages: [{ role: "user", content: `${densityInstructions}\n\nPARAGRAPH:\n${offender}` }],
           });
-          await logUsage({ project_id, stage: "final-stitch", sub_stage: `surgical-rewrite-${i + 1}`, model: SONNET, metadata_user_id: microUserId, usage: md.usage, duration_ms: Date.now() - tMicro, ok: true });
+          await logUsage({ project_id, brand_id: project.brandId, stage: "final-stitch", sub_stage: `density-repair-${round}`, model: SONNET, metadata_user_id: microUserId, usage: md.usage, duration_ms: Date.now() - tMicro, ok: true });
           const out = (md.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
-          if (!out || out.length < mf.para.length * 0.3 || out.length > mf.para.length * 2.5) {
-            req.log.warn({ fix: i + 1, gotChars: out.length }, "final-stitch: surgical rewrite length out of bounds; skipped");
-            continue;
+          if (!out || out.length < offender.length * 0.3 || out.length > offender.length * 2.5) {
+            req.log.warn({ round, gotChars: out.length }, "final-stitch: density repair length out of bounds; stopping");
+            break;
           }
-          const origLinks = paraLinkSet(mf.para);
+          const origLinks = paraLinkSet(offender);
           const newLinks = paraLinkSet(out);
-          const invented = [...newLinks].filter((u) => !origLinks.has(u));
+          const invented = [...paraLinkSet(out)].filter((u) => !origLinks.has(u));
           const dropped = [...origLinks].filter((u) => !newLinks.has(u));
           const linksOk = invented.length === 0 && (!mf.requireSameLinks || dropped.length === 0);
           if (!linksOk || !mf.check(out)) {
@@ -1832,12 +1806,12 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
             req.log.warn({ fix: i + 1, wasPrefix: headPrefix(mf.para), gotPrefix: headPrefix(out) }, "final-stitch: surgical rewrite changed heading level; skipped");
             continue;
           }
-          const candidate = stitched.replace(mf.para, out);
+          const candidate = stitched.replace(offender, out);
           const h1Count = (s: string) => (s.match(/^#\s/gm) || []).length;
           const kwLower = String((project as any).keyword || "").trim().toLowerCase();
           const bodyFirstWords = (s: string) =>
             s.replace(/\[([^\]]+)\]\((?:https?:\/\/[^)]+)\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/[*_`>|]/g, "").toLowerCase().split(/\s+/).filter(Boolean).slice(0, 120).join(" ");
-          const kwEarlyPreserved = !kwLower || !bodyFirstWords(stitched).includes(kwLower) || bodyFirstWords(candidate).includes(kwLower);
+          const kwEarlyPreserved = !kwLower2 || !bodyFirstWords2(stitched).includes(kwLower2) || bodyFirstWords2(candidate).includes(kwLower2);
           if (
             h1Count(candidate) !== h1Count(stitched) ||
             !kwEarlyPreserved ||
@@ -1883,7 +1857,7 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
             system: "You are surgically revising ONE paragraph of a finished article. Return ONLY the revised paragraph in Markdown — no preamble, no quotes, no commentary.",
             messages: [{ role: "user", content: `${densityInstructions}\n\nPARAGRAPH:\n${offender}` }],
           });
-          await logUsage({ project_id, stage: "final-stitch", sub_stage: `density-repair-${round}`, model: SONNET, metadata_user_id: microUserId, usage: md.usage, duration_ms: Date.now() - tMicro, ok: true });
+          await logUsage({ project_id, brand_id: project.brandId, stage: "final-stitch", sub_stage: `density-repair-${round}`, model: SONNET, metadata_user_id: microUserId, usage: md.usage, duration_ms: Date.now() - tMicro, ok: true });
           const out = (md.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
           if (!out || out.length < offender.length * 0.3 || out.length > offender.length * 2.5) {
             req.log.warn({ round, gotChars: out.length }, "final-stitch: density repair length out of bounds; stopping");
@@ -1925,7 +1899,7 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
     }
 
     const word_count = stitched.split(/\s+/).filter(Boolean).length;
-    const lower = stitched.toLowerCase();
+    const lower = filename.toLowerCase();
     const configuredBannedPhrases = await getBannedPhrases(project.brandId, project.playbookVersion);
     const bannedPhrases: string[] = configuredBannedPhrases.length > 0 ? configuredBannedPhrases : BANNED_PHRASES;
     const banned_phrase_count = bannedPhrases.reduce((n, p) => n + (lower.split(p.toLowerCase()).length - 1), 0);
@@ -2024,7 +1998,7 @@ Do not omit any field. Do not modify the name.`;
         tool_choice: { type: "tool", name: "submit_article_schema" },
         messages: [{ role: "user", content: extractUser }],
       });
-      await logUsage({ project_id, stage: "final-stitch", sub_stage: "article-schema-extract", model: SONNET, metadata_user_id: buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: "article-schema-extract", writer_id: (project as any).writerId }), usage: exData.usage, duration_ms: Date.now() - t0, ok: true });
+      await logUsage({ project_id, brand_id: project.brandId, stage: "final-stitch", sub_stage: "article-schema-extract", model: SONNET, metadata_user_id: buildAnthropicUserId({ pod: (project as any).pod, stage: "final-stitch", substage: "article-schema-extract", writer_id: (project as any).writerId }), usage: exData.usage, duration_ms: Date.now() - t0, ok: true });
       const exTool = (exData.content || []).find((b: any) => b.type === "tool_use");
       if (exTool?.input) {
         const sanitized = sanitizeArticleSchema(exTool.input);
@@ -2166,7 +2140,7 @@ Do not omit any field. Do not modify the name.`;
                   system: `Revise the given meta description so it is BETWEEN 150 AND 155 characters (count every character including spaces and punctuation; aim for 152–153) and contains the phrase "${primaryKeyword}" verbatim. Keep the meaning. Return ONLY the revised meta description text with no quotes or commentary.`,
                   messages: [{ role: "user", content: String(sanitized.meta_description || outlineMeta || "") }],
                 });
-                await logUsage({ project_id, stage: "final-stitch", sub_stage: `meta-fix-${attempt}`, model: SONNET, metadata_user_id: metaUserId, usage: metaData.usage, duration_ms: Date.now() - tMeta, ok: true });
+                await logUsage({ project_id, brand_id: project.brandId, stage: "final-stitch", sub_stage: `meta-fix-${attempt}`, model: SONNET, metadata_user_id: metaUserId, usage: metaData.usage, duration_ms: Date.now() - tMeta, ok: true });
                 const fixed = (metaData.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim().replace(/^["']|["']$/g, "");
                 if (metaOk(fixed)) {
                   sanitized.meta_description = fixed;
@@ -2185,18 +2159,7 @@ Do not omit any field. Do not modify the name.`;
         sanitized.lsi_coverage_ratio = lsiCov.ratio;
 
         const deps = buildValidatorDeps(project.brandId, project.playbookVersion);
-        const result = await runAllValidators({
-          article: sanitized,
-          fullText: stitched,
-          primaryKeyword,
-          funnelStage: String((project as any).funnelStage || "") || null,
-          contentType: String((project as any).contentType || "") || null,
-          serpSignals: ((project as any).serpSignals as any) || null,
-          lsiRetrieved,
-          currentYear: new Date().getFullYear(),
-          brandName: project.brandName,
-          deps,
-        });
+      const result = await mod.convertToMarkdown({ buffer: bytes });
         // Persist the validator-sanitized copy (HARD-stripped items removed,
         // verified_live / flagged_as_stale flags applied) — never the raw extract.
         articleSchema = result.sanitizedArticle;
@@ -2301,7 +2264,7 @@ router.post("/playbook-upload", requireAdmin, async (req, res) => {
     const bytes = Buffer.from(content_base64, "base64");
     const lower = filename.toLowerCase();
 
-    let markdown = "";
+    const markdown = latest.contentMarkdown || "";
     if (lower.endsWith(".md") || lower.endsWith(".markdown") || lower.endsWith(".txt") || (mime_type || "").startsWith("text/")) {
       markdown = bytes.toString("utf-8");
     } else if (lower.endsWith(".pdf") || mime_type === "application/pdf") {

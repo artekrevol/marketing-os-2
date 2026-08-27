@@ -62,12 +62,21 @@ router.get("/summary", requireAuth, async (req, res, next) => {
     }
 
     const brandIds = brands.map((b) => b.id);
+    const requestedBrandId =
+      typeof req.query.brandId === "string" ? req.query.brandId : null;
+    if (requestedBrandId && !brandIds.includes(requestedBrandId)) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    const selectedBrandIds = requestedBrandId ? [requestedBrandId] : brandIds;
     const brandName = new Map(brands.map((b) => [b.id, b.name]));
 
-    if (brandIds.length === 0) {
+    if (selectedBrandIds.length === 0) {
       res.json({
         stats: { brands: 0, activeProjects: 0, inReview: 0, seoInitiatives: 0 },
         recentActivity: [],
+        scope: requestedBrandId ? "brand" : effectiveAdmin ? "all-authorized-brands" : "authorized-brands",
+        brand_id: requestedBrandId,
       });
       return;
     }
@@ -85,7 +94,7 @@ router.get("/summary", requireAuth, async (req, res, next) => {
         .from(projectsTable)
         .where(
           and(
-            inArray(projectsTable.brandId, brandIds),
+            inArray(projectsTable.brandId, selectedBrandIds),
             ne(projectsTable.status, "archived"),
           ),
         ),
@@ -94,7 +103,7 @@ router.get("/summary", requireAuth, async (req, res, next) => {
         .from(contentObjectsTable)
         .where(
           and(
-            inArray(contentObjectsTable.brandId, brandIds),
+            inArray(contentObjectsTable.brandId, selectedBrandIds),
             inArray(contentObjectsTable.status, ["submitted", "in_review"]),
           ),
         ),
@@ -104,7 +113,7 @@ router.get("/summary", requireAuth, async (req, res, next) => {
             .from(recoveryInitiativesTable)
             .where(
               and(
-                inArray(recoveryInitiativesTable.brandId, brandIds),
+                inArray(recoveryInitiativesTable.brandId, selectedBrandIds),
                 eq(recoveryInitiativesTable.status, "active"),
               ),
             )
@@ -118,7 +127,7 @@ router.get("/summary", requireAuth, async (req, res, next) => {
           updatedAt: projectsTable.updatedAt,
         })
         .from(projectsTable)
-        .where(inArray(projectsTable.brandId, brandIds))
+        .where(inArray(projectsTable.brandId, selectedBrandIds))
         .orderBy(desc(projectsTable.updatedAt))
         .limit(8),
       db
@@ -132,7 +141,7 @@ router.get("/summary", requireAuth, async (req, res, next) => {
         .from(contentObjectsTable)
         .where(
           and(
-            inArray(contentObjectsTable.brandId, brandIds),
+            inArray(contentObjectsTable.brandId, selectedBrandIds),
             inArray(contentObjectsTable.status, [
               "submitted",
               "in_review",
@@ -153,7 +162,7 @@ router.get("/summary", requireAuth, async (req, res, next) => {
               startedAt: recoveryInitiativesTable.startedAt,
             })
             .from(recoveryInitiativesTable)
-            .where(inArray(recoveryInitiativesTable.brandId, brandIds))
+            .where(inArray(recoveryInitiativesTable.brandId, selectedBrandIds))
             .orderBy(desc(recoveryInitiativesTable.startedAt))
             .limit(5)
         : Promise.resolve(
@@ -205,11 +214,13 @@ router.get("/summary", requireAuth, async (req, res, next) => {
 
     res.json({
       stats: {
-        brands: brands.length,
+        brands: selectedBrandIds.length,
         activeProjects: Number(activeProjectsRows[0]?.value ?? 0),
         inReview: Number(inReviewRows[0]?.value ?? 0),
         seoInitiatives: Number(seoInitiativeRows[0]?.value ?? 0),
       },
+      scope: requestedBrandId ? "brand" : effectiveAdmin ? "all-authorized-brands" : "authorized-brands",
+      brand_id: requestedBrandId,
       recentActivity: activity,
     });
   } catch (err) {

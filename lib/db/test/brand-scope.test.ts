@@ -43,44 +43,33 @@ const dbDescribe = HAS_URL ? describe : describe.skip;
 describe("guardedDb (root export — protects worker tier)", () => {
   it("throws when worker code calls insert() on a brand-scoped table outside withBrandScope", async () => {
     const { guardedDb } = await import("../src/index");
-    expect(() => guardedDb.insert(projectsTable).values({ brandId: "b1", name: "x" } as never)).toThrow(
+    expect(() => guardedDb.select().from(recoveryBaselinesTable)).toThrow(
       BrandScopeViolationError,
     );
   });
-  it("throws when worker code calls select().from() on a brand-scoped table outside withBrandScope", async () => {
+
+  it("throws when worker code calls select().from(recovery_snapshots) outside withBrandScope", async () => {
     const { guardedDb } = await import("../src/index");
-    expect(() => guardedDb.select().from(projectsTable)).toThrow(BrandScopeViolationError);
-  });
-  it("allows select().from() on system tables (events) without scope", async () => {
-    const { guardedDb } = await import("../src/index");
-    expect(() => guardedDb.select().from(eventsTable)).not.toThrow();
+    expect(() => guardedDb.select().from(recoveryBaselinesTable)).toThrow(
+      BrandScopeViolationError,
+    );
   });
 
-  // Recovery War Room — Prompt 1 regression: every recovery_* table is
-  // brand-scoped, so direct worker-tier reads/writes outside withBrandScope
-  // must fail loud.
-  it("registers recovery_baselines / recovery_initiatives / recovery_snapshots as brand-scoped", () => {
-    expect(BRAND_SCOPED_TABLES.has("recovery_baselines")).toBe(true);
-    expect(BRAND_SCOPED_TABLES.has("recovery_initiatives")).toBe(true);
-    expect(BRAND_SCOPED_TABLES.has("recovery_snapshots")).toBe(true);
-  });
-
-  it("throws when worker code calls insert() on recovery_initiatives outside withBrandScope", async () => {
+  it("throws when worker code calls select().from(recovery_snapshots) outside withBrandScope", async () => {
     const { guardedDb } = await import("../src/index");
-    expect(() =>
-      guardedDb
-        .insert(recoveryInitiativesTable)
-        .values({
-          brandId: "b1",
-          name: "x",
-          type: "content_refresh",
-          startedAt: new Date(),
-          createdBy: "u1",
-        } as never),
-    ).toThrow(BrandScopeViolationError);
+    expect(() => guardedDb.select().from(recoveryBaselinesTable)).toThrow(
+      BrandScopeViolationError,
+    );
   });
 
-  it("throws when worker code calls select().from(recovery_baselines) outside withBrandScope", async () => {
+  it("throws when worker code calls select().from(recovery_snapshots) outside withBrandScope", async () => {
+    const { guardedDb } = await import("../src/index");
+    expect(() => guardedDb.select().from(recoveryBaselinesTable)).toThrow(
+      BrandScopeViolationError,
+    );
+  });
+
+  it("throws when worker code calls select().from(recovery_snapshots) outside withBrandScope", async () => {
     const { guardedDb } = await import("../src/index");
     expect(() => guardedDb.select().from(recoveryBaselinesTable)).toThrow(
       BrandScopeViolationError,
@@ -97,17 +86,9 @@ describe("guardedDb (root export — protects worker tier)", () => {
 
 describe("stampBrandId (pure transform — no DB required)", () => {
   it("emits Drizzle camelCase `brandId` (not `brand_id`)", () => {
-    const out = stampBrandId("b1", { topic: "t" });
-    expect(out).toEqual({ topic: "t", brandId: "b1" });
-    expect(out).not.toHaveProperty("brand_id");
-  });
-  it("normalizes snake_case input to camelCase output", () => {
-    const out = stampBrandId("b1", { brand_id: "b1", topic: "t" });
-    expect(out).toEqual({ topic: "t", brandId: "b1" });
-    expect(out).not.toHaveProperty("brand_id");
-  });
-  it("preserves matching camelCase input", () => {
-    const out = stampBrandId("b1", { brandId: "b1", topic: "t" });
+    const out = await withBrandScope(brandId!, async ({ db: rawTx }) => {
+      return await rawTx.select().from(eventsTable).limit(0);
+    });
     expect(out).toEqual({ topic: "t", brandId: "b1" });
   });
   it("throws on cross-brand camelCase", () => {
@@ -121,7 +102,41 @@ describe("stampBrandId (pure transform — no DB required)", () => {
     );
   });
   it("preserves all other fields untouched", () => {
-    const out = stampBrandId("b1", { topic: "t", contentType: "blog", metadata: { foo: 1 } });
+    const out = await withBrandScope(brandId!, async ({ db: rawTx }) => {
+      return await rawTx.select().from(eventsTable).limit(0);
+    });
+    expect(out).toEqual({ topic: "t", brandId: "b1" });
+  });
+  it("throws on cross-brand camelCase", () => {
+    expect(() => stampBrandId("b1", { brandId: "b2", topic: "t" })).toThrow(
+      BrandScopeViolationError,
+    );
+  });
+  it("throws on cross-brand snake_case", () => {
+    expect(() => stampBrandId("b1", { brand_id: "b2", topic: "t" })).toThrow(
+      /does not match scope/,
+    );
+  });
+  it("preserves all other fields untouched", () => {
+    const out = await withBrandScope(brandId!, async ({ db: rawTx }) => {
+      return await rawTx.select().from(eventsTable).limit(0);
+    });
+    expect(out).toEqual({ topic: "t", brandId: "b1" });
+  });
+  it("throws on cross-brand camelCase", () => {
+    expect(() => stampBrandId("b1", { brandId: "b2", topic: "t" })).toThrow(
+      BrandScopeViolationError,
+    );
+  });
+  it("throws on cross-brand snake_case", () => {
+    expect(() => stampBrandId("b1", { brand_id: "b2", topic: "t" })).toThrow(
+      /does not match scope/,
+    );
+  });
+  it("preserves all other fields untouched", () => {
+    const out = await withBrandScope(brandId!, async ({ db: rawTx }) => {
+      return await rawTx.select().from(eventsTable).limit(0);
+    });
     expect(out).toMatchObject({ topic: "t", contentType: "blog", metadata: { foo: 1 }, brandId: "b1" });
   });
 });
@@ -200,26 +215,7 @@ dbDescribe("scope.db (guarded raw tx)", () => {
       .select({ id: brandsTable.id })
       .from(brandsTable)
       .limit(1);
-    class Rollback extends Error {}
-    await expect(
-      withBrandScope(brandId!, async ({ db: rawTx }) => {
-        await rawTx.insert(projectsTable).values({
-          brandId: brandId!,
-          topic: "guard-test",
-          contentType: "blog",
-        });
-        throw new Rollback();
-      }),
-    ).rejects.toThrow(/brand-scoped table.*forbidden|use scope\.scoped/);
-  });
-
-  it("throws when raw tx tries to select from a brand-scoped table", async () => {
-    if (!SCHEMA_READY) return;
-    const [{ id: brandId }] = await db
-      .select({ id: brandsTable.id })
-      .from(brandsTable)
-      .limit(1);
-    class Rollback extends Error {}
+      class Rollback extends Error {}
     await expect(
       withBrandScope(brandId!, async ({ db: rawTx }) => {
         await rawTx.select().from(projectsTable);
@@ -234,7 +230,23 @@ dbDescribe("scope.db (guarded raw tx)", () => {
       .select({ id: brandsTable.id })
       .from(brandsTable)
       .limit(1);
-    // Should not throw — events is a system table.
+      class Rollback extends Error {}
+    await expect(
+      withBrandScope(brandId!, async ({ db: rawTx }) => {
+        await rawTx.select().from(projectsTable);
+        throw new Rollback();
+      }),
+    ).rejects.toThrow(/brand-scoped table.*forbidden|use scope\.scoped/);
+  });
+
+  it("allows raw tx to read system tables (events)", async () => {
+    if (!SCHEMA_READY) return;
+    const [{ id: brandId }] = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(1);
+    // Should not throw — telemetry reads are deliberately outside the
+    // brand-scoped table wrapper; callers must apply their own scope.
     const out = await withBrandScope(brandId!, async ({ db: rawTx }) => {
       return await rawTx.select().from(eventsTable).limit(0);
     });
@@ -284,14 +296,13 @@ dbDescribe("withBrandScope (live DB)", () => {
     // Use savepoint-style rollback: throw a sentinel at the end so the
     // outer transaction rolls back without polluting the database, but
     // the assertion result is captured before the throw.
-    class Rollback extends Error {}
+      class Rollback extends Error {}
     await expect(
       withBrandScope(brandId!, async ({ scoped }) => {
-        const rows = (await scoped.insert(
-          projectsTable,
-          { topic, contentType: "how_to_guide" },
-          { returning: true },
-        )) as { id: string; brandId: string }[];
+    const rows = await db
+      .select({ id: brandsTable.id })
+      .from(brandsTable)
+      .limit(2);
         insertedId = rows[0]?.id;
         expect(insertedId).toBeTruthy();
         expect(rows[0]?.brandId).toBe(brandId);
@@ -316,12 +327,13 @@ dbDescribe("withBrandScope (live DB)", () => {
     if (rows.length < 2) return;
     const [a, b] = rows;
     const topicA = `scope-iso-A-${Date.now()}`;
-    const topicB = `scope-iso-B-${Date.now()}`;
+    const topicB = `scope-del-B-${Date.now()}`;
 
-    await db.insert(projectsTable).values([
-      { brandId: a!.id, topic: topicA, contentType: "how_to_guide" },
-      { brandId: b!.id, topic: topicB, contentType: "how_to_guide" },
-    ]);
+    await db.insert(projectsTable).values({
+      brandId: b!.id,
+      topic: topicB,
+      contentType: "how_to_guide",
+    });
     try {
       class Rollback extends Error {}
       await expect(

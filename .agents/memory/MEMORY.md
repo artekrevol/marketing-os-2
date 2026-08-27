@@ -13,3 +13,4 @@
 - [Brand playbook isolation](brand-playbook-isolation.md) — brand-neutral fallbacks and fail-closed pinned versions prevent cross-brand instruction leakage.
 - [Playbook live-schema compatibility](playbook-live-schema.md) — real DB tests must explicitly clean playbook children before fixture brands when live FKs lag Drizzle.
 - [Tenant migration schema drift](tenant-migration-schema-drift.md) — legacy preview databases may lag Drizzle table shapes; quarantine before tightening tenant constraints.
+- [Telemetry attribution](telemetry-attribution.md) — brand work requires owning brand IDs; only explicit global platform telemetry may omit one.

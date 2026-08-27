@@ -32,6 +32,7 @@ export async function handleDataForSeoSerpTest(
   await db.insert(eventsTable).values({
     eventType: SUCCESS_EVENT,
     brandId: payload.brandId ?? null,
+    scope: payload.brandId ? "brand" : "global",
     subjectType: "integration",
     subjectId: "dataforseo",
     payload: {

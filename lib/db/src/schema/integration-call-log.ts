@@ -7,12 +7,13 @@ import {
   numeric,
   jsonb,
   index,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { brandsTable } from "./brands";
 
-// Sprint 2 — telemetry for outbound integration calls. brand_id is
-// nullable because some calls (system test buttons, cross-brand health
-// pings) are not associated with a brand. Documented explicitly.
+// Telemetry for outbound integration calls. Brand work is always attributed;
+// platform health checks use scope='global' explicitly.
 export const integrationCallLogTable = pgTable(
   "integration_call_log",
   {
@@ -23,7 +24,8 @@ export const integrationCallLogTable = pgTable(
     httpStatus: integer("http_status"),
     durationMs: integer("duration_ms").notNull(),
     costEstimateUsd: numeric("cost_estimate_usd", { precision: 12, scale: 6 }),
-    brandId: uuid("brand_id").references(() => brandsTable.id, { onDelete: "set null" }),
+    brandId: uuid("brand_id").references(() => brandsTable.id, { onDelete: "restrict" }),
+    scope: text("scope").notNull().default("brand"),
     requestMeta: jsonb("request_meta").notNull().default({}),
     errorMessage: text("error_message"),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
@@ -31,6 +33,11 @@ export const integrationCallLogTable = pgTable(
   (t) => [
     index("integration_call_log_occurred_idx").on(t.occurredAt.desc()),
     index("integration_call_log_vendor_idx").on(t.vendor, t.occurredAt.desc()),
+    index("integration_call_log_brand_occurred_idx").on(t.brandId, t.occurredAt.desc()),
+    check(
+      "integration_call_log_scope_brand_consistency",
+      sql`(${t.scope} = 'brand' and ${t.brandId} is not null) or (${t.scope} = 'global' and ${t.brandId} is null)`,
+    ),
   ],
 );
 

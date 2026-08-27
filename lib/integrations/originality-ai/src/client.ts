@@ -92,6 +92,7 @@ export class OriginalityAIClient {
         durationMs: args.durationMs,
         costEstimateUsd: args.costEstimate?.toString(),
         brandId: this.brandId,
+        scope: this.brandId ? "brand" : "global",
         requestMeta: args.requestMeta ?? {},
         errorMessage: args.errorMessage,
       });

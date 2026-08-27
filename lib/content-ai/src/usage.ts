@@ -33,7 +33,8 @@ export function estimateCost(
 }
 
 export async function logUsage(args: {
-  project_id?: string | null;
+  project_id: string;
+  brand_id: string;
   stage?: string | null;
   sub_stage?: string | null;
   model: string;
@@ -52,7 +53,8 @@ export async function logUsage(args: {
     const u = args.usage ?? {};
     const cost = estimateCost(args.model, u);
     await db.insert(usageLogsTable).values({
-      projectId: args.project_id ?? null,
+      projectId: args.project_id,
+      brandId: args.brand_id,
       stage: args.stage ?? null,
       subStage: args.sub_stage ?? null,
       model: args.model,

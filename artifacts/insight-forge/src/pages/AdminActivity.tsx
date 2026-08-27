@@ -22,6 +22,13 @@ type RecentEvent = {
   project_id: string | null;
 };
 
+type ActivityResponse = {
+  scope?: string;
+  brand_id?: string | null;
+  aggregate?: Row[];
+  recent?: RecentEvent[];
+};
+
 const RANGES = [
   { label: "Last 24h", hours: 24 },
   { label: "Last 7d", hours: 24 * 7 },
@@ -53,6 +60,7 @@ export default function AdminActivity() {
   const [rangeHours, setRangeHours] = useState(24);
   const [rows, setRows] = useState<Row[]>([]);
   const [recent, setRecent] = useState<RecentEvent[]>([]);
+  const [scope, setScope] = useState("all-brands-and-system");
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
 
@@ -63,7 +71,8 @@ export default function AdminActivity() {
       credentials: "include",
     });
     if (resp.ok) {
-      const body = await resp.json();
+      const body = (await resp.json()) as ActivityResponse;
+      setScope(body.scope || "all-brands-and-system");
       setRows(body.aggregate || []);
       setRecent(body.recent || []);
     } else {
@@ -108,6 +117,9 @@ export default function AdminActivity() {
           </h1>
           <p className="text-sm text-ink-muted mt-1">
             Time spent per user per page. Use this to find pages where users get stuck.
+          </p>
+          <p className="text-[11px] uppercase tracking-widest text-accent mt-2">
+            Scope: {scope}
           </p>
         </div>
         <div className="flex items-center gap-2">

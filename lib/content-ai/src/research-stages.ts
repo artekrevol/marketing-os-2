@@ -591,6 +591,7 @@ export async function runStage(args: {
 
     await logUsage({
       project_id: project.id,
+      brand_id: project.brand_id,
       stage: "research",
       sub_stage: stage,
       model: STAGE_MODEL[stage],
@@ -634,6 +635,7 @@ export async function runStage(args: {
     console.error(`[stage:${stage}] error: ${msg}`);
     await logUsage({
       project_id: project.id,
+      brand_id: project.brand_id,
       stage: "research",
       sub_stage: stage,
       model: STAGE_MODEL[stage],

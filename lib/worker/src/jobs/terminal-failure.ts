@@ -45,6 +45,7 @@ export async function recordTerminalIntegrationFailure(
     await db.insert(eventsTable).values({
       eventType: "integration.error",
       brandId: payload.brandId ?? null,
+      scope: payload.brandId ? "brand" : "global",
       subjectType: "integration",
       subjectId: subject,
       payload: {

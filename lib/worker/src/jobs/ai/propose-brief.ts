@@ -329,6 +329,7 @@ Then call submit_brief_proposal with the complete structured output including ai
   const responseData = await resp.json() as any;
   await logUsage({
     project_id,
+    brand_id: brandId,
     stage: "propose_brief",
     model: MODEL,
     metadata_user_id: metadataUserId,

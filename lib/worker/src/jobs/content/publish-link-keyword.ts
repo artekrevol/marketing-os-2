@@ -76,8 +76,9 @@ export async function handlePublishLinkKeyword(
   );
 
   // 3. Baseline rankings for a not-yet-crawled keyword, and emit the
-  //    activity-feed event. Events are not brand-scoped (raw `db.insert`);
-  //    crawl batches are brand-scoped (`scoped.insert`).
+  //    activity-feed event. Telemetry is written through raw `db.insert`, but
+  //    this brand event must carry the project's brand; crawl batches remain
+  //    brand-scoped (`scoped.insert`).
   const { batchId } = await withBrandScope(brandId, async ({ scoped, db }) => {
     const existingSnaps = (await scoped.select(rankSnapshotsTable, {
       where: eq(rankSnapshotsTable.keywordId, keywordId),

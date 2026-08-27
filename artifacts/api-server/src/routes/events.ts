@@ -10,9 +10,8 @@ const router = Router();
 
 /**
  * POST /api/events
- * Fire-and-forget event logging. If a brandId is supplied the caller
- * must have access to it — otherwise an authenticated user could
- * pollute another brand's analytics stream with fake events.
+ * Fire-and-forget event logging. Brand events require an authorized brand.
+ * Only explicitly global system events may omit brandId.
  */
 router.post("/", requireAuth, async (req, res, next) => {
   try {
@@ -24,6 +23,11 @@ router.post("/", requireAuth, async (req, res, next) => {
       brandId?: string | null;
     };
     if (!eventType) { res.status(400).json({ error: "eventType required" }); return; }
+    const isGlobal = !brandId;
+    if (isGlobal && (!eventType.startsWith("system.") || subjectType !== "system")) {
+      res.status(400).json({ error: "brandId required for brand events" });
+      return;
+    }
     if (brandId) {
       await assertBrandAccess(req, brandId);
     }
@@ -34,6 +38,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       subjectId: subjectId || null,
       payload: payload || {},
       brandId: brandId || null,
+      scope: isGlobal ? "global" : "brand",
       actorId: userId,
     });
     res.json({ ok: true });

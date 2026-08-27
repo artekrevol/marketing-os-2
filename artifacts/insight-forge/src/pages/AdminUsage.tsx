@@ -3,6 +3,8 @@ import { DollarSign, Zap, Database, AlertTriangle, RefreshCw } from "lucide-reac
 
 type Summary = {
   since: string;
+  scope?: string;
+  brand_id?: string | null;
   totals: {
     calls: number;
     input_tokens: number;
@@ -65,6 +67,9 @@ export default function AdminUsage() {
         <div>
           <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">Admin</p>
           <h1 className="font-serif text-3xl mt-1">AI usage & cost</h1>
+          <p className="text-[11px] uppercase tracking-widest text-accent mt-2">
+            Scope: {data?.scope || "all-brands"}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {(Object.keys(RANGES) as Array<keyof typeof RANGES>).map((r) => (

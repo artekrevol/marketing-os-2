@@ -29,9 +29,10 @@ await withBrandScope(brandId, async ({ db, brandId }) => {
 2. Every insert/update against a brand-scoped table must call
    `assertBrandScope(scope.brandId, row)` first. Mismatched or missing
    `brand_id` throws synchronously.
-3. Telemetry tables with nullable `brand_id` (`events`,
-   `integration_call_log`, `dead_jobs`) are intentionally **not**
-   brand-scoped — system writes happen outside `withBrandScope`.
+3. Telemetry rows in `events`, `audit_log`, and `integration_call_log` are
+   either brand-scoped (`brand_id` required) or explicitly global
+   (`scope = 'global'` with no brand). `usage_logs.brand_id` is always
+   required. System writes happen outside `withBrandScope`.
 4. Always pair `brandIdFilter(scope)` with `eq(table.brandId, scope.brandId)`
    on raw SQL queries; never hand-build the predicate from request input.
 

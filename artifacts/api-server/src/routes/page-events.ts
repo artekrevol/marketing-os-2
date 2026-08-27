@@ -36,9 +36,9 @@ router.post("/", requireAuth, async (req, res, next) => {
       referrer?: string | null;
     };
 
-    if (project_id) {
-      await assertBrandAccessForProject(req, project_id);
-    }
+    const brandId = project_id
+      ? await assertBrandAccessForProject(req, project_id)
+      : null;
 
     const userId = req.auth?.userId ?? null;
 
@@ -53,7 +53,8 @@ router.post("/", requireAuth, async (req, res, next) => {
         user_agent: user_agent ?? null,
         referrer: referrer ?? null,
       },
-      brandId: null,
+      brandId,
+      scope: brandId ? "brand" : "global",
       actorId: userId,
     });
 

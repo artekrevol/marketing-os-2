@@ -20,6 +20,7 @@ export async function handleHeartbeat(
     .values({
       eventType: SUCCESS_EVENT,
       brandId: payload.brandId ?? null,
+      scope: payload.brandId ? "brand" : "global",
       subjectType: "system",
       subjectId: "worker",
       payload: {

@@ -11,9 +11,8 @@ const router = Router();
 /**
  * POST /api/audit
  * Admin-sensitive audit log entry. Justification is mandatory.
- * If a brandId is supplied, the caller must have access to that brand
- * (or be an admin) — otherwise users could attribute audit entries to
- * brands they have no relationship with.
+ * Brand actions require an authorized brand. A missing brandId is stored as
+ * an explicit global platform action rather than an ambiguous null row.
  */
 router.post("/", requireAuth, async (req, res, next) => {
   try {
@@ -27,6 +26,15 @@ router.post("/", requireAuth, async (req, res, next) => {
     };
     if (!action) { res.status(400).json({ error: "action required" }); return; }
     if (!justification || !justification.trim()) { res.status(400).json({ error: "justification required" }); return; }
+    const isGlobal = !brandId;
+    if (isGlobal && !action.startsWith("system.") && !action.startsWith("admin.")) {
+      res.status(400).json({ error: "brandId required for brand audit actions" });
+      return;
+    }
+    if (isGlobal && !req.auth?.isAdmin) {
+      res.status(403).json({ error: "global audit actions require admin access" });
+      return;
+    }
     if (brandId) {
       await assertBrandAccess(req, brandId);
     }
@@ -38,6 +46,7 @@ router.post("/", requireAuth, async (req, res, next) => {
       justification: justification.trim(),
       metadata: metadata || {},
       brandId: brandId || null,
+      scope: isGlobal ? "global" : "brand",
       actorId: userId,
     });
     res.json({ ok: true });

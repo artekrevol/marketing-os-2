@@ -104,7 +104,7 @@ router.get("/events", async (req, res) => {
         .from(eventsTable)
         .orderBy(desc(eventsTable.createdAt))
         .limit(20));
-  res.json({ events: rows });
+  res.json({ scope: "all-brands-and-system", events: rows });
 });
 
 /** Worker heartbeat freshness — most recent system.heartbeat event. */

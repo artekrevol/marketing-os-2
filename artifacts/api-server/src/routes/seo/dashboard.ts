@@ -39,7 +39,7 @@ router.get("/stats", async (req, res) => {
       const rows = Array.isArray(result) ? result : (result.rows ?? []);
       return rows[0] ?? null;
     });
-    res.json({ stats });
+    res.json({ scope: "brand", brand_id: guard.brandId, stats });
   } catch (err) {
     fail(res, req, "dashboard.stats", err);
   }
