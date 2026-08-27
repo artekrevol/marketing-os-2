@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, integer, numeric, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, numeric, jsonb, foreignKey } from "drizzle-orm/pg-core";
 import { projectsTable } from "./projects";
 import { brandsTable } from "./brands";
 
@@ -30,6 +30,12 @@ export const draftScoresTable = pgTable("draft_scores", {
   validation: jsonb("validation"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  foreignKey({
+    name: "draft_scores_project_same_brand_fk",
+    columns: [t.projectId, t.brandId],
+    foreignColumns: [projectsTable.id, projectsTable.brandId],
+  }),
+]);
 
 export type DraftScore = typeof draftScoresTable.$inferSelect;

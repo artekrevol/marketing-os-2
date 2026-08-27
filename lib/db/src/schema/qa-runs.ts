@@ -6,6 +6,7 @@ import {
   jsonb,
   index,
   integer,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 import { contentObjectsTable } from "./content-objects";
@@ -38,6 +39,11 @@ export const qaRunsTable = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    foreignKey({
+      name: "qa_runs_content_object_same_brand_fk",
+      columns: [t.contentObjectId, t.brandId],
+      foreignColumns: [contentObjectsTable.id, contentObjectsTable.brandId],
+    }),
     index("qa_runs_content_object_idx").on(t.contentObjectId, t.createdAt.desc()),
     index("qa_runs_brand_status_idx").on(t.brandId, t.status, t.createdAt.desc()),
   ],

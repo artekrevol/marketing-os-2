@@ -4,6 +4,7 @@ import {
   text,
   timestamp,
   index,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 import { qaRunsTable } from "./qa-runs";
@@ -32,6 +33,11 @@ export const qaOverridesTable = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    foreignKey({
+      name: "qa_overrides_run_same_brand_fk",
+      columns: [t.qaRunId, t.brandId],
+      foreignColumns: [qaRunsTable.id, qaRunsTable.brandId],
+    }),
     index("qa_overrides_run_idx").on(t.qaRunId),
   ],
 );

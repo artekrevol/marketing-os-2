@@ -8,7 +8,11 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sql } from "drizzle-orm";
 import { guardedDb, withBrandScope } from "@workspace/db";
-import { requireAuth } from "../../middlewares/auth.js";
+import {
+  assertBrandAccess,
+  BrandAccessError,
+  requireAuth,
+} from "../../middlewares/auth.js";
 import { requireAdminOrLead } from "../seo/_shared.js";
 import {
   buildAuthUrl,
@@ -33,10 +37,12 @@ router.get("/start", requireAuth, (req: Request, res: Response) => {
 
   void (async () => {
     try {
+      await assertBrandAccess(req, brandId);
+
       // Create a short-lived CSRF state token (10 min TTL)
       const stateRes = (await guardedDb.execute(sql`
         INSERT INTO google_oauth_states (brand_id, created_by, expires_at)
-        VALUES (${brandId}::uuid, ${(req as { auth?: { userId?: string } }).auth?.userId ?? "unknown"}, now() + interval '10 minutes')
+        VALUES (${brandId}::uuid, ${req.auth!.userId}, now() + interval '10 minutes')
         RETURNING id::text
       `)) as unknown as { rows?: Array<{ id: string }> } | Array<{ id: string }>;
       const stateRows = Array.isArray(stateRes) ? stateRes : (stateRes.rows ?? []);
@@ -45,19 +51,24 @@ router.get("/start", requireAuth, (req: Request, res: Response) => {
 
       res.redirect(buildAuthUrl(stateId));
     } catch (err) {
-      res.status(500).json({ error: "Failed to initiate Google OAuth", detail: String(err) });
+      if (err instanceof BrandAccessError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[google/oauth/start]", err);
+      res.status(500).json({ error: "Failed to initiate Google OAuth" });
     }
   })();
 });
 
 /* ─── GET callback — Google posts here after user approves ───────────────── */
-router.get("/callback", (req: Request, res: Response) => {
+router.get("/callback", requireAuth, (req: Request, res: Response) => {
   const code = req.query["code"] as string | undefined;
   const stateId = req.query["state"] as string | undefined;
   const error = req.query["error"] as string | undefined;
 
   if (error) {
-    res.redirect(`/seo-os/seo/integrations?google=denied&reason=${encodeURIComponent(error)}`);
+    res.redirect("/seo-os/seo/integrations?google=denied&reason=authorization_denied");
     return;
   }
 
@@ -73,6 +84,7 @@ router.get("/callback", (req: Request, res: Response) => {
         UPDATE google_oauth_states
         SET used = true
         WHERE id = ${stateId}::uuid
+          AND created_by = ${req.auth!.userId}
           AND used = false
           AND expires_at > now()
         RETURNING brand_id::text
@@ -83,6 +95,7 @@ router.get("/callback", (req: Request, res: Response) => {
         res.redirect("/seo-os/seo/integrations?google=error&reason=invalid_state");
         return;
       }
+      await assertBrandAccess(req, brandId);
 
       // Exchange code for tokens
       const tokens = await exchangeCode(code);
@@ -119,7 +132,7 @@ router.get("/callback", (req: Request, res: Response) => {
       res.redirect(`/seo-os/seo/integrations?google=connected&brand=${brandId}`);
     } catch (err) {
       console.error("[google/oauth/callback]", err);
-      res.redirect(`/seo-os/seo/integrations?google=error&reason=${encodeURIComponent(String(err))}`);
+      res.redirect("/seo-os/seo/integrations?google=error&reason=callback_failed");
     }
   })();
 });
@@ -136,12 +149,19 @@ router.delete("/:brandId", requireAuth, (req: Request, res: Response) => {
 
   void (async () => {
     try {
+      await assertBrandAccess(req, brandId);
+
       await guardedDb.execute(sql`
         DELETE FROM google_brand_connections WHERE brand_id = ${brandId}::uuid
       `);
       res.json({ ok: true });
     } catch (err) {
-      res.status(500).json({ error: "Disconnect failed", detail: String(err) });
+      if (err instanceof BrandAccessError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[google/oauth/disconnect]", err);
+      res.status(500).json({ error: "Disconnect failed" });
     }
   })();
 });

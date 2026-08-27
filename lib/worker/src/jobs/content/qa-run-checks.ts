@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   withBrandScope,
   qaRunsTable,
@@ -150,6 +150,18 @@ export async function handleQaRunChecks(
   const startedAt = Date.now();
 
   await withBrandScope(payload.brandId, async ({ scoped }) => {
+    const runs = await scoped.select(qaRunsTable, {
+      where: and(
+        eq(qaRunsTable.id, payload.qaRunId),
+        eq(qaRunsTable.contentObjectId, payload.contentObjectId),
+      ),
+      limit: 1,
+    });
+    if (!runs[0]) {
+      throw new Error(
+        `qa-run-checks: qa_run not found for brand/content object: ${payload.qaRunId}`,
+      );
+    }
     await scoped.update(
       qaRunsTable,
       { status: "running", startedAt: new Date() },

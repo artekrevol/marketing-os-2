@@ -13,22 +13,36 @@ import type { QueueName } from "./queues";
  * required to short-circuit on duplicate keys.
  */
 
+/** Payload for explicitly system-wide jobs. */
 const BasePayload = z.object({
   idempotencyKey: z.string().min(1),
+});
+
+/** Optional brand metadata for diagnostics explicitly declared system-wide. */
+const SystemPayload = BasePayload.extend({
   brandId: z.string().uuid().optional(),
 });
 
-export const HeartbeatPayload = BasePayload.extend({
+/**
+ * Payload for every tenant job. Keeping this separate from BasePayload makes
+ * it impossible for a new tenant handler to accidentally make brandId
+ * optional by inheriting a global base schema.
+ */
+const BrandPayload = BasePayload.extend({
+  brandId: z.string().uuid(),
+});
+
+export const HeartbeatPayload = SystemPayload.extend({
   message: z.string().default("heartbeat"),
 });
 
-export const DataForSeoSerpTestPayload = BasePayload.extend({
+export const DataForSeoSerpTestPayload = SystemPayload.extend({
   query: z.string().default("tekrevol"),
   locationCode: z.number().int().default(2840), // United States
   languageCode: z.string().default("en"),
 });
 
-export const OriginalityScanTestPayload = BasePayload.extend({
+export const OriginalityScanTestPayload = SystemPayload.extend({
   text: z.string().default(
     "Original content benchmark used by the SEO OS worker tier to verify the Originality.ai integration is healthy.",
   ),
@@ -38,8 +52,7 @@ export const OriginalityScanTestPayload = BasePayload.extend({
 // brandId is required (non-optional override): the QA pipeline must
 // not run cross-brand. qaRunId is the pre-created qa_runs row; the
 // worker mutates it through the lifecycle.
-export const QaRunChecksPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const QaRunChecksPayload = BrandPayload.extend({
   qaRunId: z.string().uuid(),
   contentObjectId: z.string().uuid(),
 });
@@ -49,8 +62,7 @@ export const QaRunChecksPayload = BasePayload.extend({
 // `recovery_initiatives.actual_impact_clicks_14d` from the baseline-vs-
 // current delta over the 14 days following completion. Lives on the
 // `scoring` queue (amendments §E — already provisioned).
-export const RecoveryInitiativeImpactPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const RecoveryInitiativeImpactPayload = BrandPayload.extend({
   initiativeId: z.string().uuid(),
 });
 
@@ -58,8 +70,7 @@ export const RecoveryInitiativeImpactPayload = BasePayload.extend({
 // `recovery_snapshots` row for `(brandId, snapshotDate)` from
 // `rank_snapshots` over the trailing 30-day window. Idempotent on
 // the unique `(brand_id, snapshot_date)` index. Amendments §D.4.
-export const RecoverySnapshotPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const RecoverySnapshotPayload = BrandPayload.extend({
   // ISO date YYYY-MM-DD (the day the snapshot represents).
   snapshotDate: z
     .string()
@@ -83,22 +94,19 @@ const AI_STAGE_KEY = z.enum([
   "atomic_and_entities",
 ]);
 
-export const AiProposeBriefPayload = BasePayload.extend({
+export const AiProposeBriefPayload = BrandPayload.extend({
   project_id: z.string().uuid(),
-  brandId: z.string().uuid(),
   playbookVersion: z.number().int().nullable(),
 });
 
-export const AiResearchGeneratePayload = BasePayload.extend({
+export const AiResearchGeneratePayload = BrandPayload.extend({
   project_id: z.string().uuid(),
-  brandId: z.string().uuid(),
   playbookVersion: z.number().int().nullable(),
 });
 
-export const AiResearchRetryCardPayload = BasePayload.extend({
+export const AiResearchRetryCardPayload = BrandPayload.extend({
   project_id: z.string().uuid(),
   stage: AI_STAGE_KEY,
-  brandId: z.string().uuid(),
   playbookVersion: z.number().int().nullable(),
 });
 
@@ -115,8 +123,7 @@ export const AiResearchRetryCardPayload = BasePayload.extend({
 // Idempotency: `idempotencyKey` is `seo-crawl:<batchId>`; the handler
 // additionally resumes by skipping keywords that already have a snapshot
 // for this batch, so a retry never re-bills a keyword already crawled.
-export const SeoCrawlRunPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const SeoCrawlRunPayload = BrandPayload.extend({
   batchId: z.string().uuid(),
   keywordIds: z.array(z.string().uuid()).optional(),
 });
@@ -125,8 +132,7 @@ export const SeoCrawlRunPayload = BasePayload.extend({
 // keyword set (its `listId`, or all brand keywords when null), creates a
 // fresh `crawl_batches` row, and enqueues a `seo.crawl.run` for it. Each
 // cron tick mints a new batch (unique id → unique downstream idem key).
-export const SeoRankCheckScheduledPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const SeoRankCheckScheduledPayload = BrandPayload.extend({
   scheduleId: z.string().uuid(),
   // null = all keywords for the brand.
   listId: z.string().uuid().nullable().optional(),
@@ -135,15 +141,13 @@ export const SeoRankCheckScheduledPayload = BasePayload.extend({
 // For a keyword set, pull SERP data and record competitor URLs into
 // `competitor_pages` (excluding the brand's own primary domain and any
 // blacklisted domains). Costs money per keyword — callers bound the set.
-export const SeoCompetitorDiscoverPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const SeoCompetitorDiscoverPayload = BrandPayload.extend({
   keywordIds: z.array(z.string().uuid()).optional(),
 });
 
 // Recompute `competitor_insights` for a brand from the accumulated
 // `competitor_pages` rows. Pure DB aggregation — no external API cost.
-export const SeoCompetitorInsightsComputePayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const SeoCompetitorInsightsComputePayload = BrandPayload.extend({
 });
 
 /* -------------------------------------------------------------------------- */
@@ -155,8 +159,7 @@ export const SeoCompetitorInsightsComputePayload = BasePayload.extend({
 // content_url_keyword_link and baselines rankings for a newly-tracked keyword.
 // Idempotent on the link's unique (project_id, keyword_id) and on jobId
 // `content.publish-link-keyword:publish-link:<projectId>`.
-export const ContentPublishLinkKeywordPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const ContentPublishLinkKeywordPayload = BrandPayload.extend({
   projectId: z.string().uuid(),
 });
 
@@ -164,8 +167,7 @@ export const ContentPublishLinkKeywordPayload = BasePayload.extend({
 // writes a NEW keyword_research_briefs snapshot row (the table is immutable in
 // practice — never updated in place). Notifies the writer only on a
 // meaningful change (volume >20%, ranking >5 positions, new top-5 competitor).
-export const SeoRefreshContentContextPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const SeoRefreshContentContextPayload = BrandPayload.extend({
   briefId: z.string().uuid(),
 });
 
@@ -181,8 +183,7 @@ export const SeoRefreshContentContextNightlyPayload = BasePayload.extend({});
 // tracked) are inserted as is_discovery_candidate=true / 'pending' review.
 // Also writes competitor_movements snapshots and runs the 30-day archive sweep.
 // Runs every Monday at 02:00 UTC via a BullMQ repeatable.
-export const SeoDiscoveryWeeklyPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const SeoDiscoveryWeeklyPayload = BrandPayload.extend({
   /** ISO week label e.g. "2026-30". Auto-set by scheduler; override for backfill. */
   weekLabel: z
     .string()
@@ -206,14 +207,12 @@ export const SeoDiscoveryWeeklyPayload = BasePayload.extend({
 // Ingest a stored Ahrefs snapshot: reads XLSX files from GCS, parses, and
 // upserts into the intelligence tables. Decoupled from the HTTP upload so
 // the browser never waits on DB operations and files are preserved on failure.
-export const SeoIngestAhrefsSnapshotPayload = BasePayload.extend({
-  brandId: z.string().uuid(),
+export const SeoIngestAhrefsSnapshotPayload = BrandPayload.extend({
   snapshotId: z.string().uuid(),
 });
 
 // Google Search Console — pull search analytics for one brand.
-export const SeoSyncGscDataPayload = BasePayload.extend({
-  brandId: z.string().uuid("brandId must be a UUID"),
+export const SeoSyncGscDataPayload = BrandPayload.extend({
   /** Optional override; defaults to 90 days ago in the handler. */
   dateFrom: z.string().optional(),
   /** Optional override; defaults to today in the handler. */

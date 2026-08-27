@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, check } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, check, foreignKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { projectsTable } from "./projects";
 import { brandsTable } from "./brands";
@@ -15,6 +15,11 @@ export const voiceLibraryTable = pgTable("voice_library", {
   editType: text("edit_type"),
   capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
+  foreignKey({
+    name: "voice_library_project_same_brand_fk",
+    columns: [t.projectId, t.brandId],
+    foreignColumns: [projectsTable.id, projectsTable.brandId],
+  }),
   check(
     "voice_library_edit_type_check",
     sql`${t.editType} IS NULL OR ${t.editType} IN ('inline', 'revision', 'manual')`,

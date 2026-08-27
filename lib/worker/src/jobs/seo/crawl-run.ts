@@ -86,6 +86,14 @@ export async function handleSeoCrawlRun(
       .limit(1);
     const primaryDomain = brandRows[0]?.primaryDomain ?? null;
 
+    const batches = await scoped.select(crawlBatchesTable, {
+      where: eq(crawlBatchesTable.id, payload.batchId),
+      limit: 1,
+    });
+    if (!batches[0]) {
+      throw new Error(`seo.crawl.run: batch not found for brand: ${payload.batchId}`);
+    }
+
     await scoped.update(
       crawlBatchesTable,
       { status: "running", startedAt: new Date() },
@@ -99,6 +107,19 @@ export async function handleSeoCrawlRun(
       eq(keywordsTable.isActive, true),
       isNotNull(keywordsTable.listId),
     );
+    if (payload.keywordIds?.length) {
+      const requestedIds = new Set(payload.keywordIds);
+      const ownedKeywords = (await scoped.select(keywordsTable, {
+        where: inArray(keywordsTable.id, payload.keywordIds),
+      })) as Keyword[];
+      const ownedIds = new Set(ownedKeywords.map((keyword) => keyword.id));
+      const missingIds = [...requestedIds].filter((id) => !ownedIds.has(id));
+      if (missingIds.length > 0) {
+        throw new Error(
+          `seo.crawl.run: keyword IDs are missing or outside brand: ${missingIds.join(", ")}`,
+        );
+      }
+    }
     const keywords = (await scoped.select(keywordsTable, {
       where: payload.keywordIds?.length
         ? and(qualityFilter, inArray(keywordsTable.id, payload.keywordIds))

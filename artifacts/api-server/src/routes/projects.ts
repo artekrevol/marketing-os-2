@@ -157,8 +157,16 @@ router.post("/", requireAuth, async (req: Request, res: Response, next: NextFunc
 router.get("/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
-    const rows = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
+    const requestedBrandId =
+      typeof req.query.brandId === "string" ? req.query.brandId : null;
+    let brandId: string;
+    if (requestedBrandId) {
+      await assertBrandAccess(req, requestedBrandId);
+      brandId = requestedBrandId;
+    } else {
+      brandId = await assertBrandAccessForProject(req, id);
+    }
+    const rows = await db.select().from(projectsTable).where(and(eq(projectsTable.id, id), eq(projectsTable.brandId, brandId))).limit(1);
     const project = rows[0];
     if (!project) { res.status(404).json({ error: "project not found" }); return; }
     res.json(projectToSnake(project));
@@ -173,7 +181,7 @@ router.get("/:id", requireAuth, async (req: Request, res: Response, next: NextFu
 router.patch("/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
+    const brandId = await assertBrandAccessForProject(req, id);
     const body = req.body as Record<string, unknown>;
     const allowed: Partial<typeof projectsTable.$inferInsert> = {};
     if (body["status"] !== undefined) allowed.status = String(body["status"]);
@@ -205,7 +213,7 @@ router.patch("/:id", requireAuth, async (req: Request, res: Response, next: Next
     const [before] = await db
       .select({ publishedAt: projectsTable.publishedAt, brandId: projectsTable.brandId })
       .from(projectsTable)
-      .where(eq(projectsTable.id, id))
+      .where(and(eq(projectsTable.id, id), eq(projectsTable.brandId, brandId)))
       .limit(1);
     if (!before) { res.status(404).json({ error: "project not found" }); return; }
     // Tenant isolation: a re-targeted location must belong to the project's brand.
@@ -213,7 +221,7 @@ router.patch("/:id", requireAuth, async (req: Request, res: Response, next: Next
       await assertLocationInBrand(allowed.targetLocationId, before.brandId);
     }
     allowed.updatedAt = new Date();
-    const [updated] = await db.update(projectsTable).set(allowed).where(eq(projectsTable.id, id)).returning();
+    const [updated] = await db.update(projectsTable).set(allowed).where(and(eq(projectsTable.id, id), eq(projectsTable.brandId, brandId))).returning();
     if (!updated) { res.status(404).json({ error: "project not found" }); return; }
 
     // Publish trigger: enqueue the cross-module link job exactly on the
@@ -241,8 +249,8 @@ router.patch("/:id", requireAuth, async (req: Request, res: Response, next: Next
 router.delete("/:id", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
-    const deleted = await db.delete(projectsTable).where(eq(projectsTable.id, id)).returning({ id: projectsTable.id });
+    const brandId = await assertBrandAccessForProject(req, id);
+    const deleted = await db.delete(projectsTable).where(and(eq(projectsTable.id, id), eq(projectsTable.brandId, brandId))).returning({ id: projectsTable.id });
     if (!deleted.length) { res.status(404).json({ error: "project not found" }); return; }
     res.json({ ok: true });
   } catch (err) {
@@ -256,8 +264,8 @@ router.delete("/:id", requireAuth, async (req: Request, res: Response, next: Nex
 router.get("/:id/research", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
-    const rows = await db.select().from(researchBriefsTable).where(eq(researchBriefsTable.projectId, id)).limit(1);
+    const brandId = await assertBrandAccessForProject(req, id);
+    const rows = await db.select().from(researchBriefsTable).where(and(eq(researchBriefsTable.projectId, id), eq(researchBriefsTable.brandId, brandId))).limit(1);
     const brief = rows[0];
     if (!brief) { res.json(null); return; }
     res.json({
@@ -290,11 +298,11 @@ router.get("/:id/research", requireAuth, async (req: Request, res: Response, nex
 router.patch("/:id/research/approve", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
+    const brandId = await assertBrandAccessForProject(req, id);
     const [updated] = await db
       .update(researchBriefsTable)
       .set({ approvedAt: new Date() })
-      .where(eq(researchBriefsTable.projectId, id))
+      .where(and(eq(researchBriefsTable.projectId, id), eq(researchBriefsTable.brandId, brandId)))
       .returning({ approvedAt: researchBriefsTable.approvedAt });
     res.json({ ok: true, approved_at: updated?.approvedAt });
   } catch (err) {
@@ -308,8 +316,8 @@ router.patch("/:id/research/approve", requireAuth, async (req: Request, res: Res
 router.get("/:id/proof-points", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
-    const rows = await db.select().from(proofPointsTable).where(eq(proofPointsTable.projectId, id));
+    const brandId = await assertBrandAccessForProject(req, id);
+    const rows = await db.select().from(proofPointsTable).where(and(eq(proofPointsTable.projectId, id), eq(proofPointsTable.brandId, brandId)));
     res.json(rows.map((p) => ({
       id: p.id,
       project_id: p.projectId,
@@ -333,7 +341,7 @@ router.get("/:id/proof-points", requireAuth, async (req: Request, res: Response,
 router.patch("/:id/proof-points/:ppId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
+    const brandId = await assertBrandAccessForProject(req, id);
     const { starred } = req.body as { starred?: boolean };
     const update: Partial<typeof proofPointsTable.$inferInsert> = {};
     if (starred !== undefined) update.starred = Boolean(starred);
@@ -341,7 +349,7 @@ router.patch("/:id/proof-points/:ppId", requireAuth, async (req: Request, res: R
     const [updated] = await db
       .update(proofPointsTable)
       .set(update)
-      .where(and(eq(proofPointsTable.id, req.params["ppId"] as string), eq(proofPointsTable.projectId, id)))
+      .where(and(eq(proofPointsTable.id, req.params["ppId"] as string), eq(proofPointsTable.projectId, id), eq(proofPointsTable.brandId, brandId)))
       .returning({ id: proofPointsTable.id, starred: proofPointsTable.starred });
     if (!updated) { res.status(404).json({ error: "proof point not found" }); return; }
     res.json(updated);
@@ -356,8 +364,8 @@ router.patch("/:id/proof-points/:ppId", requireAuth, async (req: Request, res: R
 router.get("/:id/outlines", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
-    const rows = await db.select().from(outlinesTable).where(eq(outlinesTable.projectId, id)).limit(1);
+    const brandId = await assertBrandAccessForProject(req, id);
+    const rows = await db.select().from(outlinesTable).where(and(eq(outlinesTable.projectId, id), eq(outlinesTable.brandId, brandId))).limit(1);
     const o = rows[0];
     if (!o) { res.json(null); return; }
     res.json({
@@ -385,7 +393,7 @@ router.get("/:id/outlines", requireAuth, async (req: Request, res: Response, nex
 router.patch("/:id/outlines", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
+    const brandId = await assertBrandAccessForProject(req, id);
     const body = req.body as Record<string, unknown>;
     const patch: Partial<typeof outlinesTable.$inferInsert> = {};
     if (body["sections"] !== undefined) patch.sections = body["sections"] as never;
@@ -398,7 +406,7 @@ router.patch("/:id/outlines", requireAuth, async (req: Request, res: Response, n
     const [updated] = await db
       .update(outlinesTable)
       .set(patch)
-      .where(eq(outlinesTable.projectId, id))
+      .where(and(eq(outlinesTable.projectId, id), eq(outlinesTable.brandId, brandId)))
       .returning();
     if (!updated) { res.status(404).json({ error: "outline not found" }); return; }
     res.json({
@@ -424,8 +432,8 @@ router.patch("/:id/outlines", requireAuth, async (req: Request, res: Response, n
 router.get("/:id/drafts", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
-    const rows = await db.select().from(draftsTable).where(eq(draftsTable.projectId, id));
+    const brandId = await assertBrandAccessForProject(req, id);
+    const rows = await db.select().from(draftsTable).where(and(eq(draftsTable.projectId, id), eq(draftsTable.brandId, brandId)));
     res.json(rows.map((d) => ({
       id: d.id,
       project_id: d.projectId,
@@ -457,7 +465,7 @@ router.get("/:id/drafts", requireAuth, async (req: Request, res: Response, next:
 router.patch("/:id/drafts/:sectionId", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
+    const brandId = await assertBrandAccessForProject(req, id);
     const body = req.body as Record<string, unknown>;
     const patch: Partial<typeof draftsTable.$inferInsert> = {};
     if (body["approved"] !== undefined) patch.approved = Boolean(body["approved"]);
@@ -467,7 +475,7 @@ router.patch("/:id/drafts/:sectionId", requireAuth, async (req: Request, res: Re
     const [updated] = await db
       .update(draftsTable)
       .set(patch)
-      .where(and(eq(draftsTable.projectId, id), eq(draftsTable.sectionId, req.params["sectionId"] as string)))
+      .where(and(eq(draftsTable.projectId, id), eq(draftsTable.brandId, brandId), eq(draftsTable.sectionId, req.params["sectionId"] as string)))
       .returning({ id: draftsTable.id, approved: draftsTable.approved, sectionId: draftsTable.sectionId });
     if (!updated) { res.status(404).json({ error: "draft not found" }); return; }
     res.json({ id: updated.id, section_id: updated.sectionId, approved: updated.approved });
@@ -482,8 +490,8 @@ router.patch("/:id/drafts/:sectionId", requireAuth, async (req: Request, res: Re
 router.get("/:id/draft-scores", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params["id"] as string;
-    await assertBrandAccessForProject(req, id);
-    const rows = await db.select().from(draftScoresTable).where(eq(draftScoresTable.projectId, id)).limit(1);
+    const brandId = await assertBrandAccessForProject(req, id);
+    const rows = await db.select().from(draftScoresTable).where(and(eq(draftScoresTable.projectId, id), eq(draftScoresTable.brandId, brandId))).limit(1);
     const s = rows[0];
     if (!s) { res.json(null); return; }
     res.json({
@@ -515,7 +523,7 @@ router.get("/:id/draft-scores", requireAuth, async (req: Request, res: Response,
 router.get("/:id/interview-answers", requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const projectId = req.params["id"] as string;
-    await assertBrandAccessForProject(req, projectId);
+    const brandId = await assertBrandAccessForProject(req, projectId);
     const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId
       : typeof req.query["section_id"] === "string" ? (req.query["section_id"] as string) : null;
     const rows = await db
@@ -523,8 +531,8 @@ router.get("/:id/interview-answers", requireAuth, async (req: Request, res: Resp
       .from(interviewAnswersTable)
       .where(
         sectionId
-          ? and(eq(interviewAnswersTable.projectId, projectId), eq(interviewAnswersTable.sectionId, sectionId))
-          : eq(interviewAnswersTable.projectId, projectId),
+          ? and(eq(interviewAnswersTable.projectId, projectId), eq(interviewAnswersTable.brandId, brandId), eq(interviewAnswersTable.sectionId, sectionId))
+          : and(eq(interviewAnswersTable.projectId, projectId), eq(interviewAnswersTable.brandId, brandId)),
       )
       .orderBy(interviewAnswersTable.createdAt);
     res.json(rows.map((a) => ({

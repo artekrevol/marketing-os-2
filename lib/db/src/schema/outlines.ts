@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, foreignKey } from "drizzle-orm/pg-core";
 import { projectsTable } from "./projects";
 import { brandsTable } from "./brands";
 
@@ -18,6 +18,12 @@ export const outlinesTable = pgTable("outlines", {
   lockedAt: timestamp("locked_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  foreignKey({
+    name: "outlines_project_same_brand_fk",
+    columns: [t.projectId, t.brandId],
+    foreignColumns: [projectsTable.id, projectsTable.brandId],
+  }),
+]);
 
 export type Outline = typeof outlinesTable.$inferSelect;

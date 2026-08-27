@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, boolean, foreignKey } from "drizzle-orm/pg-core";
 import { projectsTable } from "./projects";
 import { brandsTable } from "./brands";
 
@@ -15,6 +15,12 @@ export const proofPointsTable = pgTable("proof_points", {
   verificationStatus: text("verification_status").notNull().default("unverified"),
   starred: boolean("starred").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  foreignKey({
+    name: "proof_points_project_same_brand_fk",
+    columns: [t.projectId, t.brandId],
+    foreignColumns: [projectsTable.id, projectsTable.brandId],
+  }),
+]);
 
 export type ProofPoint = typeof proofPointsTable.$inferSelect;

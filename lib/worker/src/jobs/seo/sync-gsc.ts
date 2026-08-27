@@ -66,33 +66,36 @@ interface ConnectionRow {
 }
 
 async function loadAndRefreshConnection(brandId: string): Promise<{ token: string; propertyUrl: string } | null> {
-  const r = (await guardedDb.execute(sql`
-    SELECT id::text, access_token, refresh_token, token_expiry, gsc_property_url
-    FROM google_brand_connections
-    WHERE brand_id = ${brandId}::uuid
-    LIMIT 1
-  `)) as unknown as { rows?: ConnectionRow[] } | ConnectionRow[];
-  const rows = Array.isArray(r) ? r : ((r as { rows?: ConnectionRow[] }).rows ?? []);
-  const conn = rows[0];
-  if (!conn) return null;
-  if (!conn.gsc_property_url) return null; // not configured
+  return withBrandScope(brandId, async ({ db }) => {
+    const r = (await db.execute(sql`
+      SELECT id::text, access_token, refresh_token, token_expiry, gsc_property_url
+      FROM google_brand_connections
+      WHERE brand_id = ${brandId}::uuid
+      LIMIT 1
+    `)) as unknown as { rows?: ConnectionRow[] } | ConnectionRow[];
+    const rows = Array.isArray(r) ? r : ((r as { rows?: ConnectionRow[] }).rows ?? []);
+    const conn = rows[0];
+    if (!conn) return null;
+    if (!conn.gsc_property_url) return null; // not configured
 
-  // Refresh access token if expiring within 5 min (pass encrypted refresh token)
-  let plainToken = decryptToken(conn.access_token);
-  const expiry = new Date(conn.token_expiry);
-  if (expiry <= new Date(Date.now() + 5 * 60 * 1000)) {
-    // refreshToken() handles decryption of the refresh token internally
-    const fresh = await refreshToken(conn.refresh_token);
-    plainToken = fresh.access_token;
-    const newExpiry = new Date(Date.now() + fresh.expires_in * 1000);
-    // Store the new access token encrypted
-    await guardedDb.execute(sql`
-      UPDATE google_brand_connections
-      SET access_token = ${encryptToken(plainToken)}, token_expiry = ${newExpiry.toISOString()}, updated_at = now()
-      WHERE id = ${conn.id}::uuid
-    `);
-  }
-  return { token: plainToken, propertyUrl: conn.gsc_property_url };
+    // Refresh access token if expiring within 5 min (pass encrypted refresh token)
+    let plainToken = decryptToken(conn.access_token);
+    const expiry = new Date(conn.token_expiry);
+    if (expiry <= new Date(Date.now() + 5 * 60 * 1000)) {
+      // refreshToken() handles decryption of the refresh token internally
+      const fresh = await refreshToken(conn.refresh_token);
+      plainToken = fresh.access_token;
+      const newExpiry = new Date(Date.now() + fresh.expires_in * 1000);
+      // Store the new access token encrypted
+      await db.execute(sql`
+        UPDATE google_brand_connections
+        SET access_token = ${encryptToken(plainToken)}, token_expiry = ${newExpiry.toISOString()}, updated_at = now()
+        WHERE id = ${conn.id}::uuid
+          AND brand_id = ${brandId}::uuid
+      `);
+    }
+    return { token: plainToken, propertyUrl: conn.gsc_property_url };
+  });
 }
 
 /* ── GSC search analytics fetch ───────────────────────────────────────────── */
@@ -235,9 +238,11 @@ export async function handleSeoSyncGscData(
   const { brandId } = data;
 
   // Detect first sync — if no rows exist, do a 16-month backfill; otherwise 90-day window.
-  const countRes = (await guardedDb.execute(sql`
-    SELECT COUNT(*)::int AS count FROM gsc_query_rows WHERE brand_id = ${brandId}::uuid
-  `)) as unknown as { rows?: Array<{ count: number }> } | Array<{ count: number }>;
+  const countRes = await withBrandScope(brandId, ({ db }) =>
+    db.execute(sql`
+      SELECT COUNT(*)::int AS count FROM gsc_query_rows WHERE brand_id = ${brandId}::uuid
+    `),
+  ) as unknown as { rows?: Array<{ count: number }> } | Array<{ count: number }>;
   const countRows = Array.isArray(countRes) ? countRes : ((countRes as { rows?: Array<{ count: number }> }).rows ?? []);
   const existingRows = countRows[0]?.count ?? 0;
   const backfillDays = existingRows === 0 ? 490 : 7; // first sync ≈ 16 months; daily sync keeps a 7-day overlap
@@ -256,11 +261,13 @@ export async function handleSeoSyncGscData(
   }
 
   // Create sync log row
-  const logRes = (await guardedDb.execute(sql`
-    INSERT INTO gsc_sync_log (brand_id, status, date_from, date_to)
-    VALUES (${brandId}::uuid, 'running', ${dateFrom}::date, ${dateTo}::date)
-    RETURNING id::text
-  `)) as unknown as { rows?: Array<{ id: string }> } | Array<{ id: string }>;
+  const logRes = await withBrandScope(brandId, ({ db }) =>
+    db.execute(sql`
+      INSERT INTO gsc_sync_log (brand_id, status, date_from, date_to)
+      VALUES (${brandId}::uuid, 'running', ${dateFrom}::date, ${dateTo}::date)
+      RETURNING id::text
+    `),
+  ) as unknown as { rows?: Array<{ id: string }> } | Array<{ id: string }>;
   const logRows = Array.isArray(logRes) ? logRes : ((logRes as { rows?: Array<{ id: string }> }).rows ?? []);
   const syncLogId = logRows[0]?.id ?? null;
 
@@ -294,14 +301,17 @@ export async function handleSeoSyncGscData(
 
     // Update sync log → done
     if (syncLogId) {
-      await guardedDb.execute(sql`
-        UPDATE gsc_sync_log
-        SET status = 'done',
-            query_rows_upserted = ${queryRowsUpserted},
-            page_rows_upserted = ${pageRowsUpserted},
-            completed_at = now()
-        WHERE id = ${syncLogId}::uuid
-      `);
+      await withBrandScope(brandId, ({ db }) =>
+        db.execute(sql`
+          UPDATE gsc_sync_log
+          SET status = 'done',
+              query_rows_upserted = ${queryRowsUpserted},
+              page_rows_upserted = ${pageRowsUpserted},
+              completed_at = now()
+          WHERE id = ${syncLogId}::uuid
+            AND brand_id = ${brandId}::uuid
+        `),
+      );
     }
 
     log.info({ brandId, queryRowsUpserted, pageRowsUpserted, backfillDays }, "gsc-sync: complete");
@@ -316,11 +326,14 @@ export async function handleSeoSyncGscData(
         err instanceof GscAuthError ? "token_revoked"
         : err instanceof GscRateLimitError ? "rate_limited"
         : "error";
-      await guardedDb.execute(sql`
-        UPDATE gsc_sync_log
-        SET status = ${status}, error_message = ${String(err)}, completed_at = now()
-        WHERE id = ${syncLogId}::uuid
-      `).catch(() => {/* ignore log update failures */});
+      await withBrandScope(brandId, ({ db }) =>
+        db.execute(sql`
+          UPDATE gsc_sync_log
+          SET status = ${status}, error_message = ${String(err)}, completed_at = now()
+          WHERE id = ${syncLogId}::uuid
+            AND brand_id = ${brandId}::uuid
+        `),
+      ).catch(() => {/* ignore log update failures */});
     }
     throw err;
   }

@@ -6,7 +6,12 @@ import {
   STAGE_KEYS,
   STAGE_LABELS,
 } from "@workspace/content-ai";
-import { db, projectsTable, researchBriefsTable } from "@workspace/db";
+import {
+  projectsTable,
+  researchBriefsTable,
+  withBrandScope,
+  type Project,
+} from "@workspace/db";
 import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 
@@ -39,16 +44,18 @@ export async function handleAiResearchGenerate(
   data: JobData<"ai.research-generate">,
   log: Logger,
 ): Promise<void> {
-  const { project_id, brandId, playbookVersion } = data;
+  const { project_id, brandId } = data;
+  const playbookVersion = (data as { playbookVersion?: number }).playbookVersion;
+  if (!brandId) throw new Error(`ai.research-generate: brandId is required for project ${project_id}`);
 
-  const projectRows = await db
-    .select()
-    .from(projectsTable)
-    .where(eq(projectsTable.id, project_id))
-    .limit(1);
-  const project = projectRows[0];
+  const projectRows = await withBrandScope(brandId, ({ scoped }) =>
+    scoped.select(projectsTable, {
+      where: eq(projectsTable.id, project_id),
+      limit: 1,
+    }),
+  );
+  const project = (projectRows as Project[])[0];
   if (!project) throw new Error(`project not found: ${project_id}`);
-  if (project.brandId !== brandId) throw new Error(`brand mismatch for project ${project_id}`);
 
   const proj = normalizeProject(project);
 
@@ -58,9 +65,8 @@ export async function handleAiResearchGenerate(
     initialSubStatus[k] = { status: "pending", label: STAGE_LABELS[k], error: null };
   }
 
-  await db
-    .insert(researchBriefsTable)
-    .values({
+  await withBrandScope(brandId, async ({ scoped }) => {
+    const values = {
       projectId: project_id,
       brandId: project.brandId,
       subStatus: initialSubStatus,
@@ -77,26 +83,25 @@ export async function handleAiResearchGenerate(
       entityDataRequirements: null,
       angleInventory: null,
       conversionSignals: null,
-    })
-    .onConflictDoUpdate({
-      target: researchBriefsTable.projectId,
-      set: {
-        subStatus: initialSubStatus,
-        proofPointsStatus: "pending",
-        progressError: null,
-        progressStage: 0,
-        progressStatus: [],
-        searchIntent: null,
-        benchmarkTeardown: null,
-        competitorTeardown: null,
-        synergyMap: null,
-        aiCitationLandscape: null,
-        atomicQuestionMap: null,
-        entityDataRequirements: null,
-        angleInventory: null,
-        conversionSignals: null,
-      },
-    });
+    };
+    await scoped.insert(researchBriefsTable, values, { onConflict: "doNothing" });
+    await scoped.update(researchBriefsTable, {
+      subStatus: values.subStatus,
+      proofPointsStatus: values.proofPointsStatus,
+      progressError: values.progressError,
+      progressStage: values.progressStage,
+      progressStatus: values.progressStatus,
+      searchIntent: values.searchIntent,
+      benchmarkTeardown: values.benchmarkTeardown,
+      competitorTeardown: values.competitorTeardown,
+      synergyMap: values.synergyMap,
+      aiCitationLandscape: values.aiCitationLandscape,
+      atomicQuestionMap: values.atomicQuestionMap,
+      entityDataRequirements: values.entityDataRequirements,
+      angleInventory: values.angleInventory,
+      conversionSignals: values.conversionSignals,
+    }, eq(researchBriefsTable.projectId, project_id));
+  });
 
   log.info({ project_id }, "research-generate: starting parallel stages");
 
@@ -111,7 +116,7 @@ export async function handleAiResearchGenerate(
     },
     "research-generate: prefetch done",
   );
-  await recordPrefetchStatus(project_id, pages);
+  await recordPrefetchStatus(project_id, brandId, pages);
 
   const results = await Promise.allSettled(
     STAGE_KEYS.map((stage) => runStage({ project: proj, stage, pages, playbookVersion })),
@@ -120,10 +125,13 @@ export async function handleAiResearchGenerate(
   const okCount = results.filter((r) => r.status === "fulfilled" && (r.value as any).ok).length;
   log.info({ project_id, ok: okCount, total: STAGE_KEYS.length }, "research-generate: done");
 
-  await db
-    .update(projectsTable)
-    .set({ status: okCount === STAGE_KEYS.length ? "research_ready" : "research_partial" })
-    .where(eq(projectsTable.id, project_id));
+  await withBrandScope(brandId, ({ scoped }) =>
+    scoped.update(
+      projectsTable,
+      { status: okCount === STAGE_KEYS.length ? "research_ready" : "research_partial" },
+      eq(projectsTable.id, project_id),
+    ),
+  );
 
   if (okCount < STAGE_KEYS.length) {
     const failedStages = STAGE_KEYS.filter((_, i) => {
@@ -144,11 +152,10 @@ export async function handleAiResearchGenerate(
 
     // Surface failure details into the research brief row so the
     // frontend can show an actionable message instead of empty sections.
-    await db
-      .update(researchBriefsTable)
-      .set({
+    await withBrandScope(brandId, ({ scoped }) =>
+      scoped.update(researchBriefsTable, {
         progressError: `Research incomplete — ${failedStages.length} of ${STAGE_KEYS.length} stages failed: ${errorSummary}`,
-      })
-      .where(eq(researchBriefsTable.projectId, project_id));
+      }, eq(researchBriefsTable.projectId, project_id)),
+    );
   }
 }

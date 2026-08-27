@@ -6,6 +6,7 @@ import {
   boolean,
   jsonb,
   index,
+  foreignKey,
   unique,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
@@ -56,6 +57,16 @@ export const contentUrlKeywordLinkTable = pgTable(
     isCanonical: boolean("is_canonical").notNull().default(true),
   },
   (t) => [
+    foreignKey({
+      name: "content_url_keyword_link_project_same_brand_fk",
+      columns: [t.projectId, t.brandId],
+      foreignColumns: [projectsTable.id, projectsTable.brandId],
+    }),
+    foreignKey({
+      name: "content_url_keyword_link_keyword_same_brand_fk",
+      columns: [t.keywordId, t.brandId],
+      foreignColumns: [keywordsTable.id, keywordsTable.brandId],
+    }),
     unique("content_url_keyword_link_project_keyword_uq").on(
       t.projectId,
       t.keywordId,
@@ -98,6 +109,16 @@ export const keywordResearchBriefsTable = pgTable(
     ),
   },
   (t) => [
+    foreignKey({
+      name: "keyword_research_briefs_project_same_brand_fk",
+      columns: [t.projectId, t.brandId],
+      foreignColumns: [projectsTable.id, projectsTable.brandId],
+    }),
+    foreignKey({
+      name: "keyword_research_briefs_location_same_brand_fk",
+      columns: [t.locationId, t.brandId],
+      foreignColumns: [locationsTable.id, locationsTable.brandId],
+    }),
     index("krb_brand_keyword_idx").on(t.brandId, t.keywordText),
     index("krb_project_idx").on(t.projectId),
   ],

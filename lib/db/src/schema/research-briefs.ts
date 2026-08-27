@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, jsonb, foreignKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { projectsTable } from "./projects";
 import { brandsTable } from "./brands";
@@ -32,6 +32,12 @@ export const researchBriefsTable = pgTable("research_briefs", {
     .default(sql`'{}'::jsonb`),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  foreignKey({
+    name: "research_briefs_project_same_brand_fk",
+    columns: [t.projectId, t.brandId],
+    foreignColumns: [projectsTable.id, projectsTable.brandId],
+  }),
+]);
 
 export type ResearchBrief = typeof researchBriefsTable.$inferSelect;

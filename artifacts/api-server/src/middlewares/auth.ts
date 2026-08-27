@@ -11,6 +11,16 @@ export interface AuthContext {
   role: UserRole;
 }
 
+/** Resolved tenancy context. Never derive authorization from frontend state. */
+export interface BrandRequestContext {
+  brandId: string;
+  actorId: string;
+  role: UserRole;
+  isAdmin: boolean;
+  authorization: "admin" | "brand_access";
+  correlationId: string;
+}
+
 /**
  * Roles permitted to enter the SEO OS module. "outreach" is a DEPARTMENT,
  * not a role, and is intentionally excluded. Kept in sync with the SEO OS
@@ -31,6 +41,7 @@ declare global {
   namespace Express {
     interface Request {
       auth?: AuthContext;
+      brandContext?: BrandRequestContext;
     }
   }
 }
@@ -213,6 +224,14 @@ export async function assertBrandAccessForProject(
   if (!auth.isAdmin && !(await userHasBrandAccess(auth.userId, brandId))) {
     throw new BrandAccessError(403, "forbidden");
   }
+  req.brandContext = {
+    brandId,
+    actorId: auth.userId,
+    role: auth.role,
+    isAdmin: auth.isAdmin,
+    authorization: auth.isAdmin ? "admin" : "brand_access",
+    correlationId: req.header("x-request-id") ?? String(req.id),
+  };
   return brandId;
 }
 
@@ -230,6 +249,14 @@ export async function assertBrandAccess(
   if (!auth.isAdmin && !(await userHasBrandAccess(auth.userId, brandId))) {
     throw new BrandAccessError(403, "forbidden");
   }
+  req.brandContext = {
+    brandId,
+    actorId: auth.userId,
+    role: auth.role,
+    isAdmin: auth.isAdmin,
+    authorization: auth.isAdmin ? "admin" : "brand_access",
+    correlationId: req.header("x-request-id") ?? String(req.id),
+  };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, integer, numeric, boolean, jsonb, unique } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, numeric, boolean, jsonb, unique, foreignKey } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 import { projectsTable } from "./projects";
 
@@ -29,6 +29,11 @@ export const draftsTable = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    foreignKey({
+      name: "drafts_project_same_brand_fk",
+      columns: [t.projectId, t.brandId],
+      foreignColumns: [projectsTable.id, projectsTable.brandId],
+    }),
     // One draft per (project, section). Required so the upsert in
     // /api/ai/draft-section's onConflictDoUpdate has a real conflict
     // target — without this Postgres throws

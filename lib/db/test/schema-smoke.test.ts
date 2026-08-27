@@ -165,8 +165,9 @@ type _RecoverySnapshotAvgPositionRequired = AssertRequiredField<typeof recoveryS
 type _RecoverySnapshotTop10Required       = AssertRequiredField<typeof recoverySnapshotsTable, "keywordsInTop10">;
 type _RecoverySnapshotTop3Required        = AssertRequiredField<typeof recoverySnapshotsTable, "keywordsInTop3">;
 
-// ── fetched_pages (nullable brand_id — system-level page cache) ───────────────
-// brand_id is intentionally nullable; url and content are required.
+// ── fetched_pages (brand-scoped cache) ────────────────────────────────────────
+// Cache hits are valid only within the requesting brand.
+type _FetchedPageBrandIdRequired = AssertRequiredField<typeof fetchedPagesTable, "brandId">;
 type _FetchedPageUrlRequired     = AssertRequiredField<typeof fetchedPagesTable, "url">;
 type _FetchedPageContentRequired = AssertRequiredField<typeof fetchedPagesTable, "content">;
 
@@ -312,8 +313,8 @@ const _minRecoverySnapshotInsert: typeof recoverySnapshotsTable.$inferInsert = {
   keywordsInTop3: 9,
 };
 
-// Nullable brand_id tables: minimal inserts confirm nothing required beyond table-specific fields.
 const _minFetchedPageInsert: typeof fetchedPagesTable.$inferInsert = {
+  brandId: BRAND_UUID,
   url: "https://example.com/some-page",
   content: "<html>…page text…</html>",
 };
@@ -516,17 +517,18 @@ describe("schema smoke — nullable brand_id tables correctly allow omitting bra
     expect(result.success).toBe(true);
   });
 
-  it("fetched_pages.brandId is optional; url and content are required", () => {
+  it("fetched_pages.brandId is required; url and content are required", () => {
     const zodSchema = createInsertSchema(fetchedPagesTable);
     const withBrand = zodSchema.safeParse(_minFetchedPageInsert);
     expect(withBrand.success).toBe(true);
+    expect(zodSchema.safeParse({ url: "https://example.com", content: "x" }).success).toBe(false);
     const empty = zodSchema.safeParse({});
     expect(empty.success).toBe(false);
     if (!empty.success) {
       const paths = empty.error.issues.map((e) => e.path.join("."));
       expect(paths).toContain("url");
       expect(paths).toContain("content");
-      expect(paths).not.toContain("brandId");
+      expect(paths).toContain("brandId");
     }
   });
 

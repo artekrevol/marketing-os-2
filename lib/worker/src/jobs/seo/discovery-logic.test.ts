@@ -20,6 +20,7 @@ import {
   kdPassesThroughFilter,
   computeDropRatePct,
   resolveKdThreshold,
+  DISCOVERY_KEYWORD_INSERT_OPTIONS,
 } from "./discovery-weekly";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,6 +50,19 @@ function dfsEnvelope(result: unknown[] = []) {
     ],
   };
 }
+
+describe("Discovery candidate persistence", () => {
+  it("keeps overlapping related and competitor candidates conflict-tolerant", () => {
+    const related = new Set(["shared keyword", "related only"]);
+    const competitor = new Set(["shared keyword", "competitor only"]);
+    expect([...related].filter((keyword) => competitor.has(keyword))).toEqual([
+      "shared keyword",
+    ]);
+    expect(DISCOVERY_KEYWORD_INSERT_OPTIONS).toEqual({
+      onConflict: "doNothing",
+    });
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests 9-12: Labs Zod schema structural validation

@@ -19,13 +19,14 @@ import {
   date,
   index,
   uniqueIndex,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 
 /* ── OAuth state (CSRF) — expires in 10 min, not brand-scoped ─────────────── */
 export const googleOauthStatesTable = pgTable("google_oauth_states", {
   id: uuid("id").primaryKey().defaultRandom(),
-  brandId: uuid("brand_id").notNull(),
+  brandId: uuid("brand_id").notNull().references(() => brandsTable.id, { onDelete: "cascade" }),
   createdBy: text("created_by").notNull(),
   returnTo: text("return_to"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

@@ -20,6 +20,15 @@ import { assertNotDuplicate } from "../idempotency";
 const SUCCESS_EVENT = "seo.discovery.weekly.completed";
 
 /**
+ * Related-keyword and competitor mining can intentionally converge on the
+ * same brand/location keyword. Keep both insert sites conflict-tolerant while
+ * still routing them through ScopedDb for the brand predicate.
+ */
+export const DISCOVERY_KEYWORD_INSERT_OPTIONS = {
+  onConflict: "doNothing",
+} as const;
+
+/**
  * Returns the ISO week label (YYYY-WW) for a given Date (UTC).
  * Week 1 is the week containing the first Thursday of the year (ISO 8601).
  *
@@ -378,10 +387,7 @@ export async function handleSeoDiscoveryWeekly(
           : null,
       }));
 
-      await db
-        .insert(keywordsTable)
-        .values(rows)
-        .onConflictDoNothing();
+      await scoped.insert(keywordsTable, rows, DISCOVERY_KEYWORD_INSERT_OPTIONS);
 
       insertedCandidates += rows.length;
     }
@@ -549,7 +555,7 @@ export async function handleSeoDiscoveryWeekly(
         candidateReviewStatus: "pending" as const,
         difficulty,
       }));
-      await db.insert(keywordsTable).values(rows).onConflictDoNothing();
+      await scoped.insert(keywordsTable, rows, DISCOVERY_KEYWORD_INSERT_OPTIONS);
       competitorCandidatesInserted += rows.length;
     }
 

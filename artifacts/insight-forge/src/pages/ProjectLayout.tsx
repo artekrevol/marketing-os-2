@@ -3,30 +3,45 @@ import { useEffect, useState, useCallback } from "react";
 import StageNav from "@/components/StageNav";
 import type { Project } from "@/lib/types";
 import { DraftKeywordBadge } from "@/components/DraftKeywordBadge";
+import { useActiveBrand } from "@/lib/brands";
 
 export default function ProjectLayout() {
   const { id } = useParams();
+  const { activeBrand, loading: brandLoading } = useActiveBrand();
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    if (!id) return;
-    const resp = await fetch(`/api/projects/${id}`, { credentials: "include" });
-    if (!resp.ok) { setLoading(false); return; }
+    if (!id || !activeBrand) return;
+    setLoading(true);
+    setProject(null);
+    const resp = await fetch(
+      `/api/projects/${id}?brandId=${encodeURIComponent(activeBrand.id)}`,
+      { credentials: "include" },
+    );
+    if (!resp.ok) {
+      setLoading(false);
+      return;
+    }
     const data = (await resp.json()) as Project;
+    // Keep the detail view aligned with the server-authorized brand context.
+    if (data.brand_id !== activeBrand.id) {
+      setLoading(false);
+      return;
+    }
     setProject(data);
     setLoading(false);
-  }, [id]);
+  }, [id, activeBrand]);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id || brandLoading || !activeBrand) return;
     let mounted = true;
     void load();
     const timer = setInterval(() => { if (mounted) void load(); }, 10000);
     return () => { mounted = false; clearInterval(timer); };
-  }, [id, load]);
+  }, [id, brandLoading, activeBrand, load]);
 
-  if (loading) return <div className="p-12 text-ink-muted">Loading project…</div>;
+  if (brandLoading || loading) return <div className="p-12 text-ink-muted">Loading project…</div>;
   if (!project) return <Navigate to="/" replace />;
 
   return (

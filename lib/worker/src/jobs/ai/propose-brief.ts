@@ -4,7 +4,7 @@ import {
   logUsage,
   buildAnthropicUserId,
 } from "@workspace/content-ai";
-import { db, projectsTable } from "@workspace/db";
+import { projectsTable, withBrandScope, type Project } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 
@@ -182,29 +182,33 @@ export async function handleAiProposeBrief(
   data: JobData<"ai.propose-brief">,
   log: Logger,
 ): Promise<void> {
-  const { project_id, brandId, playbookVersion } = data;
+  const { project_id, brandId } = data;
+  const playbookVersion = (data as { playbookVersion?: number }).playbookVersion;
+  if (!brandId) throw new Error(`ai.propose-brief: brandId is required for project ${project_id}`);
   const apiKey = process.env["ANTHROPIC_API_KEY"];
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
-  const projectRows = await db
-    .select()
-    .from(projectsTable)
-    .where(eq(projectsTable.id, project_id))
-    .limit(1);
-  const project = projectRows[0];
+  const projectRows = await withBrandScope(brandId, ({ scoped }) =>
+    scoped.select(projectsTable, {
+      where: eq(projectsTable.id, project_id),
+      limit: 1,
+    }),
+  );
+  const project = (projectRows as Project[])[0];
   if (!project) throw new Error(`project not found: ${project_id}`);
-  if (project.brandId !== brandId) {
-    throw new Error(`brand mismatch for project ${project_id}`);
-  }
+  const updateProject = (set: Record<string, unknown>) =>
+    withBrandScope(brandId, ({ scoped }) =>
+      scoped.update(projectsTable, set, eq(projectsTable.id, project_id)),
+    );
 
   const topicTrimmed = String(project.topic || "").trim();
   if (topicTrimmed.length === 0) {
-    await db.update(projectsTable).set({ status: "brief_failed", briefError: "Project topic is empty." }).where(eq(projectsTable.id, project_id));
+    await updateProject({ status: "brief_failed", briefError: "Project topic is empty." });
     throw new Error("Project topic is empty.");
   }
   if (topicTrimmed.length > TOPIC_MAX) {
     const errMsg = `Project topic exceeds ${TOPIC_MAX} characters (got ${topicTrimmed.length}).`;
-    await db.update(projectsTable).set({ status: "brief_failed", briefError: errMsg }).where(eq(projectsTable.id, project_id));
+    await updateProject({ status: "brief_failed", briefError: errMsg });
     throw new Error(errMsg);
   }
 
@@ -312,13 +316,13 @@ Then call submit_brief_proposal with the complete structured output including ai
 
   if (!resp) {
     const msg = `Anthropic request failed after retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`;
-    await db.update(projectsTable).set({ status: "brief_failed", briefError: msg }).where(eq(projectsTable.id, project_id));
+    await updateProject({ status: "brief_failed", briefError: msg });
     throw new Error(msg);
   }
   if (!resp.ok) {
     const txt = await resp.text();
     const msg = `Anthropic ${resp.status}: ${txt.slice(0, 500)}`;
-    await db.update(projectsTable).set({ status: "brief_failed", briefError: msg }).where(eq(projectsTable.id, project_id));
+    await updateProject({ status: "brief_failed", briefError: msg });
     throw new Error(msg);
   }
 
@@ -338,7 +342,7 @@ Then call submit_brief_proposal with the complete structured output including ai
   if (!toolUse) {
     const text = (responseData.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
     const msg = `No proposal returned. Raw: ${text.slice(0, 500)}`;
-    await db.update(projectsTable).set({ status: "brief_failed", briefError: msg }).where(eq(projectsTable.id, project_id));
+    await updateProject({ status: "brief_failed", briefError: msg });
     throw new Error(msg);
   }
 
@@ -347,7 +351,7 @@ Then call submit_brief_proposal with the complete structured output including ai
   const benchmarkTop = (proposal.benchmark_candidates || []).sort((a: any, b: any) => a.rank - b.rank)[0];
   const competitorTop = (proposal.competitor_candidates || []).sort((a: any, b: any) => a.rank - b.rank)[0];
 
-  await db.update(projectsTable).set({
+  await updateProject({
     aiProposedBrief: proposal,
     keywordCluster: proposal.keyword_cluster || [],
     keyword: primary?.keyword || project.keyword,
@@ -360,7 +364,7 @@ Then call submit_brief_proposal with the complete structured output including ai
     mode: proposal.mode || project.mode,
     playbookVersion: resolvedPlaybookVersion,
     status: "brief_proposed",
-  }).where(eq(projectsTable.id, project_id));
+  });
 
   log.info({ project_id, playbookVersion }, "propose-brief: complete");
 }

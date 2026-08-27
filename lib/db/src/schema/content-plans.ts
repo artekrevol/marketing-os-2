@@ -8,6 +8,7 @@ import {
   numeric,
   jsonb,
   index,
+  foreignKey,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
@@ -145,6 +146,16 @@ export const contentPlansTable = pgTable(
       .defaultNow(),
   },
   (t) => [
+    foreignKey({
+      name: "content_plans_project_same_brand_fk",
+      columns: [t.projectId, t.brandId],
+      foreignColumns: [projectsTable.id, projectsTable.brandId],
+    }),
+    foreignKey({
+      name: "content_plans_superseded_same_brand_fk",
+      columns: [t.supersededBy, t.brandId],
+      foreignColumns: [t.id, t.brandId],
+    }),
     index("content_plans_brand_project_idx").on(t.brandId, t.projectId),
     index("content_plans_status_idx").on(t.brandId, t.status),
     index("content_plans_keyword_idx").on(

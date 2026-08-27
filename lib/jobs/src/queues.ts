@@ -1,5 +1,6 @@
 import { Queue, type JobsOptions } from "bullmq";
 import { getRedisConnection } from "./connection";
+import { JOB_REGISTRY, type JobData, type JobName } from "./types";
 
 /**
  * The five named queues. Sprint 3 rename:
@@ -62,14 +63,22 @@ export async function closeAllQueues(): Promise<void> {
  * Recovery War Room uses this to register the nightly snapshot
  * fan-out (`scoring.recovery-snapshot-nightly`, `0 3 * * *`).
  */
-export async function addRepeatable(
+export async function addRepeatable<N extends JobName>(
   queueName: QueueName,
-  jobName: string,
-  data: Record<string, unknown>,
+  jobName: N,
+  data: JobData<N>,
   pattern: string,
 ): Promise<void> {
-  await getQueue(queueName).add(jobName, data, {
+  const entry = JOB_REGISTRY[jobName];
+  if (entry.queue !== queueName) {
+    throw new Error(`addRepeatable: ${jobName} belongs to ${entry.queue}, not ${queueName}`);
+  }
+  const parsed = entry.schema.parse(data) as JobData<N>;
+  await getQueue(queueName).add(jobName, parsed, {
     repeat: { pattern },
+    // The repeat identity must include the tenant for brand jobs. The
+    // scheduler payload's idempotency key is the canonical identity.
+    jobId: parsed.idempotencyKey,
     // Repeatable schedulers should not pile up on retry storms — one
     // delayed re-attempt is plenty; the next cron tick will fire
     // regardless.

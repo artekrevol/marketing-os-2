@@ -6,7 +6,7 @@ import {
   STAGE_KEYS,
   type StageKey,
 } from "@workspace/content-ai";
-import { db, projectsTable } from "@workspace/db";
+import { projectsTable, withBrandScope, type Project } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 
@@ -15,19 +15,20 @@ export async function handleAiResearchRetryCard(
   log: Logger,
 ): Promise<void> {
   const { project_id, stage, brandId, playbookVersion } = data;
+  if (!brandId) throw new Error(`ai.research-retry-card: brandId is required for project ${project_id}`);
 
   if (!(STAGE_KEYS as readonly string[]).includes(stage)) {
     throw new Error(`invalid stage: ${stage}`);
   }
 
-  const projectRows = await db
-    .select()
-    .from(projectsTable)
-    .where(eq(projectsTable.id, project_id))
-    .limit(1);
-  const project = projectRows[0];
+  const projectRows = await withBrandScope(brandId, ({ scoped }) =>
+    scoped.select(projectsTable, {
+      where: eq(projectsTable.id, project_id),
+      limit: 1,
+    }),
+  );
+  const project = (projectRows as Project[])[0];
   if (!project) throw new Error(`project not found: ${project_id}`);
-  if (project.brandId !== brandId) throw new Error(`brand mismatch for project ${project_id}`);
 
   // Normalize Drizzle camelCase to snake_case for content-ai functions.
   const proj = {
@@ -46,7 +47,7 @@ export async function handleAiResearchRetryCard(
   };
 
   const pages = await prefetchPages(proj);
-  await recordPrefetchStatus(project_id, pages);
+  await recordPrefetchStatus(project_id, brandId, pages);
   const result = await runStage({ project: proj, stage: stage as StageKey, pages, playbookVersion });
 
   if (!result.ok) {

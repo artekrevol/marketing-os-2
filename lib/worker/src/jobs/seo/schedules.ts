@@ -6,7 +6,7 @@ import {
   crawlSchedulesTable,
   type CrawlSchedule,
 } from "@workspace/db";
-import { registerCrawlSchedule, addRepeatable, buildJobId } from "@workspace/jobs";
+import { registerCrawlSchedule, addRepeatable } from "@workspace/jobs";
 import type { Logger } from "pino";
 
 /**
@@ -32,7 +32,11 @@ export async function registerDiscoveryWeeklySchedule(
       "seo.discovery.weekly",
       {
         brandId,
-        idempotencyKey: buildJobId("seo.discovery.weekly", `${brandId}:weekly`),
+        idempotencyKey: `${brandId}-weekly`,
+        maxKd: 70,
+        seedLimit: 20,
+        relatedLimit: 500,
+        competitorRankedLimit: 200,
       },
       "0 2 * * 1", // Monday 02:00 UTC
     );

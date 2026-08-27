@@ -79,6 +79,17 @@ export async function handleSeoIngestAhrefsSnapshot(
 
   const filePaths = (snap["file_paths"] as FileEntry[]) ?? [];
   if (filePaths.length === 0) throw new Error("Snapshot has no files");
+  const expectedPrefix = `ahrefs/${brandId}/${String(snap["snapshot_month"] ?? "")}/`;
+  for (const entry of filePaths) {
+    if (
+      !entry ||
+      typeof entry.objectName !== "string" ||
+      !entry.objectName.startsWith(expectedPrefix) ||
+      entry.objectName.includes("..")
+    ) {
+      throw new Error(`Snapshot contains an object outside the brand storage prefix`);
+    }
+  }
 
   // ── 2. Mark as ingesting ───────────────────────────────────────────────
   await withBrandScope(brandId, async ({ db }) => {
@@ -206,6 +217,7 @@ export async function handleSeoIngestAhrefsSnapshot(
           delta_pages_recovered   = ${delta.pagesRecovered},
           delta_pages_crashed     = ${delta.pagesCrashed}
         WHERE id = ${batchId}::uuid
+          AND brand_id = ${brandId}::uuid
       `);
       await db.execute(sql`
         UPDATE ahrefs_raw_snapshots SET

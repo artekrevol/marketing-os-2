@@ -10,6 +10,7 @@ import {
   timestamp,
   index,
   unique,
+  foreignKey,
   check,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
@@ -51,6 +52,7 @@ export const locationsTable = pgTable(
   (t) => [
     index("locations_brand_id_idx").on(t.brandId),
     unique("locations_brand_dfsc_uq").on(t.brandId, t.dataforseoLocationCode),
+    unique("locations_id_brand_uq").on(t.id, t.brandId),
   ],
 );
 
@@ -80,6 +82,12 @@ export const keywordListsTable = pgTable(
     index("keyword_lists_brand_id_idx").on(t.brandId),
     index("keyword_lists_parent_idx").on(t.parentListId),
     unique("keyword_lists_brand_name_uq").on(t.brandId, t.name),
+    unique("keyword_lists_id_brand_uq").on(t.id, t.brandId),
+    foreignKey({
+      name: "keyword_lists_parent_same_brand_fk",
+      columns: [t.parentListId, t.brandId],
+      foreignColumns: [t.id, t.brandId],
+    }),
   ],
 );
 
@@ -162,6 +170,17 @@ export const keywordsTable = pgTable(
       t.keywordText,
       t.locationId,
     ),
+    unique("keywords_id_brand_uq").on(t.id, t.brandId),
+    foreignKey({
+      name: "keywords_list_same_brand_fk",
+      columns: [t.listId, t.brandId],
+      foreignColumns: [keywordListsTable.id, keywordListsTable.brandId],
+    }),
+    foreignKey({
+      name: "keywords_location_same_brand_fk",
+      columns: [t.locationId, t.brandId],
+      foreignColumns: [locationsTable.id, locationsTable.brandId],
+    }),
     check(
       "keywords_priority_check",
       sql`${t.priority} IS NULL OR ${t.priority} IN ('P0', 'P1', 'P2', 'P3')`,
@@ -213,6 +232,7 @@ export const crawlBatchesTable = pgTable(
       t.status,
       t.createdAt.desc(),
     ),
+    unique("crawl_batches_id_brand_uq").on(t.id, t.brandId),
   ],
 );
 
@@ -246,6 +266,11 @@ export const crawlSchedulesTable = pgTable(
     index("crawl_schedules_next_run_idx")
       .on(t.nextRunAt)
       .where(sql`active = true`),
+    foreignKey({
+      name: "crawl_schedules_list_same_brand_fk",
+      columns: [t.listId, t.brandId],
+      foreignColumns: [keywordListsTable.id, keywordListsTable.brandId],
+    }),
   ],
 );
 
@@ -285,6 +310,21 @@ export const rankSnapshotsTable = pgTable(
     ),
     index("rank_snapshots_brand_captured_idx").on(t.brandId, t.capturedAt.desc()),
     index("rank_snapshots_batch_idx").on(t.batchId),
+    foreignKey({
+      name: "rank_snapshots_keyword_same_brand_fk",
+      columns: [t.keywordId, t.brandId],
+      foreignColumns: [keywordsTable.id, keywordsTable.brandId],
+    }),
+    foreignKey({
+      name: "rank_snapshots_location_same_brand_fk",
+      columns: [t.locationId, t.brandId],
+      foreignColumns: [locationsTable.id, locationsTable.brandId],
+    }),
+    foreignKey({
+      name: "rank_snapshots_batch_same_brand_fk",
+      columns: [t.batchId, t.brandId],
+      foreignColumns: [crawlBatchesTable.id, crawlBatchesTable.brandId],
+    }),
   ],
 );
 
@@ -312,6 +352,11 @@ export const competitorPagesTable = pgTable(
   (t) => [
     index("competitor_pages_brand_domain_idx").on(t.brandId, t.competitorDomain),
     index("competitor_pages_keyword_idx").on(t.keywordId),
+    foreignKey({
+      name: "competitor_pages_keyword_same_brand_fk",
+      columns: [t.keywordId, t.brandId],
+      foreignColumns: [keywordsTable.id, keywordsTable.brandId],
+    }),
   ],
 );
 

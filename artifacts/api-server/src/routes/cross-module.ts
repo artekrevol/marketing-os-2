@@ -8,6 +8,7 @@ import {
   withBrandScope,
   keywordsTable,
   locationsTable,
+  projectsTable,
   type Keyword,
   type Location,
 } from "@workspace/db";
@@ -69,6 +70,18 @@ router.get("/keyword-context", async (req, res) => {
     res.status(400).json({ error: "locationId must be a UUID" });
     return;
   }
+  if (locationId) {
+    const owned = await withBrandScope(guard.brandId, ({ scoped }) =>
+      scoped.select(locationsTable, {
+        where: eq(locationsTable.id, locationId),
+        limit: 1,
+      }),
+    );
+    if (!(owned as Location[])[0]) {
+      res.status(404).json({ error: "location not found in this brand" });
+      return;
+    }
+  }
   // getKeywordContext never throws — it returns reason:'system-error' on failure.
   const result = await getKeywordContext(
     guard.brandId,
@@ -90,6 +103,16 @@ router.get("/keywords-for-content", async (req, res) => {
     res.status(400).json({ error: "projectId must be a UUID" });
     return;
   }
+  const ownedProject = await withBrandScope(guard.brandId, ({ scoped }) =>
+    scoped.select(projectsTable, {
+      where: eq(projectsTable.id, projectId),
+      limit: 1,
+    }),
+  );
+  if (!(ownedProject as Array<{ id: string }>)[0]) {
+    res.status(404).json({ error: "project not found in this brand" });
+    return;
+  }
   const result = await getKeywordsForContent(guard.brandId, projectId);
   res.json(result);
 });
@@ -104,6 +127,16 @@ router.get("/content-for-keyword", async (req, res) => {
   const keywordId = req.query["keywordId"];
   if (typeof keywordId !== "string" || !UUID_RE.test(keywordId)) {
     res.status(400).json({ error: "keywordId must be a UUID" });
+    return;
+  }
+  const ownedKeyword = await withBrandScope(guard.brandId, ({ scoped }) =>
+    scoped.select(keywordsTable, {
+      where: eq(keywordsTable.id, keywordId),
+      limit: 1,
+    }),
+  );
+  if (!(ownedKeyword as Keyword[])[0]) {
+    res.status(404).json({ error: "keyword not found in this brand" });
     return;
   }
   const result = await getContentForKeyword(guard.brandId, keywordId);
@@ -213,6 +246,16 @@ router.post("/attach", async (req, res) => {
   const projectId = body.projectId;
   const isCanonical = body.isCanonical !== false; // default true for an override
   try {
+    const ownedProject = await withBrandScope(guard.brandId, ({ scoped }) =>
+      scoped.select(projectsTable, {
+        where: eq(projectsTable.id, projectId),
+        limit: 1,
+      }),
+    );
+    if (!(ownedProject as Array<{ id: string }>)[0]) {
+      res.status(404).json({ error: "project not found in this brand" });
+      return;
+    }
     // The helper runs ownership checks, atomic canonical demotion, link
     // (re)attach, counter increment, and provenance all in ONE transaction.
     const out = await attachKeywordToContent(

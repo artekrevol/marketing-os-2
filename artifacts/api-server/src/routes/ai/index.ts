@@ -53,6 +53,12 @@ import { lookup as dnsLookup } from "node:dns/promises";
 
 const router = Router();
 
+function resolvedRequestBrand(req: { brandContext?: { brandId: string } }): string {
+  const brandId = req.brandContext?.brandId;
+  if (!brandId) throw new Error("brand context missing");
+  return brandId;
+}
+
 /** True for loopback / private / link-local / unique-local / CGNAT addresses. */
 function isPrivateIp(ip: string): boolean {
   const v4 = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
@@ -232,8 +238,9 @@ router.post("/propose-brief", requireAuth, requireProjectAccess, async (req, res
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
+    const brandId = resolvedRequestBrand(req);
 
-    const rows = await db.select({ id: projectsTable.id, topic: projectsTable.topic, brandId: projectsTable.brandId }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
+    const rows = await db.select({ id: projectsTable.id, topic: projectsTable.topic, brandId: projectsTable.brandId }).from(projectsTable).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1);
     const project = rows[0];
     if (!project) { res.status(500).json({ error: "project not found" }); return; }
 
@@ -245,7 +252,7 @@ router.post("/propose-brief", requireAuth, requireProjectAccess, async (req, res
     }
 
     const playbook = await getActivePlaybook(project.brandId);
-    await db.update(projectsTable).set({ status: "brief_proposing" }).where(eq(projectsTable.id, project_id));
+    await db.update(projectsTable).set({ status: "brief_proposing" }).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId)));
 
     await getQueue("ai").add("ai.propose-brief", {
       idempotencyKey: `propose-brief:${project_id}`,
@@ -269,8 +276,9 @@ router.post("/research-generate", requireAuth, requireProjectAccess, async (req,
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
+    const brandId = resolvedRequestBrand(req);
 
-    const projectRows = await db.select({ brandId: projectsTable.brandId, playbookVersion: projectsTable.playbookVersion }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
+    const projectRows = await db.select({ brandId: projectsTable.brandId, playbookVersion: projectsTable.playbookVersion }).from(projectsTable).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1);
     const project = projectRows[0];
     if (!project) { res.status(404).json({ error: "project not found" }); return; }
     const playbook = await getActivePlaybook(project.brandId, project.playbookVersion);
@@ -300,8 +308,9 @@ router.post("/research-retry-card", requireAuth, requireProjectAccess, async (re
       res.status(400).json({ error: `invalid stage: ${stage}` });
       return;
     }
+    const brandId = resolvedRequestBrand(req);
 
-    const projectRows = await db.select({ brandId: projectsTable.brandId, playbookVersion: projectsTable.playbookVersion }).from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1);
+    const projectRows = await db.select({ brandId: projectsTable.brandId, playbookVersion: projectsTable.playbookVersion }).from(projectsTable).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1);
     const project = projectRows[0];
     if (!project) { res.status(404).json({ error: "project not found" }); return; }
     const playbook = await getActivePlaybook(project.brandId, project.playbookVersion);
@@ -429,11 +438,12 @@ router.post("/outline-generate", requireAuth, requireProjectAccess, async (req, 
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
+    const brandId = resolvedRequestBrand(req);
 
     const [projectRows, briefRows, proofRows] = await Promise.all([
-      db.select().from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
-      db.select().from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
-      db.select().from(proofPointsTable).where(and(eq(proofPointsTable.projectId, project_id), eq(proofPointsTable.starred, true))),
+      db.select().from(projectsTable).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1),
+      db.select().from(researchBriefsTable).where(and(eq(researchBriefsTable.projectId, project_id), eq(researchBriefsTable.brandId, brandId))).limit(1),
+      db.select().from(proofPointsTable).where(and(eq(proofPointsTable.projectId, project_id), eq(proofPointsTable.brandId, brandId), eq(proofPointsTable.starred, true))),
     ]);
     const project = projectRows[0];
     const brief = briefRows[0];
@@ -548,7 +558,7 @@ When assigning internal_links to sections, use ONLY the INTERNAL LINK TARGETS ab
         },
       });
 
-    await db.update(projectsTable).set({ currentStage: 2, status: "outlining" }).where(eq(projectsTable.id, project_id));
+    await db.update(projectsTable).set({ currentStage: 2, status: "outlining" }).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId)));
 
     res.json({ ok: true, outline: out });
   } catch (e) {
@@ -893,13 +903,14 @@ router.post("/draft-section", requireAuth, requireProjectAccess, async (req, res
       project_id?: string; section_id?: string; revision_instruction?: string;
     };
     if (!project_id || !section_id) { res.status(400).json({ error: "project_id and section_id required" }); return; }
+    const brandId = resolvedRequestBrand(req);
 
     const [projectRows, outlineRows, proofRows, briefRows, existingRows] = await Promise.all([
-      db.select().from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
-      db.select().from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
-      db.select().from(proofPointsTable).where(and(eq(proofPointsTable.projectId, project_id), eq(proofPointsTable.starred, true))),
-      db.select({ synergyMap: researchBriefsTable.synergyMap, conversionSignals: researchBriefsTable.conversionSignals, aiCitationLandscape: researchBriefsTable.aiCitationLandscape, atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, updatedAt: researchBriefsTable.updatedAt }).from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
-      db.select().from(draftsTable).where(and(eq(draftsTable.projectId, project_id), eq(draftsTable.sectionId, section_id))).limit(1),
+      db.select().from(projectsTable).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1),
+      db.select().from(outlinesTable).where(and(eq(outlinesTable.projectId, project_id), eq(outlinesTable.brandId, brandId))).limit(1),
+      db.select().from(proofPointsTable).where(and(eq(proofPointsTable.projectId, project_id), eq(proofPointsTable.brandId, brandId), eq(proofPointsTable.starred, true))),
+      db.select({ synergyMap: researchBriefsTable.synergyMap, conversionSignals: researchBriefsTable.conversionSignals, aiCitationLandscape: researchBriefsTable.aiCitationLandscape, atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, updatedAt: researchBriefsTable.updatedAt }).from(researchBriefsTable).where(and(eq(researchBriefsTable.projectId, project_id), eq(researchBriefsTable.brandId, brandId))).limit(1),
+      db.select().from(draftsTable).where(and(eq(draftsTable.projectId, project_id), eq(draftsTable.brandId, brandId), eq(draftsTable.sectionId, section_id))).limit(1),
     ]);
     const project = projectRows[0];
     const outline = outlineRows[0];
@@ -1169,7 +1180,7 @@ Produce real prose. Do not produce a brief. Then call submit_draft with:
       });
     }
 
-    await db.update(projectsTable).set({ currentStage: 3, status: "drafting" }).where(eq(projectsTable.id, project_id));
+    await db.update(projectsTable).set({ currentStage: 3, status: "drafting" }).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId)));
 
     res.json({ ok: true, draft: { ...out, ...(review || {}) } });
   } catch (e) {
@@ -1187,11 +1198,12 @@ router.post("/interview-step", requireAuth, requireProjectAccess, async (req, re
       project_id?: string; section_id?: string; last_answer?: string;
     };
     if (!project_id || !section_id) { res.status(400).json({ error: "project_id and section_id required" }); return; }
+    const brandId = resolvedRequestBrand(req);
 
     const [projectRows, outlineRows, priorRows] = await Promise.all([
-      db.select().from(projectsTable).where(eq(projectsTable.id, project_id)).limit(1),
-      db.select({ sections: outlinesTable.sections, h1: outlinesTable.h1 }).from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
-      db.select().from(interviewAnswersTable).where(eq(interviewAnswersTable.projectId, project_id)).orderBy(interviewAnswersTable.createdAt),
+      db.select().from(projectsTable).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1),
+      db.select({ sections: outlinesTable.sections, h1: outlinesTable.h1 }).from(outlinesTable).where(and(eq(outlinesTable.projectId, project_id), eq(outlinesTable.brandId, brandId))).limit(1),
+      db.select().from(interviewAnswersTable).where(and(eq(interviewAnswersTable.projectId, project_id), eq(interviewAnswersTable.brandId, brandId))).orderBy(interviewAnswersTable.createdAt),
     ]);
     const project = projectRows[0];
     const outline = outlineRows[0];
@@ -1563,12 +1575,13 @@ router.post("/final-stitch", requireAuth, requireProjectAccess, async (req, res)
   try {
     const { project_id } = req.body as { project_id?: string };
     if (!project_id) { res.status(400).json({ error: "project_id required" }); return; }
+    const brandId = resolvedRequestBrand(req);
 
     const [projectRows, outlineRows, draftRows, briefRows] = await Promise.all([
-      db.select({ id: projectsTable.id, brandId: projectsTable.brandId, brandName: brandsTable.name, playbookVersion: projectsTable.playbookVersion, keyword: projectsTable.keyword, contentType: projectsTable.contentType, funnelStage: projectsTable.funnelStage, icps: projectsTable.icps, serpSignals: projectsTable.serpSignals, lsiRetrieved: projectsTable.lsiRetrieved }).from(projectsTable).innerJoin(brandsTable, eq(projectsTable.brandId, brandsTable.id)).where(eq(projectsTable.id, project_id)).limit(1),
-      db.select().from(outlinesTable).where(eq(outlinesTable.projectId, project_id)).limit(1),
-      db.select().from(draftsTable).where(eq(draftsTable.projectId, project_id)),
-      db.select({ atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, aiCitationLandscape: researchBriefsTable.aiCitationLandscape }).from(researchBriefsTable).where(eq(researchBriefsTable.projectId, project_id)).limit(1),
+      db.select({ id: projectsTable.id, brandId: projectsTable.brandId, brandName: brandsTable.name, playbookVersion: projectsTable.playbookVersion, keyword: projectsTable.keyword, contentType: projectsTable.contentType, funnelStage: projectsTable.funnelStage, icps: projectsTable.icps, serpSignals: projectsTable.serpSignals, lsiRetrieved: projectsTable.lsiRetrieved }).from(projectsTable).innerJoin(brandsTable, eq(projectsTable.brandId, brandsTable.id)).where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId))).limit(1),
+      db.select().from(outlinesTable).where(and(eq(outlinesTable.projectId, project_id), eq(outlinesTable.brandId, brandId))).limit(1),
+      db.select().from(draftsTable).where(and(eq(draftsTable.projectId, project_id), eq(draftsTable.brandId, brandId))),
+      db.select({ atomicQuestionMap: researchBriefsTable.atomicQuestionMap, entityDataRequirements: researchBriefsTable.entityDataRequirements, aiCitationLandscape: researchBriefsTable.aiCitationLandscape }).from(researchBriefsTable).where(and(eq(researchBriefsTable.projectId, project_id), eq(researchBriefsTable.brandId, brandId))).limit(1),
     ]);
     const project = projectRows[0];
     const outline = outlineRows[0];
@@ -2263,7 +2276,7 @@ Do not omit any field. Do not modify the name.`;
         lsiUsed: lsiCov.used as any,
         lsiCoverageRatio: String(lsiCov.ratio),
       })
-      .where(eq(projectsTable.id, project_id));
+      .where(and(eq(projectsTable.id, project_id), eq(projectsTable.brandId, brandId)));
 
     res.json({ ok: true, word_count, voice_match_score, originality_score, banned_phrase_count, citation_completeness, ai_citation_readiness_score, atomic_chunks_count, atomic_questions_count, schema_markup_recommendations, validation, lsi_coverage_ratio: lsiCov.ratio });
   } catch (e) {

@@ -289,7 +289,7 @@ dbDescribe("withBrandScope (live DB)", () => {
       withBrandScope(brandId!, async ({ scoped }) => {
         const rows = (await scoped.insert(
           projectsTable,
-          { topic, contentType: "blog" },
+          { topic, contentType: "how_to_guide" },
           { returning: true },
         )) as { id: string; brandId: string }[];
         insertedId = rows[0]?.id;
@@ -318,28 +318,32 @@ dbDescribe("withBrandScope (live DB)", () => {
     const topicA = `scope-iso-A-${Date.now()}`;
     const topicB = `scope-iso-B-${Date.now()}`;
 
-    class Rollback extends Error {}
-    await expect(
-      withBrandScope(a!.id, async ({ scoped, db: tx }) => {
-        // Seed one project under scope A, one directly under brand B (raw tx).
-        await scoped.insert(projectsTable, { topic: topicA, contentType: "blog" });
-        await tx
-          .insert(projectsTable)
-          .values({ brandId: b!.id, topic: topicB, contentType: "blog" });
+    await db.insert(projectsTable).values([
+      { brandId: a!.id, topic: topicA, contentType: "how_to_guide" },
+      { brandId: b!.id, topic: topicB, contentType: "how_to_guide" },
+    ]);
+    try {
+      class Rollback extends Error {}
+      await expect(
+        withBrandScope(a!.id, async ({ scoped }) => {
+          // ScopedDb.select MUST return only the scope-A row.
+          const seen = (await scoped.select(projectsTable)) as Array<{
+            id: string;
+            brand_id: string;
+            topic: string;
+          }>;
+          const topics = seen.map((r) => r.topic);
+          expect(topics).toContain(topicA);
+          expect(topics).not.toContain(topicB);
 
-        // ScopedDb.select MUST return only the scope-A row.
-        const seen = (await scoped.select(projectsTable)) as Array<{
-          id: string;
-          brand_id: string;
-          topic: string;
-        }>;
-        const topics = seen.map((r) => r.topic);
-        expect(topics).toContain(topicA);
-        expect(topics).not.toContain(topicB);
-
-        throw new Rollback("intentional rollback");
-      }),
-    ).rejects.toThrow(Rollback);
+          throw new Rollback("intentional rollback");
+        }),
+      ).rejects.toThrow(Rollback);
+    } finally {
+      await db.delete(projectsTable).where(
+        sql`${projectsTable.topic} in (${topicA}, ${topicB})`,
+      );
+    }
   });
 
   it("scope.scoped.delete cannot delete other brand's rows", async () => {
@@ -352,25 +356,33 @@ dbDescribe("withBrandScope (live DB)", () => {
     const [a, b] = rows;
     const topicB = `scope-del-B-${Date.now()}`;
 
-    class Rollback extends Error {}
-    await expect(
-      withBrandScope(a!.id, async ({ scoped, db: tx }) => {
-        await tx
-          .insert(projectsTable)
-          .values({ brandId: b!.id, topic: topicB, contentType: "blog" });
+    await db.insert(projectsTable).values({
+      brandId: b!.id,
+      topic: topicB,
+      contentType: "how_to_guide",
+    });
+    try {
+      class Rollback extends Error {}
+      await expect(
+        withBrandScope(a!.id, async ({ scoped }) => {
+          // Try to delete brand-B rows from inside scope A — must be a no-op.
+          await scoped.delete(projectsTable, eq(projectsTable.topic, topicB));
 
-        // Try to delete brand-B rows from inside scope A — must be a no-op.
-        await scoped.delete(projectsTable, eq(projectsTable.topic, topicB));
+          // The scoped delete is required to be a no-op for brand B.
+          expect(await scoped.select(projectsTable, {
+            where: eq(projectsTable.topic, topicB),
+          })).toHaveLength(0);
 
-        // Verify the row still exists.
-        const stillThere = await tx
-          .select({ id: projectsTable.id })
-          .from(projectsTable)
-          .where(eq(projectsTable.topic, topicB));
-        expect(stillThere).toHaveLength(1);
-
-        throw new Rollback("intentional rollback");
-      }),
-    ).rejects.toThrow(Rollback);
+          throw new Rollback("intentional rollback");
+        }),
+      ).rejects.toThrow(Rollback);
+      const stillThere = await db
+        .select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(eq(projectsTable.topic, topicB));
+      expect(stillThere).toHaveLength(1);
+    } finally {
+      await db.delete(projectsTable).where(eq(projectsTable.topic, topicB));
+    }
   });
 });

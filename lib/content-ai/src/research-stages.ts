@@ -1,5 +1,5 @@
 import { db, fetchedPagesTable, researchBriefsTable, proofPointsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { buildRoutedSystem } from "./playbook.js";
 import { logUsage } from "./usage.js";
 import { buildAnthropicUserId } from "./anthropic-meta.js";
@@ -48,15 +48,16 @@ export type PageFetchResult = {
  * to the user. A cache-write failure is logged but never throws away
  * good fetched content.
  */
-export async function getCachedPage(url: string, brandId?: string | null): Promise<PageFetchResult> {
+export async function getCachedPage(url: string, brandId: string): Promise<PageFetchResult> {
   if (!url) return { url: "", title: "", text: "", ok: false, bytes: 0, error: "no url" };
+  if (!brandId) throw new Error("getCachedPage requires a brandId");
 
   // 1) Cache hit
   try {
     const cachedRows = await db
       .select({ title: fetchedPagesTable.title, content: fetchedPagesTable.content, fetchedAt: fetchedPagesTable.fetchedAt })
       .from(fetchedPagesTable)
-      .where(eq(fetchedPagesTable.url, url))
+      .where(and(eq(fetchedPagesTable.url, url), eq(fetchedPagesTable.brandId, brandId)))
       .limit(1);
     const cached = cachedRows[0];
     // Only treat the cache row as a hit if it actually has content — an
@@ -117,16 +118,16 @@ export async function getCachedPage(url: string, brandId?: string | null): Promi
         content: parsed.text,
         byteSize: parsed.text.length,
         fetchedAt: new Date(),
-        ...(brandId ? { brandId } : {}),
+        brandId,
       })
       .onConflictDoUpdate({
-        target: fetchedPagesTable.url,
+        target: [fetchedPagesTable.brandId, fetchedPagesTable.url],
         set: {
           title: parsed.title,
           content: parsed.text,
           byteSize: parsed.text.length,
           fetchedAt: new Date(),
-          ...(brandId ? { brandId } : {}),
+          brandId,
         },
       });
   } catch (e) {
@@ -526,7 +527,7 @@ function buildStageInstructions(
  * a row lock during UPDATE, so chained jsonb_set calls here serialize
  * correctly across concurrent callers.
  */
-async function mergeSubStatus(project_id: string, patch: Record<string, any>): Promise<void> {
+async function mergeSubStatus(project_id: string, brandId: string, patch: Record<string, any>): Promise<void> {
   const entries = Object.entries(patch);
   if (entries.length === 0) return;
 
@@ -540,7 +541,7 @@ async function mergeSubStatus(project_id: string, patch: Record<string, any>): P
   await db
     .update(researchBriefsTable)
     .set({ subStatus: expr })
-    .where(eq(researchBriefsTable.projectId, project_id));
+    .where(and(eq(researchBriefsTable.projectId, project_id), eq(researchBriefsTable.brandId, brandId)));
 }
 
 export async function runStage(args: {
@@ -554,8 +555,10 @@ export async function runStage(args: {
   };
 }): Promise<{ ok: boolean; output?: any; error?: string }> {
   const { project, stage, pages, playbookVersion } = args;
+  const brandId: string | undefined = project.brand_id ?? project.brandId;
+  if (!brandId) throw new Error(`runStage requires a brandId for project ${project.id}`);
 
-  await mergeSubStatus(project.id, { [stage]: { status: "running", error: null, updated_at: new Date().toISOString() } });
+  await mergeSubStatus(project.id, brandId, { [stage]: { status: "running", error: null, updated_at: new Date().toISOString() } });
 
   const instructions = buildStageInstructions(stage, project, pages);
   const { system: systemBlocks, included } = await buildRoutedSystem(
@@ -618,13 +621,13 @@ export async function runStage(args: {
         publicationDate: p.publication_date || null,
         verificationStatus: p.verification_status || "unverified",
       }));
-      await db.delete(proofPointsTable).where(eq(proofPointsTable.projectId, project.id));
+      await db.delete(proofPointsTable).where(and(eq(proofPointsTable.projectId, project.id), eq(proofPointsTable.brandId, brandId)));
       if (ppRows.length) await db.insert(proofPointsTable).values(ppRows);
       patch.proofPointsStatus = "done";
     }
 
-    await db.update(researchBriefsTable).set(patch).where(eq(researchBriefsTable.projectId, project.id));
-    await mergeSubStatus(project.id, { [stage]: { status: "done", error: null, updated_at: new Date().toISOString() } });
+    await db.update(researchBriefsTable).set(patch).where(and(eq(researchBriefsTable.projectId, project.id), eq(researchBriefsTable.brandId, brandId)));
+    await mergeSubStatus(project.id, brandId, { [stage]: { status: "done", error: null, updated_at: new Date().toISOString() } });
     return { ok: true, output };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -638,9 +641,9 @@ export async function runStage(args: {
       ok: false,
       error: msg.slice(0, 300),
     });
-    await mergeSubStatus(project.id, { [stage]: { status: "error", error: msg.slice(0, 300), updated_at: new Date().toISOString() } });
+    await mergeSubStatus(project.id, brandId, { [stage]: { status: "error", error: msg.slice(0, 300), updated_at: new Date().toISOString() } });
     if (stage === "angle_and_conversion") {
-      await db.update(researchBriefsTable).set({ proofPointsStatus: "error" }).where(eq(researchBriefsTable.projectId, project.id));
+      await db.update(researchBriefsTable).set({ proofPointsStatus: "error" }).where(and(eq(researchBriefsTable.projectId, project.id), eq(researchBriefsTable.brandId, brandId)));
     }
     return { ok: false, error: msg };
   }
@@ -653,7 +656,8 @@ export type PrefetchSummary = {
 };
 
 export async function prefetchPages(project: any): Promise<PrefetchSummary> {
-  const brandId: string | null = project.brand_id ?? project.brandId ?? null;
+  const brandId: string | undefined = project.brand_id ?? project.brandId;
+  if (!brandId) throw new Error(`prefetchPages requires a brandId for project ${project.id}`);
   const companyUrl = project.company_domain
     ? project.company_domain.startsWith("http")
       ? project.company_domain
@@ -672,7 +676,7 @@ export async function prefetchPages(project: any): Promise<PrefetchSummary> {
  * `research_briefs.sub_status._prefetch` so the UI can show the user
  * exactly which pages were fed to the model (vs hallucinated from URL).
  */
-export async function recordPrefetchStatus(projectId: string, pages: PrefetchSummary): Promise<void> {
+export async function recordPrefetchStatus(projectId: string, brandId: string, pages: PrefetchSummary): Promise<void> {
   const slim = (p: PageFetchResult | null) =>
     p
       ? {
@@ -685,7 +689,7 @@ export async function recordPrefetchStatus(projectId: string, pages: PrefetchSum
           from_cache: p.fromCache ?? false,
         }
       : null;
-  await mergeSubStatus(projectId, {
+  await mergeSubStatus(projectId, brandId, {
     _prefetch: {
       benchmark: slim(pages.benchmark),
       competitor: slim(pages.competitor),

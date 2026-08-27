@@ -1,7 +1,10 @@
 import { Router } from "express";
-import { db, voiceLibraryTable, projectsTable, userProfilesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
-import { requireAuth } from "../middlewares/auth.js";
+import { voiceLibraryTable, withBrandScope } from "@workspace/db";
+import {
+  assertBrandAccessForProject as assertProjectAccess,
+  BrandAccessError,
+  requireAuth,
+} from "../middlewares/auth.js";
 
 const router = Router();
 
@@ -29,42 +32,21 @@ router.post("/", requireAuth, async (req, res, next) => {
       return;
     }
 
-    const project = await db
-      .select({ brandId: projectsTable.brandId })
-      .from(projectsTable)
-      .where(eq(projectsTable.id, project_id))
-      .limit(1);
-    const brandId = project[0]?.brandId;
-    if (!brandId) {
-      res.status(404).json({ ok: false, error: "project not found" });
-      return;
-    }
-
-    // Authorization: only admins or users with brand_access to this brand
-    // may write voice-library rows for the project.
-    if (!req.auth?.isAdmin) {
-      const accessRows = await db
-        .select({ brandAccess: userProfilesTable.brandAccess })
-        .from(userProfilesTable)
-        .where(eq(userProfilesTable.userId, req.auth!.userId))
-        .limit(1);
-      const accessible = accessRows[0]?.brandAccess ?? [];
-      if (!accessible.includes(brandId)) {
-        res.status(403).json({ ok: false, error: "forbidden" });
-        return;
-      }
-    }
-
-    await db.insert(voiceLibraryTable).values({
+    const brandId = await assertProjectAccess(req, project_id);
+    await withBrandScope(brandId, ({ scoped }) => scoped.insert(voiceLibraryTable, {
       projectId: project_id,
       brandId,
       originalAiText: original_ai_text,
       editedHumanText: edited_human_text,
       editType: edit_type ?? "inline",
       writerId: writer_id ?? null,
-    });
+    }));
     res.json({ ok: true });
   } catch (err) {
+    if (err instanceof BrandAccessError) {
+      res.status(err.status).json({ ok: false, error: err.message });
+      return;
+    }
     next(err);
   }
 });

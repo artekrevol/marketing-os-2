@@ -3,6 +3,7 @@ import {
   withBrandScope,
   crawlBatchesTable,
   crawlSchedulesTable,
+  keywordListsTable,
   keywordsTable,
   type Keyword,
 } from "@workspace/db";
@@ -26,6 +27,31 @@ export async function handleSeoRankCheckScheduled(
   const listId = payload.listId ?? null;
 
   const prepared = await withBrandScope(payload.brandId, async ({ scoped }) => {
+    const schedules = await scoped.select(crawlSchedulesTable, {
+      where: eq(crawlSchedulesTable.id, payload.scheduleId),
+      limit: 1,
+    });
+    const schedule = schedules[0];
+    if (!schedule) {
+      throw new Error(
+        `seo.rank-check.scheduled: schedule not found for brand: ${payload.scheduleId}`,
+      );
+    }
+    if (schedule.listId !== listId) {
+      throw new Error(
+        `seo.rank-check.scheduled: list does not match schedule: ${payload.scheduleId}`,
+      );
+    }
+    if (listId) {
+      const lists = await scoped.select(keywordListsTable, {
+        where: eq(keywordListsTable.id, listId),
+        limit: 1,
+      });
+      if (!lists[0]) {
+        throw new Error(`seo.rank-check.scheduled: list not found for brand: ${listId}`);
+      }
+    }
+
     // Require is_active = true AND list_id IS NOT NULL on every tick.
     // Orphaned/test keywords must not enter the crawl pipeline and consume
     // paid DataForSEO tasks. The optional listId narrows to a specific list.

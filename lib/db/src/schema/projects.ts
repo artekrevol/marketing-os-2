@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, uuid, text, timestamp, integer, jsonb, numeric, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, jsonb, numeric, index, unique, foreignKey } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 import { locationsTable } from "./seo";
 
@@ -77,6 +77,12 @@ export const projectsTable = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    unique("projects_id_brand_uq").on(t.id, t.brandId),
+    foreignKey({
+      name: "projects_target_location_same_brand_fk",
+      columns: [t.targetLocationId, t.brandId],
+      foreignColumns: [locationsTable.id, locationsTable.brandId],
+    }),
     // Cross-module lookup by the article's primary (target) keyword.
     index("projects_keyword_idx")
       .on(t.brandId, t.keyword)
