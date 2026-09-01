@@ -14,3 +14,4 @@
 - [Playbook live-schema compatibility](playbook-live-schema.md) — real DB tests must explicitly clean playbook children before fixture brands when live FKs lag Drizzle.
 - [Tenant migration schema drift](tenant-migration-schema-drift.md) — legacy preview databases may lag Drizzle table shapes; quarantine before tightening tenant constraints.
 - [Telemetry attribution](telemetry-attribution.md) — brand work requires owning brand IDs; only explicit global platform telemetry may omit one.
+- [Merge-splice diagnosis](merge-splice-diagnosis.md) — clusters of unrelated undefined names can indicate cross-block splice corruption; restore coherent parent logic before preserving narrow intended changes.

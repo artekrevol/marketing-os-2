@@ -118,7 +118,7 @@ if (shapeOk) {
 
 console.log("\n─── Sample rows (top 10 by traffic) ───────────────────────────");
 for (const row of rawRows) {
-  const r = row as AhrefsOrganicKeyword;
+  const r = row as unknown as AhrefsOrganicKeyword;
   const intent = [
     r.is_informational ? "info" : null,
     r.is_commercial ? "comm" : null,
