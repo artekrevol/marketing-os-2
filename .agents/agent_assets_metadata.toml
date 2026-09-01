@@ -7,3 +7,18 @@ uri = "file://attached_assets/tekrevol-orphan-keywords-classification.csv"
 type = "table"
 title = "TekRevol — Orphan Keyword Classification (422 keywords)"
 description = "For Ahtesham: review proposed_list column, override inline, send back. agent_notes flags 7 edge cases requiring judgment. No assignments execute until confirmed version returns."
+logical_id = "e8f8558e-36ec-4d89-889b-56140cf681e1"
+
+[[outputs]]
+id = "_QPhtU8pk0b0jmFMyJiyg"
+uri = "file://docs/update-sow-2026-09-01.md"
+type = "text"
+title = "Marketing OS — Updated Statement of Work"
+description = "September 1, 2026 status update covering completed work, outstanding tasks, validation blockers, recommended sequencing, and final acceptance criteria."
+logical_id = "31a5bda0-7d23-469b-b227-4cced4275326"
+content_hash = "sha256:4b4ad8d334500fd1ba4b70f237ec335f94d3615dfc809703197f619b946cb9d2"
+size = 8024
+mtime_ms = 1788294918406
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:919c0f5c-08ae-4608-9ac1-80264feca748/31a5bda0-7d23-469b-b227-4cced4275326/59d21bc8-8408-48b7-a0d6-4eb35eef7848"
+storage_version_token = "1788294930963318"
+content_type = "text/markdown"
