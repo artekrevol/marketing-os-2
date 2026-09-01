@@ -1,0 +1,96 @@
+Clean walkthrough with real answers. Now you have everything to execute Phase 3.
+
+## Doing Phase 3 now
+
+Here's your click sequence for each of the four deployments. Repeat four times, once per row of the table.
+
+**Setup common to all four:**
+
+1. Open Publishing tool in Replit UI
+2. Click Create deployment (or New deployment)
+3. Choose Scheduled as the deployment type
+4. Fill in the four fields per the table row you're creating
+
+**The four deployments:**
+
+**Deployment 1 — GSC daily sync**
+- Name: `gsc-daily-sync` (or similar)
+- Cron: `0 4 * * *`
+- Build: `pnpm --filter @workspace/worker run build`
+- Run: `pnpm --filter @workspace/worker run scheduled:dispatch -- gsc`
+- Env: `NODE_ENV=production`, `DATABASE_URL`, `REDIS_URL`
+
+**Deployment 2 — Recovery snapshots**
+- Name: `recovery-snapshots`
+- Cron: `0 3 * * *`
+- Build: same as above
+- Run: `pnpm --filter @workspace/worker run scheduled:dispatch -- recovery`
+- Env: same as above
+
+**Deployment 3 — Content-context refresh**
+- Name: `content-context-refresh`
+- Cron: `0 3 * * *`
+- Build: same
+- Run: `pnpm --filter @workspace/worker run scheduled:dispatch -- content-context`
+- Env: same
+
+**Deployment 4 — Discovery Engine**
+- Name: `discovery-engine-weekly`
+- Cron: `0 2 * * 1`
+- Build: same
+- Run: `pnpm --filter @workspace/worker run scheduled:dispatch -- discovery`
+- Env: same
+
+## After creating each one
+
+**Click "Run now" (or equivalent trigger button) immediately after saving.** This runs the dispatcher manually rather than waiting for the scheduled time.
+
+**Watch the run log.** Expected behavior:
+- Dispatcher starts
+- Connects to Postgres and Redis
+- Enqueues the appropriate BullMQ job (`gsc-sync`, `recovery-snapshot`, etc.)
+- Exits cleanly with success
+
+**Verification per deployment:**
+- Scheduled Deployment run log shows successful completion
+- Reserved VM logs (checked separately) show the corresponding job being picked up by the worker
+- No errors in either log
+
+**Timing per deployment:** 3-5 minutes each (creation + test run + verification). Total for all four: ~15-20 minutes.
+
+## What could go wrong
+
+**Most likely: missing environment variable.** If a Scheduled Deployment run fails with "cannot connect to database" or similar, the specific env var isn't set correctly on that deployment. Check that DATABASE_URL and REDIS_URL are configured for the Scheduled Deployment, not just present in general Secrets.
+
+**Second most likely: build command fails.** If the workspace build fails during Scheduled Deployment creation, you'll see a build error before the run even happens. Report the specific error to the agent — probably a pnpm workspace resolution issue.
+
+**Third possibility: dispatcher succeeds but worker doesn't process.** Reserved VM logs would show no evidence of the job being picked up. This would surface as an architectural issue we'd need to diagnose — but based on the agent's earlier fix work, this is unlikely.
+
+**Don't proceed to Phase 4 if any of the four Scheduled Deployments fail to test-run successfully.** Get all four green first, then move to backfill.
+
+## Ping me at these two points
+
+**Point 1: After all four Scheduled Deployments created and test-run.** Tell me:
+- Which succeeded on manual run
+- Any that failed and the error message
+- Whether Reserved VM logs show the jobs being picked up
+
+**Point 2: If anything unexpected happens during setup.** Don't push through errors — walk through with me.
+
+**Otherwise proceed directly to Phase 4 (backfill) once Phase 3 completes clean.**
+
+## Rough timing
+
+- Phase 3 clicking: 15-20 minutes
+- Phase 4 backfill setup: 5 minutes
+- Phase 4 backfill execution: 30-60 minutes (background, no supervision)
+- Phase 4 verification: 5 minutes on Search Performance page
+
+**Total from now to GSC data flowing:** ~1 hour of activity plus 30-60 min background execution.
+
+If it's late where you are, feasible split:
+- Do Phase 3 now (20 min)
+- Sleep
+- Do Phase 4 tomorrow morning (backfill runs while you shower/coffee)
+
+Either way works. Go create the four Scheduled Deployments and let me know how it goes.
