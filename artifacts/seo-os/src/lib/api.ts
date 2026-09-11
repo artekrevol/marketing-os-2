@@ -940,12 +940,12 @@ export const seo = {
       }),
     ),
 
-  /** Step 1b: upload ONE file to GCS via the API server. */
+  /** Step 1b: upload ONE file; the API server stages it in Postgres. */
   ahrefsUploadFile: async (
     brandId: string,
     snapshotId: string,
     file: File,
-  ): Promise<{ ok: boolean; objectName: string }> => {
+  ): Promise<{ ok: boolean; fileId: string }> => {
     const form = new FormData();
     form.append("brandId", brandId);
     form.append("file", file);

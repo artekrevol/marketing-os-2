@@ -26,36 +26,8 @@ import {
   type IngestCounts,
 } from "./ahrefs-ingest-fns.js";
 
-const SIDECAR = "http://127.0.0.1:1106";
-
-type FileEntry = { name: string; objectName: string; size: number };
-
-async function gcsGetSignedUrl(objectName: string): Promise<string> {
-  const bucket = process.env["DEFAULT_OBJECT_STORAGE_BUCKET_ID"];
-  if (!bucket) throw new Error("DEFAULT_OBJECT_STORAGE_BUCKET_ID not set");
-  const res = await fetch(`${SIDECAR}/object-storage/signed-object-url`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      bucket_name: bucket,
-      object_name: objectName,
-      method: "GET",
-      expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) throw new Error(`Sidecar GET sign failed (${res.status})`);
-  const { signed_url } = (await res.json()) as { signed_url: string };
-  return signed_url;
-}
-
-async function downloadBuffer(objectName: string): Promise<Buffer> {
-  const url = await gcsGetSignedUrl(objectName);
-  const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
-  if (!res.ok) throw new Error(`GCS download failed (${res.status}): ${objectName}`);
-  const ab = await res.arrayBuffer();
-  return Buffer.from(ab);
-}
+/** One staged upload: metadata plus the XLSX bytes held in Postgres. */
+type StagedFile = { id: string; name: string; data: Buffer };
 
 export async function handleSeoIngestAhrefsSnapshot(
   data: JobData<"seo.ingest-ahrefs-snapshot">,
@@ -77,19 +49,23 @@ export async function handleSeoIngestAhrefsSnapshot(
 
   if (!snap) throw new Error(`Snapshot ${snapshotId} not found for brand ${brandId}`);
 
-  const filePaths = (snap["file_paths"] as FileEntry[]) ?? [];
-  if (filePaths.length === 0) throw new Error("Snapshot has no files");
-  const expectedPrefix = `ahrefs/${brandId}/${String(snap["snapshot_month"] ?? "")}/`;
-  for (const entry of filePaths) {
-    if (
-      !entry ||
-      typeof entry.objectName !== "string" ||
-      !entry.objectName.startsWith(expectedPrefix) ||
-      entry.objectName.includes("..")
-    ) {
-      throw new Error(`Snapshot contains an object outside the brand storage prefix`);
-    }
-  }
+  // Load the staged XLSX bytes. The brand_id predicate plus the same-brand FK
+  // on ahrefs_snapshot_files replace the old object-path prefix check: a row
+  // physically cannot belong to another tenant's snapshot.
+  const stagedFiles: StagedFile[] = await withBrandScope(brandId, async ({ db }) => {
+    const r = (await db.execute(sql`
+      SELECT id::text, filename, data
+      FROM ahrefs_snapshot_files
+      WHERE snapshot_id = ${snapshotId}::uuid AND brand_id = ${brandId}::uuid
+      ORDER BY created_at
+    `)) as unknown as
+      | { rows?: Array<{ id: string; filename: string; data: Buffer }> }
+      | Array<{ id: string; filename: string; data: Buffer }>;
+    const rows = Array.isArray(r) ? r : (r.rows ?? []);
+    return rows.map((row) => ({ id: row.id, name: row.filename, data: row.data }));
+  });
+
+  if (stagedFiles.length === 0) throw new Error("Snapshot has no files");
 
   // ── 2. Mark as ingesting ───────────────────────────────────────────────
   await withBrandScope(brandId, async ({ db }) => {
@@ -100,7 +76,7 @@ export async function handleSeoIngestAhrefsSnapshot(
     `);
   });
 
-  log.info({ snapshotId, fileCount: filePaths.length }, "ahrefs-ingest: starting");
+  log.info({ snapshotId, fileCount: stagedFiles.length }, "ahrefs-ingest: starting");
 
   try {
     // ── 3. Snapshot pre-import active-backlink count (for delta) ──────
@@ -117,7 +93,7 @@ export async function handleSeoIngestAhrefsSnapshot(
     const batchId = await withBrandScope(brandId, async ({ db }) => {
       const r = (await db.execute(sql`
         INSERT INTO ahrefs_import_batches (brand_id, file_count, imported_at, created_at)
-        VALUES (${brandId}::uuid, ${filePaths.length}, now(), now())
+        VALUES (${brandId}::uuid, ${stagedFiles.length}, now(), now())
         RETURNING id::text
       `)) as unknown as { rows?: Array<{ id: string }> } | Array<{ id: string }>;
       const rows = Array.isArray(r) ? r : (r.rows ?? []);
@@ -132,16 +108,15 @@ export async function handleSeoIngestAhrefsSnapshot(
       contentGap: 0, bestByLinks: 0,
     };
 
-    for (const entry of filePaths) {
+    for (const entry of stagedFiles) {
       const fileType = detectFileType(entry.name);
       if (!fileType || fileType === "linking_authors" || fileType === "referring_ips") {
         log.info({ name: entry.name, fileType }, "ahrefs-ingest: skipping (not ingested)");
         continue;
       }
 
-      log.info({ name: entry.name, fileType }, "ahrefs-ingest: downloading");
-      const buffer = await downloadBuffer(entry.objectName);
-      const rows = readXlsx(buffer);
+      log.info({ name: entry.name, fileType }, "ahrefs-ingest: parsing");
+      const rows = readXlsx(entry.data);
       if (rows.length === 0) {
         log.warn({ name: entry.name }, "ahrefs-ingest: empty file, skipping");
         continue;
@@ -204,7 +179,7 @@ export async function handleSeoIngestAhrefsSnapshot(
     await withBrandScope(brandId, async ({ db }) => {
       await db.execute(sql`
         UPDATE ahrefs_import_batches SET
-          file_count              = ${filePaths.length},
+          file_count              = ${stagedFiles.length},
           backlink_count          = ${counts.backlinks + counts.brokenBacklinks},
           referring_domain_count  = ${counts.referringDomains},
           anchor_count            = ${counts.anchors},
@@ -226,6 +201,14 @@ export async function handleSeoIngestAhrefsSnapshot(
           row_counts           = ${JSON.stringify(counts)}::jsonb,
           ingest_completed_at  = now()
         WHERE id = ${snapshotId}::uuid AND brand_id = ${brandId}::uuid
+      `);
+
+      // Drop the staged bytes — they are never read again. POST /:id/ingest
+      // returns 409 unless status = 'pending', and status never returns to
+      // pending, so keeping them would be unbounded growth for nothing.
+      await db.execute(sql`
+        DELETE FROM ahrefs_snapshot_files
+        WHERE snapshot_id = ${snapshotId}::uuid AND brand_id = ${brandId}::uuid
       `);
     });
 

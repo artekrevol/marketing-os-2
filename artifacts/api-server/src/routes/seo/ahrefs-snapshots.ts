@@ -30,58 +30,6 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024, files: 1 },
 });
 
-/* ─── GCS helpers ─────────────────────────────────────────────────────────── */
-
-const SIDECAR = "http://127.0.0.1:1106";
-
-function getBucket(): string {
-  const b = process.env["DEFAULT_OBJECT_STORAGE_BUCKET_ID"];
-  if (!b) throw new Error("DEFAULT_OBJECT_STORAGE_BUCKET_ID not set");
-  return b;
-}
-
-async function gcsSignUrl(
-  objectName: string,
-  method: "PUT" | "GET",
-  ttlSec: number,
-): Promise<string> {
-  const res = await fetch(`${SIDECAR}/object-storage/signed-object-url`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      bucket_name: getBucket(),
-      object_name: objectName,
-      method,
-      expires_at: new Date(Date.now() + ttlSec * 1000).toISOString(),
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`sidecar signUrl ${method} failed (${res.status}): ${text}`);
-  }
-  const body = (await res.json()) as { signed_url: string };
-  return body.signed_url;
-}
-
-async function gcsUploadBuffer(
-  objectName: string,
-  buffer: Buffer,
-  contentType: string,
-): Promise<void> {
-  const url = await gcsSignUrl(objectName, "PUT", 300);
-  // Node fetch accepts a typed byte array body across the server's TS lib targets.
-  const res = await fetch(url, {
-    method: "PUT",
-    body: new Uint8Array(buffer),
-    headers: { "Content-Type": contentType },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`GCS upload failed (${res.status}): ${text}`);
-  }
-}
-
 /* ─── Utility ─────────────────────────────────────────────────────────────── */
 
 function safeName(filename: string): string {
@@ -168,16 +116,33 @@ router.post("/:id/files", upload.single("file"), async (req, res) => {
       return;
     }
 
-    const snapshotMonth = String(snap["snapshot_month"]);
-    const objectName = `ahrefs/${guard.brandId}/${snapshotMonth}/${safeName(file.originalname)}`;
-    const mime = file.mimetype || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const filename = safeName(file.originalname);
 
-    // Server-side GCS upload
-    await gcsUploadBuffer(objectName, file.buffer, mime);
+    // Stage the bytes in Postgres. They have to outlive this request: multer
+    // takes one file per call, but the ingest job builds a single import batch
+    // across every file in the snapshot. The worker deletes them once ingest
+    // succeeds.
+    const fileId = await withBrandScope(guard.brandId, async ({ db }) => {
+      const inserted = (await db.execute(sql`
+        INSERT INTO ahrefs_snapshot_files
+          (snapshot_id, brand_id, filename, size_bytes, data)
+        VALUES (
+          ${snapshotId}::uuid,
+          ${guard.brandId}::uuid,
+          ${filename},
+          ${file.size},
+          ${file.buffer}
+        )
+        RETURNING id::text
+      `)) as unknown as { rows?: Array<{ id: string }> } | Array<{ id: string }>;
+      const rows = Array.isArray(inserted) ? inserted : (inserted.rows ?? []);
+      const id = rows[0]?.id;
+      if (!id) throw new Error("staging insert returned no row");
 
-    // Append object path to snapshot.file_paths[]
-    const entry = JSON.stringify([{ name: file.originalname, objectName, size: file.size }]);
-    await withBrandScope(guard.brandId, async ({ db }) => {
+      // Keep file_paths as the human-readable manifest the list endpoints show.
+      const entry = JSON.stringify([
+        { name: file.originalname, fileId: id, size: file.size },
+      ]);
       await db.execute(sql`
         UPDATE ahrefs_raw_snapshots
         SET
@@ -185,9 +150,10 @@ router.post("/:id/files", upload.single("file"), async (req, res) => {
           file_count = file_count + 1
         WHERE id = ${snapshotId}::uuid AND brand_id = ${guard.brandId}::uuid
       `);
+      return id;
     });
 
-    res.json({ ok: true, objectName, name: file.originalname });
+    res.json({ ok: true, fileId, name: file.originalname });
   } catch (err) {
     res.status(500).json({ error: "File upload failed", detail: String(err) });
   }

@@ -10,6 +10,8 @@ import {
   timestamp,
   index,
   unique,
+  foreignKey,
+  customType,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 
@@ -297,10 +299,60 @@ export const ahrefsRawSnapshotsTable = pgTable(
     ingestCompletedAt: timestamp("ingest_completed_at", { withTimezone: true }),
   },
   (t) => [
+    unique("ahrefs_raw_snapshots_id_brand_uq").on(t.id, t.brandId),
     index("ahrefs_raw_snapshots_brand_month_idx").on(t.brandId, t.snapshotMonth),
     index("ahrefs_raw_snapshots_status_idx").on(t.status),
   ],
 );
+
+/** Postgres `bytea`. drizzle-orm has no built-in binary column type. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
+/* -------------------------------------------------------------------------- */
+/* ahrefs_snapshot_files — XLSX bytes staged between upload and ingest         */
+/*                                                                            */
+/* Multer takes one file per request, but the ingest job creates a single      */
+/* import batch across every file in the snapshot and computes its deltas      */
+/* over that whole batch. So the bytes have to outlive the upload request.     */
+/*                                                                            */
+/* They used to sit in GCS behind the Replit sidecar; they now sit here and    */
+/* are deleted the moment ingest succeeds. Nothing ever re-reads them —        */
+/* POST /:id/ingest returns 409 unless status = 'pending', and status never    */
+/* returns to pending — so keeping them would be unbounded growth for nothing. */
+/* -------------------------------------------------------------------------- */
+export const ahrefsSnapshotFilesTable = pgTable(
+  "ahrefs_snapshot_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    snapshotId: uuid("snapshot_id")
+      .notNull()
+      .references(() => ahrefsRawSnapshotsTable.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brandsTable.id, { onDelete: "restrict" }),
+    filename: text("filename").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    data: bytea("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: "ahrefs_snapshot_files_same_brand_fk",
+      columns: [t.snapshotId, t.brandId],
+      foreignColumns: [ahrefsRawSnapshotsTable.id, ahrefsRawSnapshotsTable.brandId],
+    }),
+    index("ahrefs_snapshot_files_snapshot_idx").on(t.snapshotId, t.createdAt),
+  ],
+);
+
+export type AhrefsSnapshotFile = typeof ahrefsSnapshotFilesTable.$inferSelect;
+export type InsertAhrefsSnapshotFile = typeof ahrefsSnapshotFilesTable.$inferInsert;
 
 export type AhrefsRawSnapshot = typeof ahrefsRawSnapshotsTable.$inferSelect;
 export type InsertAhrefsRawSnapshot = typeof ahrefsRawSnapshotsTable.$inferInsert;

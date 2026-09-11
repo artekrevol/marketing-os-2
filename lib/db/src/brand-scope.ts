@@ -75,8 +75,9 @@ export const BRAND_SCOPED_TABLES: ReadonlySet<string> = new Set([
   // DataForSEO Labs Discovery — competitor movements + Labs API cost tracking
   "competitor_movements",
   "dataforseo_labs_usage",
-  // Ahrefs two-step snapshot upload (GCS-backed)
+  // Ahrefs two-step snapshot upload (bytes staged in Postgres)
   "ahrefs_raw_snapshots",
+  "ahrefs_snapshot_files",
   // Google integrations — OAuth connections, GSC analytics data
   "google_brand_connections",
   "gsc_query_rows",
