@@ -265,7 +265,26 @@ const server = app.listen(port, (err) => {
 server.requestTimeout = 900_000;
 server.headersTimeout = 910_000;
 
-if (process.env["NODE_ENV"] === "production") {
+/**
+ * Whether the BullMQ workers run inside this process.
+ *
+ * Replit autoscale gives a deployment a single port, so the workers have to
+ * share the API server's process there. Railway runs `@workspace/worker` as
+ * its own service; starting them here as well would leave both consuming all
+ * six queues — every job executed twice, and doubled spend on DataForSEO and
+ * Originality.ai, which bill per credit.
+ *
+ * `EMBED_WORKERS` decides it explicitly. Left unset it defaults on only for
+ * Replit, detected via the `REPL_ID` that platform injects, so existing
+ * Replit deployments keep their current behaviour with no new configuration.
+ */
+function shouldRunEmbeddedWorker(): boolean {
+  const flag = process.env["EMBED_WORKERS"];
+  if (flag !== undefined) return flag === "true";
+  return process.env["REPL_ID"] !== undefined;
+}
+
+if (process.env["NODE_ENV"] === "production" && shouldRunEmbeddedWorker()) {
   import("@workspace/worker/embedded")
     .then(({ startEmbeddedWorkers }) => startEmbeddedWorkers())
     .then((handle) => {
@@ -286,6 +305,10 @@ if (process.env["NODE_ENV"] === "production") {
       );
     });
 } else {
+  logger.info(
+    { nodeEnv: process.env["NODE_ENV"] ?? "development" },
+    "embedded-worker: not started in this process",
+  );
   const shutdown = (signal: string): void => {
     logger.info({ signal }, "server: shutdown initiated");
     server.close();
