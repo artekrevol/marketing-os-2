@@ -7,6 +7,7 @@ import {
   index,
   integer,
   foreignKey,
+  unique,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
 import { contentObjectsTable } from "./content-objects";
@@ -44,6 +45,10 @@ export const qaRunsTable = pgTable(
       columns: [t.contentObjectId, t.brandId],
       foreignColumns: [contentObjectsTable.id, contentObjectsTable.brandId],
     }),
+    // Required so other brand-scoped tables can FK against (id, brand_id)
+    // for the "same brand" composite foreign keys. Already live in
+    // production via migration 0005_brand_isolation.sql.
+    unique("qa_runs_id_brand_uq").on(t.id, t.brandId),
     index("qa_runs_content_object_idx").on(t.contentObjectId, t.createdAt.desc()),
     index("qa_runs_brand_status_idx").on(t.brandId, t.status, t.createdAt.desc()),
   ],

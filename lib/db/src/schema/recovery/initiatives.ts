@@ -43,7 +43,10 @@ export const recoveryInitiativesTable = pgTable(
 
     actualImpactClicks14d: integer("actual_impact_clicks_14d"),
 
-    createdBy: uuid("created_by")
+    // user_profiles.user_id is text (Clerk IDs / "local:<email>" strings),
+    // never a UUID — this column must match, or inserting a real actorId
+    // ("local:..." for bcrypt/session auth) fails with an invalid-UUID error.
+    createdBy: text("created_by")
       .notNull()
       .references(() => userProfilesTable.userId, { onDelete: "restrict" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
