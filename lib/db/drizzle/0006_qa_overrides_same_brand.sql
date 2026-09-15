@@ -14,9 +14,16 @@ ON CONFLICT DO NOTHING;
 DELETE FROM qa_overrides WHERE qa_run_id IS NULL;
 ALTER TABLE qa_overrides
   ALTER COLUMN qa_run_id SET NOT NULL;
-ALTER TABLE qa_overrides
-  ADD CONSTRAINT qa_overrides_run_fk
-  FOREIGN KEY (qa_run_id) REFERENCES qa_runs(id) ON DELETE CASCADE;
-ALTER TABLE qa_overrides
-  ADD CONSTRAINT qa_overrides_run_same_brand_fk
-  FOREIGN KEY (qa_run_id, brand_id) REFERENCES qa_runs(id, brand_id) NOT VALID;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'qa_overrides_run_fk') THEN
+    ALTER TABLE qa_overrides
+      ADD CONSTRAINT qa_overrides_run_fk
+      FOREIGN KEY (qa_run_id) REFERENCES qa_runs(id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'qa_overrides_run_same_brand_fk') THEN
+    ALTER TABLE qa_overrides
+      ADD CONSTRAINT qa_overrides_run_same_brand_fk
+      FOREIGN KEY (qa_run_id, brand_id) REFERENCES qa_runs(id, brand_id) NOT VALID;
+  END IF;
+END $$;

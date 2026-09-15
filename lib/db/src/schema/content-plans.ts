@@ -9,6 +9,7 @@ import {
   jsonb,
   index,
   foreignKey,
+  unique,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { brandsTable } from "./brands";
@@ -156,6 +157,10 @@ export const contentPlansTable = pgTable(
       columns: [t.supersededBy, t.brandId],
       foreignColumns: [t.id, t.brandId],
     }),
+    // Required for the self-referencing "superseded_by" composite FK above
+    // (and for any other table FKing against (id, brand_id)). Already live
+    // in production via migration 0005_brand_isolation.sql.
+    unique("content_plans_id_brand_uq").on(t.id, t.brandId),
     index("content_plans_brand_project_idx").on(t.brandId, t.projectId),
     index("content_plans_status_idx").on(t.brandId, t.status),
     index("content_plans_keyword_idx").on(
